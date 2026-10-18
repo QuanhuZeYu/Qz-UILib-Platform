@@ -83,6 +83,17 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
         }
     }
 
+    GlHostItemCapture.Capture captureHostLocal(club.heiqi.uilib.ui.scene.image.ImagePlacement placement,
+            club.heiqi.uilib.ui.scene.layout.LayoutBox clip) {
+        check();
+        try {
+            return hostCapture.captureLocal(placement, clip, hostItems);
+        } catch (RuntimeException failure) {
+            active.failed.add(placement.content.identity);
+            listener.failure(placement.content.identity, "item-render", false, failure.toString());
+            return null;
+        }
+    }
     GlQuadRenderer.Texture resolveHostCapture(long generation) {
         check();
         return hostCapture.resolve(generation);
@@ -122,7 +133,7 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
         this(gl, maxTextures, maxBytes, uploadBytes, uploadCalls, listener, 32L * 1024 * 1024);
     }
 
-    /** 仅透明物品按需分配合成面；预算包含RGBA8与深度/模板，普通不透明委托不分配。 */
+    /** 透明或新仿射/形状裁剪物品按需分配原合成面；预算包含RGBA8与深度/模板，旧不透明委托不分配。 */
     public GlImageResources(GlApi gl, int maxTextures, long maxBytes, long uploadBytes,
             int uploadCalls, Listener listener, long hostCaptureBytes) {
         if (uploadBytes < 4 || uploadCalls < 1) throw new IllegalArgumentException("无效上传预算");

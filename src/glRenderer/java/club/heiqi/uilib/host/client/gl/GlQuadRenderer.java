@@ -369,10 +369,10 @@ public final class GlQuadRenderer implements AutoCloseable {
             }
             staging.clear();
             for (Quad q : batch.quads()) {
-                vertex(q, q.x0, q.y0, q.u0, q.v0);
-                vertex(q, q.x1, q.y1, q.u1, q.v0);
-                vertex(q, q.x2, q.y2, q.u1, q.v1);
-                vertex(q, q.x3, q.y3, q.u0, q.v1);
+                vertex(q, q.x0, q.y0, q.s0, q.t0);
+                vertex(q, q.x1, q.y1, q.s1, q.t1);
+                vertex(q, q.x2, q.y2, q.s2, q.t2);
+                vertex(q, q.x3, q.y3, q.s3, q.t3);
             }
             staging.flip();
             gl.glBufferSubData(GL_ARRAY_BUFFER, 0, staging);

@@ -11,6 +11,8 @@ import club.heiqi.uilib.ui.scene.video.VideoPlacement;
 
 import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 
+import club.heiqi.uilib.ui.scene.geometry.SceneClipRegion;
+import club.heiqi.uilib.ui.scene.geometry.SceneMesh;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 
 import java.nio.ByteBuffer;
@@ -102,8 +104,13 @@ public final class GlVideoResources implements AutoCloseable {
         if(failure instanceof RuntimeException)throw(RuntimeException)failure;
     }
     private static boolean visible(PaintCommand command, LayoutBox viewport) {
+        VideoPlacement p = command.video;
+        if (!command.transform.identity() || !command.shapeClip.unbounded()) {
+            SceneClipRegion region = command.effectiveClip().intersect(SceneClipRegion.rectangle(viewport));
+            return p.width > 0 && p.height > 0 && region.intersects(
+                    SceneMesh.rectangle(p.x, p.y, p.width, p.height).transformed(command.transform));
+        }
         LayoutBox clip = command.clip == null ? viewport : command.clip.intersect(viewport);
-        club.heiqi.uilib.ui.scene.video.VideoPlacement p = command.video;
         return clip.width > 0 && clip.height > 0 && p.width > 0 && p.height > 0
                 && p.x < (double) clip.x + clip.width && p.y < (double) clip.y + clip.height
                 && p.x + p.width > clip.x && p.y + p.height > clip.y;

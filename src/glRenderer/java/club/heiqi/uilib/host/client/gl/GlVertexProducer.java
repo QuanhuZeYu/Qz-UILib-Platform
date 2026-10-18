@@ -11,7 +11,8 @@ public interface GlVertexProducer extends AutoCloseable {
     /** 每个短 pass 内匹配当前顶点布局；宿主虚拟状态通过 scope 同步。 */
     void configure(GlProgramScope scope);
 
-    /** 一次上传并按原 draw 顺序提交，返回实际上传字节数。 */
+    /** 一次上传并按原draw顺序提交，返回实际上传字节数。
+     * 顶点采样必须读取各点s0/t0至s3/t3；u0/v0/u1/v1仅保留旧矩形入口，不能重建新裁剪顶点的UV。 */
     long consume(
             OrderedQuadBatch batch,
             GlProgramScope scope,

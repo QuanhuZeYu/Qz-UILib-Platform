@@ -3,6 +3,7 @@ package club.heiqi.uilib.host.client.gl;
 import java.util.ArrayList;
 import java.util.List;
 import club.heiqi.uilib.host.client.font.context.FontRenderContext;
+import club.heiqi.uilib.ui.scene.geometry.SceneMesh;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.text.TextLayout;
@@ -29,11 +30,24 @@ final class GlFontVisibility {
                 t = y + glyph.inkBounds.top,
                 b = y + glyph.inkBounds.bottom;
         if (r <= l || b <= t) return false;
+        if (command.sceneGeometry || !command.transform.identity() || !command.shapeClip.unbounded()) {
+            SceneMesh mesh = command.effectiveClip().clip(SceneMesh.rectangle(l, t, r - l, b - t).transformed(command.transform));
+            for (int i = 0; i < mesh.vertexCount(); i += 3) {
+                List<double[]> triangle = new ArrayList<double[]>(3);
+                for (int j = 0; j < 3; j++) triangle.add(context.projection.clipAt(mesh.x(i + j), mesh.y(i + j), 0));
+                if (visible(triangle, context)) return true;
+            }
+            return false;
+        }
+        // 旧world输入仍走四角齐次裁剪，不新增UI坐标或资源前提。
         List<double[]> polygon = new ArrayList<double[]>();
         polygon.add(context.projection.clipAt(l, t, 0));
         polygon.add(context.projection.clipAt(r, t, 0));
         polygon.add(context.projection.clipAt(r, b, 0));
         polygon.add(context.projection.clipAt(l, b, 0));
+        return visible(polygon, context);
+    }
+    private static boolean visible(List<double[]> polygon, FontRenderContext context) {
         int[] viewport = context.projection.viewport(), scissor = context.scissor();
         double[] screenLimits = {
             2.0 * (scissor[0] - viewport[0]) / viewport[2] - 1,

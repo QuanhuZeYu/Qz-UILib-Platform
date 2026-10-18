@@ -6,7 +6,16 @@ import club.heiqi.uilib.host.client.font.ClientFontServices;
 import club.heiqi.uilib.host.client.font.FramebufferCoordinates;
 import club.heiqi.uilib.host.client.gl.GlImageResources;
 import club.heiqi.uilib.host.client.gl.GlPaintPlanRenderer;
+import club.heiqi.uilib.host.client.gl.GlApi;
+import club.heiqi.uilib.host.client.gl.GlProgramAttribute;
 import club.heiqi.uilib.host.client.gl.GlProgramProvider;
+import club.heiqi.uilib.host.client.gl.GlProgramScope;
+import club.heiqi.uilib.host.client.gl.GlQuadRenderer;
+import club.heiqi.uilib.host.client.gl.GlVertexProducer;
+import club.heiqi.uilib.host.client.gl.GlGlyphAtlas;
+import club.heiqi.uilib.host.client.font.context.FontProjection;
+import club.heiqi.uilib.host.client.font.context.FontRenderContext;
+import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch;
 import club.heiqi.uilib.host.client.gl.Lwjgl3GlApi;
 import club.heiqi.uilib.host.font.IsolatedFontEngine;
 import club.heiqi.uilib.testing.GlfwTestEnvironment;
@@ -27,6 +36,9 @@ import club.heiqi.uilib.ui.scene.image.ImagePlacement;
 import club.heiqi.uilib.ui.scene.image.ImageService;
 import club.heiqi.uilib.ui.scene.image.ImageSource;
 import club.heiqi.uilib.ui.scene.image.ImageState;
+import club.heiqi.uilib.ui.scene.geometry.SceneClipRegion;
+import club.heiqi.uilib.ui.scene.geometry.SceneMesh;
+import club.heiqi.uilib.ui.scene.geometry.SceneTransform;
 import club.heiqi.uilib.ui.scene.layout.ChildPlacements;
 import club.heiqi.uilib.ui.scene.layout.Constraints;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
@@ -400,10 +412,22 @@ public final class PaintPrimitiveScenario extends TestApplication {
             order(overlays.commands().get(1).pendingPaint, 95);
             // 回放闭包不回访已关闭的live节点；准备只按本计划的冻结图像事实选择分支。
             PaintPlan captured = host.plan;
+            SceneTransform outer = SceneTransform.translation(12, 8);
+            PaintPlan mapped = captured.transformed(outer, SceneClipRegion.rectangle(VIEW));
+            PaintCommand mappedImage = mapped.commands().get(0);
+            PaintCommand mappedOverlay = mapped.commands().get(3);
+            require(mappedOverlay.branchSource == mappedImage
+                    && mappedOverlay.pendingPaint.commands().get(1).branchSource == mappedImage.pendingPaint.commands().get(1),
+                    "变换备用闭包丢失branchSource同代identity");
+            require(mappedImage.pendingPaint.commands().get(0).transform.x(0, 0) == 12
+                    && mappedImage.pendingPaint.commands().get(0).transform.y(0, 0) == 8,
+                    "备用片段漏变换或重复应用父矩阵");
             page.close();
             if (!orderOnly) {
                 int[] ready = render(captured);
                 save("captured-ready.png", ready);
+                int[] mappedReady = render(mapped);
+                require(pixel(mappedReady, 22, 18) == pixel(ready, 10, 10), "READY图片或后继图元未正确应用一次外层变换");
                 require(
                         pixel(ready, 110, H - 12) == 0 && pixel(ready, 140, H - 12) == 0,
                         "ready分支泄漏备用全页overlay");
@@ -470,6 +494,167 @@ public final class PaintPrimitiveScenario extends TestApplication {
                 line.x0, line.y0, line.x1, line.y1, line.thickness, 0, 0, 0, 0, 0, command.color);
     }
 
+    /** 新路径/纹理像素只在原正式GL入口执行；order-only不创建字体、纹理或窗口。 */
+    private void gpuVector() throws Exception {
+        SceneMesh mesh = SceneMesh.rectangle(0, 0, 44, 34);
+        SceneTransform transform = SceneTransform.translation(60, 46).multiply(SceneTransform.rotationDegrees(25));
+        SceneClipRegion mask = SceneClipRegion.of(SceneMesh.rectangle(0, 0, 24, 24).transformed(
+                SceneTransform.translation(14, 2).multiply(SceneTransform.rotationDegrees(35))).transformed(transform));
+        LayoutBox localClip = new LayoutBox(2, 3, 38, 27);
+        PaintCommand path = PaintCommand.path(mesh, localClip, 0x804080C0).withGeometry(transform, mask);
+        byte[] rgba = new byte[8 * 8 * 4];
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
+            int i = (y * 8 + x) * 4; rgba[i] = (byte) (x < 4 ? 230 : 30);
+            rgba[i + 1] = (byte) (y < 4 ? 210 : 40); rgba[i + 2] = 50; rgba[i + 3] = (byte) 255;
+        }
+        ImageContent pixels = new ImageContent(8, 8, rgba);
+        LayoutBox imageBox = new LayoutBox(0, 0, 64, 64);
+        PaintCommand texture = PaintCommand.image(imageBox, null, ImagePlacement.fit(pixels, imageBox, ImageOptions.defaults()))
+                .withGeometry(SceneTransform.translation(152, 60).multiply(SceneTransform.rotationDegrees(-20)),
+                        SceneClipRegion.of(SceneMesh.rectangle(138, 62, 54, 50).transformed(
+                                SceneTransform.around(165, 87, SceneTransform.rotationDegrees(15)))));
+        PaintPlanBuilder commands = new PaintPlanBuilder(); commands.add(path); commands.add(texture);
+        commands.add(PaintCommand.rect(new LayoutBox(228, 165, 10, 10), VIEW, 0xFF22CC66));
+        int[] result = render(commands.build()); save("vector-path-and-texture.png", result);
+        SceneMesh visiblePath = path.effectiveClip().clip(mesh.transformed(transform));
+        int inside = 0, outside = 0;
+        for (int y = 30; y < 115; y++) for (int x = 25; x < 115; x++) {
+            boolean center = visiblePath.contains(x + .5, y + .5), stable = true;
+            for (double dx : new double[] {-.2, .2}) for (double dy : new double[] {-.2, .2})
+                stable &= visiblePath.contains(x + .5 + dx, y + .5 + dy) == center;
+            if (!stable) continue;
+            require(pixel(result, x, y) == (center ? 0x80204060 : 0), "PATH退化quad或shapeclip像素错误 at=" + x + "," + y);
+            if (center) inside++; else outside++;
+        }
+        SceneTransform inverse = texture.transform.inverse(); int samples = 0;
+        for (int y = 35; y < 145; y++) for (int x = 125; x < 230; x++) {
+            if (!interior(texture.effectiveClip(), x + .5, y + .5)) continue;
+            double localX = inverse.x(x + .5, y + .5), localY = inverse.y(x + .5, y + .5);
+            if (localX < 8 || localY < 8 || localX > 56 || localY > 56
+                    || Math.abs(localX - 32) < 8 || Math.abs(localY - 32) < 8) continue;
+            require(pixel(result, x, y) == (0xFF000032 | (localX < 32 ? 230 : 30) << 16
+                    | (localY < 32 ? 210 : 40) << 8), "裁剪纹理四顶点UV被重建为包络采样");
+            samples++;
+        }
+        require(inside > 0 && outside > 0 && samples > 0 && pixel(result, 232, 170) == 0xFF22CC66,
+                "向量像素覆盖不足或命令scope污染后继identity矩形");
+    }
+    private void gpuHostVector() throws Exception {
+        ImageContent content = new ImageContent(16, 16) {};
+        LayoutBox local = new LayoutBox(-80, -60, 32, 24);
+        SceneTransform transform = SceneTransform.translation(150, 110).multiply(SceneTransform.rotationDegrees(20));
+        SceneClipRegion shape = SceneClipRegion.of(SceneMesh.rectangle(-78, -58, 26, 20).transformed(
+                SceneTransform.around(-65, -48, SceneTransform.rotationDegrees(30))).transformed(transform));
+        PaintCommand image = PaintCommand.image(local, null, ImagePlacement.fit(content, local,
+                ImageOptions.defaults().fit(ImageOptions.Fit.STRETCH))).withGeometry(transform, shape);
+        int[] calls = {0};
+        try (GlImageResources resources = new GlImageResources(new Lwjgl3GlApi(), 2, 1024 * 1024)) {
+            resources.hostItems(new GlImageResources.HostItems() {
+                public boolean supports(ImageContent value) { return value == content; }
+                public void render(ImagePlacement placement, LayoutBox clip, int width, int height) {
+                    calls[0]++;
+                    require(width == 32 && height == 24 && placement.x == 0 && placement.y == 0,
+                            "变换host image未保持原局部分配capture或被world viewport先裁");
+                    glDisable(GL_SCISSOR_TEST); glColorMask(true, true, true, true);
+                    glClearColor(1, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+                    glEnable(GL_SCISSOR_TEST); glScissor(16, 0, 16, 24);
+                    glClearColor(0, 1, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+                }
+            });
+            GlPaintPlanRenderer nativeRenderer = fonts.createPlanRenderer(resources);
+            try {
+                PaintPlanBuilder plan = new PaintPlanBuilder(); plan.add(image);
+                plan.add(PaintCommand.rect(new LayoutBox(228, 165, 10, 10), VIEW, 0xFF22CC66));
+                int[] result = render(plan.build(), nativeRenderer); save("vector-native-host-image.png", result);
+                SceneTransform inverse = transform.inverse(); int samples = 0;
+                for (int y = 10; y < 90; y++) for (int x = 70; x < 135; x++) {
+                    if (!interior(image.effectiveClip(), x + .5, y + .5)) continue;
+                    double px = inverse.x(x + .5, y + .5), py = inverse.y(x + .5, y + .5);
+                    if (px < -78 || px > -50 || py < -58 || py > -38 || Math.abs(px + 64) < 2) continue;
+                    require(pixel(result, x, y) == (px < -64 ? 0xFFFF0000 : 0xFF00FF00),
+                            "宿主局部capture没有通过原batch映射shape/UV");
+                    samples++;
+                }
+                require(calls[0] == 1 && samples > 0 && resources.retainedHostCaptureBytes() == 32L * 24 * 8
+                        && pixel(result, 232, 170) == 0xFF22CC66,
+                        "宿主图像重复委托/捕获范围错误或外部scope没有还原");
+            } finally { fonts.releasePlanRenderer(nativeRenderer); }
+        }
+    }
+    /** 原GL入口观察prepare到宿主producer的真实载荷；纯PATH不能借RECT背景取得white。 */
+    private void hostPathPayload() {
+        GlApi gl = fonts.gl(); double[] submittedArea = {0}; int[] submitted = {0}; boolean[] configured = {false};
+        GlProgramProvider provider = new GlProgramProvider() {
+            public boolean preview(FontRenderContext context) { return true; }
+            public GlProgramScope open(FontRenderContext context) {
+                // 此消费只记录原batch，不模拟宿主shader的GPU像素。
+                return new GlProgramScope() {
+                    public int programId() { return gl.glGetInteger(GL_CURRENT_PROGRAM); }
+                    public List<GlProgramAttribute> attributes() { return Collections.emptyList(); }
+                    public float[] normal() { return new float[] {0, 0, 1}; }
+                    public int packedLight() { return 0; }
+                    public float[] extended(String name, int type) { return null; }
+                    public void configure(int vao, int vbo, int ebo, boolean uv, boolean color, boolean lightmap, boolean normal) { }
+                    public void pointer(int location, int size, int type, boolean normalized, int stride, long offset) { }
+                    public void disable(int location) { }
+                    public void bindTexture2D(int texture) { gl.glBindTexture(GL_TEXTURE_2D, texture); }
+                    public void beforeDraw() { }
+                    public void close() { }
+                };
+            }
+            public GlVertexProducer createVertexProducer(GlApi port, int capacity) {
+                return new GlVertexProducer() {
+                    public void configure(GlProgramScope scope) { configured[0] = true; }
+                    public long consume(OrderedQuadBatch batch, GlProgramScope scope, FontRenderContext context,
+                            GlQuadRenderer.ResourceProvider resources) {
+                        for (OrderedQuadBatch.Draw draw : batch.draws()) {
+                            require(draw.state.material == GlQuadRenderer.MONOCHROME_COVERAGE, "纯PATH hostpass未使用white覆盖度材质");
+                            GlQuadRenderer.Texture texture = resources.resolve(draw.state.resource, draw.state.generation);
+                            require(texture.target == GL_TEXTURE_2D && glIsTexture(texture.id), "宿主pass未准备真实white/图像纹理");
+                        }
+                        for (Quad q : batch.quads()) {
+                            submitted[0]++;
+                            double[] xs = {q.x0, q.x1, q.x2, q.x3}, ys = {q.y0, q.y1, q.y2, q.y3};
+                            float[] ss = {q.s0, q.s1, q.s2, q.s3}, ts = {q.t0, q.t1, q.t2, q.t3};
+                            for (int i = 0; i < 4; i++) {
+                                require(xs[i] >= 2 - .0001 && xs[i] <= 5 + .0001
+                                        && ys[i] >= 0 - .0001 && ys[i] <= 10 + .0001,
+                                        "world矩形callerclip只留在被忽略的State.clip，未裁真实顶点");
+                                require(ss[i] == q.s0 && ts[i] == q.t0, "PATH新裁剪点丢失逐顶点white UV");
+                            }
+                            submittedArea[0] += triangleArea(q.x0, q.y0, q.x1, q.y1, q.x2, q.y2)
+                                    + triangleArea(q.x0, q.y0, q.x2, q.y2, q.x3, q.y3);
+                        }
+                        return 0;
+                    }
+                    public void close() { }
+                };
+            }
+        };
+        float[] matrix = FramebufferCoordinates.orthographic(W, H);
+        float[] identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        FontRenderContext.MatrixState state = new FontRenderContext.MatrixState(matrix, identity, new float[] {1, 1, 1, 1},
+                false, GL_ALWAYS, 0, false, 0, 0, 0, 0, new float[] {0, 0, 1}, new float[] {1, 1, 1}, -1);
+        FontRenderContext context = new FontRenderContext(new FontProjection(matrix, identity, new int[] {0, 0, W, H}),
+                gl.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING), H, false, GL_LESS, false, false, new int[] {0, 0, W, H},
+                state, gl.capabilities().contextIdentity, 1, 1);
+        SceneClipRegion worldClip = SceneClipRegion.rectangle(new LayoutBox(2, 0, 3, 10));
+        PaintCommand rawPath = PaintCommand.path(SceneMesh.rectangle(0, 0, 10, 10), new LayoutBox(2, 0, 3, 10), 0x80667788);
+        require(rawPath.sceneGeometry && !PaintCommand.rect(new LayoutBox(0, 0, 10, 10), null, -1).sceneGeometry,
+                "PATH与旧RECT工厂没有保留scene/caller几何联系的区别");
+        PaintCommand path = PaintCommand.path(SceneMesh.rectangle(0, 0, 10, 10), null, 0x80667788)
+                .withGeometry(SceneTransform.IDENTITY, worldClip);
+        require(path.sceneGeometry, "显式identity几何入口丢失sceneGeometry标记");
+        PaintPlan plan = new PaintPlanBuilder().add(path).build();
+        try (GlPaintPlanRenderer backend = new GlPaintPlanRenderer(gl, fonts.rasterizer(), fonts.atlas(), 2, 16, provider);
+                GlPaintPlanRenderer.Prepared prepared = backend.prepareDemandContext(plan, context,
+                        new GlGlyphAtlas.UploadBudget(1024, 100_000_000L, 8), Collections.emptyList(), () -> {})) {
+            require(prepared.demandCount() == 0, "纯PATH验证混入glyph需求");
+            prepared.render(context);
+        }
+        require(configured[0] && submitted[0] > 0 && Math.abs(submittedArea[0] - 30) < .001,
+                "纯PATH静默丢失或identity有限world矩形没有提交实际裁剪面积");
+    }
     private void geometryContract() {
         PaintCommand command =
                 PaintCommand.line(10, 20, 40, 60, 10, new LayoutBox(12, 24, 6, 9), 0x804080C0);
@@ -508,6 +693,72 @@ public final class PaintPrimitiveScenario extends TestApplication {
         System.out.println("封闭端点、法向宽度、反向端点、零长度和非法线宽通过");
     }
 
+    private void vectorBatchContract() {
+        Quad old = new Quad(0, 0, 20, 20, .1f, .2f, .9f, .8f, 3, 0x804080C0);
+        require(old.s0 == old.u0 && old.t0 == old.v0 && old.s1 == old.u1 && old.t1 == old.v0
+                && old.s2 == old.u1 && old.t2 == old.v1 && old.s3 == old.u0 && old.t3 == old.v1,
+                "旧quad构造未保留TL/TR/BR/BL采样合同");
+        SceneTransform transform = SceneTransform.of(1, .25, .5, 1, 37, 29);
+        SceneTransform inverse = transform.inverse();
+        LayoutBox localClip = new LayoutBox(7, 3, 10, 14);
+        SceneMesh diamond = SceneMesh.rectangle(0, 0, 8, 8).transformed(
+                SceneTransform.translation(10, 4).multiply(SceneTransform.rotationDegrees(45))).transformed(transform);
+        SceneClipRegion region = SceneClipRegion.of(diamond);
+        List<club.heiqi.uilib.ui.render.batch.OrderedQuadBatch> batches = new ArrayList<>();
+        OrderedQuadCollector collector = new OrderedQuadCollector(2, batches::add);
+        collector.add(new State(1, 17, 23, localClip, transform, region), old);
+        Quad after = new Quad(80, 70, 4, 6, 0, 0, 1, 1, 0, -1);
+        collector.add(new State(0, 0, 0, null), after); collector.flush();
+        double area = 0; int clippedQuads = 0; Quad last = null;
+        for (club.heiqi.uilib.ui.render.batch.OrderedQuadBatch batch : batches)
+            for (Quad q : batch.quads()) {
+                last = q;
+                if (q.layer != old.layer) continue;
+                clippedQuads++;
+                double[] xs = {q.x0, q.x1, q.x2, q.x3}, ys = {q.y0, q.y1, q.y2, q.y3};
+                float[] ss = {q.s0, q.s1, q.s2, q.s3}, ts = {q.t0, q.t1, q.t2, q.t3};
+                for (int i = 0; i < 4; i++) {
+                    double x = inverse.x(xs[i], ys[i]), y = inverse.y(xs[i], ys[i]);
+                    require(x >= localClip.x - .001 && x <= localClip.x + localClip.width + .001
+                            && y >= localClip.y - .001 && y <= localClip.y + localClip.height + .001,
+                            "变换后把局部clip当作world scissor");
+                    require(Math.abs(ss[i] - (.1 + .8 * x / 20)) < .0001
+                            && Math.abs(ts[i] - (.2 + .6 * y / 20)) < .0001,
+                            "裁剪新顶点没有按原纹理坐标插值");
+                }
+                area += triangleArea(q.x0, q.y0, q.x1, q.y1, q.x2, q.y2)
+                        + triangleArea(q.x0, q.y0, q.x2, q.y2, q.x3, q.y3);
+            }
+        double expected = region.clip(SceneMesh.rectangle(localClip.x, localClip.y, localClip.width, localClip.height)
+                .transformed(transform)).area();
+        require(clippedQuads > 0 && Math.abs(area - expected) < .001, "共享collector丢失精确shape交集或重复画三角");
+        require(last != null && last.x0 == after.x0 && last.y0 == after.y0 && last.x2 == after.x2
+                && last.y2 == after.y2 && last.layer == after.layer, "变换批次改变原有序输出或污染下一identity命令");
+        // 同一矩形输入的非恒定UV由共享collector核对，不把framebuffer专用IMAGE送进world入口。
+        SceneClipRegion effectiveRegion = SceneClipRegion.rectangle(new LayoutBox(2, 0, 3, 10));
+        List<Quad> textured = new ArrayList<>();
+        OrderedQuadCollector worldCollector = new OrderedQuadCollector(2, batch -> textured.addAll(batch.quads()));
+        worldCollector.add(new State(GlQuadRenderer.COLOR_PREMULT, 0, 0, null, SceneTransform.IDENTITY,
+                SceneClipRegion.of(effectiveRegion.mesh())), new Quad(0, 0, 10, 10, 0, 0, 1, 1, 0, -1));
+        worldCollector.flush(); double worldArea = 0;
+        for (Quad q : textured) {
+            double[] xs = {q.x0, q.x1, q.x2, q.x3}, ys = {q.y0, q.y1, q.y2, q.y3};
+            float[] ss = {q.s0, q.s1, q.s2, q.s3}, ts = {q.t0, q.t1, q.t2, q.t3};
+            for (int i = 0; i < 4; i++) require(ss[i] >= .2f - .0001 && ss[i] <= .5f + .0001
+                    && ts[i] >= -.0001 && ts[i] <= 1 + .0001 && Math.abs(ss[i] - xs[i] / 10) < .0001
+                    && Math.abs(ts[i] - ys[i] / 10) < .0001, "identity有限worldclip未保持u[.2,.5]/v[0,1]插值");
+            worldArea += triangleArea(q.x0, q.y0, q.x1, q.y1, q.x2, q.y2) + triangleArea(q.x0, q.y0, q.x2, q.y2, q.x3, q.y3);
+        }
+        require(!textured.isEmpty() && Math.abs(worldArea - 30) < .001, "同输入UV载荷没有保留精确面积30");
+        System.out.println("共享collector仿射/精确裁剪/逐顶点UV与旧quad入口通过");
+    }
+    private static boolean interior(SceneClipRegion region, double x, double y) {
+        return region.contains(x - .2, y - .2) && region.contains(x - .2, y + .2)
+                && region.contains(x + .2, y - .2) && region.contains(x + .2, y + .2);
+    }
+    private static double triangleArea(double ax, double ay, double bx, double by, double cx, double cy) {
+        return Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) / 2;
+    }
     private static Path2D path(Quad q) {
         Path2D.Double path = new Path2D.Double();
         path.moveTo(q.x0, q.y0);
@@ -702,10 +953,14 @@ public final class PaintPrimitiveScenario extends TestApplication {
     @Override
     protected void runTests() throws Exception {
         scenario("封闭line及四角几何", this::geometryContract);
+        scenario("共享collector仿射形状裁剪及四顶点UV兼容", this::vectorBatchContract);
         scenario("当前唯一树局部post和全页tooltip顺序", this::sceneOrder);
         scenario("真实SceneImage嵌套captured fallback分支与overlay投影", this::capturedFallback);
         if (!orderOnly) {
             scenario("正式GLhost斜线线宽半透明clip与软件栅格", this::gpuLines);
+            scenario("正式GL路径三角形与变换纹理精确裁剪", this::gpuVector);
+            scenario("纯PATH宿主pass准备white并提交world精确裁剪载荷", this::hostPathPayload);
+            scenario("宿主图片保留局部分配capture后经共享batch变换", this::gpuHostVector);
             scenario("圆角coverage真实像素与独立面积参考",this::roundedCoverage);
         }
     }

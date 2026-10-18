@@ -23,6 +23,10 @@ import club.heiqi.uilib.host.client.gl.GlVideoResources;
 
 
 
+import club.heiqi.uilib.ui.scene.geometry.SceneClipRegion;
+import club.heiqi.uilib.ui.scene.geometry.SceneMesh;
+import club.heiqi.uilib.ui.scene.geometry.ScenePath;
+import club.heiqi.uilib.ui.scene.geometry.SceneTransform;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 
 import club.heiqi.uilib.ui.scene.text.TextStyle;
@@ -90,10 +94,39 @@ public final class VideoGlVerification {
             require(Math.abs(received - value) <= 4, "视频纹理身份/像素不符 key=" + frame.key + " xy=" + x + "," + y + " channel=" + channel + " actual=" + received + " expected=" + value);
         }
     }
+    /** 原真实binding/已发布帧入口：几何先筛选需求，不能让孔内帧占一个有效槽。 */
+    private static void geometryVisibility(GlApi gl, MediaService service, MediaVideoFrame first,
+            MediaVideoFrame second, LayoutBox viewport) {
+        PaintCommand moved = video(first, new LayoutBox(-100, 20, 40, 40), null, VideoPlacement.Fit.STRETCH)
+                .withGeometry(SceneTransform.translation(200, 0), SceneClipRegion.UNBOUNDED);
+        SceneMesh ring = ScenePath.builder().rule(ScenePath.FillRule.EVEN_ODD)
+                .moveTo(0, 0).lineTo(viewport.width, 0).lineTo(viewport.width, viewport.height).lineTo(0, viewport.height).close()
+                .moveTo(90, 10).lineTo(150, 10).lineTo(150, 70).lineTo(90, 70).close().build().fillMesh(.25);
+        PaintCommand inHole = video(first, new LayoutBox(100, 20, 40, 40), null, VideoPlacement.Fit.STRETCH)
+                .withGeometry(SceneTransform.IDENTITY, SceneClipRegion.of(ring));
+        PaintCommand outsideHole = video(second, new LayoutBox(160, 20, 40, 40), null, VideoPlacement.Fit.STRETCH)
+                .withGeometry(SceneTransform.IDENTITY, SceneClipRegion.of(ring));
+        try (GlVideoResources videos = new GlVideoResources(gl, service, 1, Math.max(first.bytes(), second.bytes()))) {
+            try (GlVideoResources.Frame frame = videos.prepare(new PaintPlanBuilder().add(moved).build(), viewport)) {
+                require(frame.ready(first.key) && frame.active(first.key) && videos.textureCount() == 1
+                        && videos.retainedBytes() == first.bytes(), "负local视频移入viewport后未prepare真实租约与纹理");
+            }
+            try (GlVideoResources.Frame frame = videos.prepare(new PaintPlanBuilder().add(inHole).add(outsideHole).build(), viewport)) {
+                require(!frame.ready(first.key) && frame.ready(second.key) && frame.active(second.key)
+                        && videos.textureCount() == 1 && videos.retainedBytes() == second.bytes(),
+                        "孔内视频被包络误收需求，挤占唯一有效帧的lease/纹理预算");
+            }
+            try (GlVideoResources.Frame frame = videos.prepare(new PaintPlanBuilder().add(inHole).build(), viewport)) {
+                require(!frame.ready(first.key) && videos.textureCount() == 0 && videos.retainedBytes() == 0,
+                        "仅孔内视频的计划仍保留不可见需求或驻留");
+            }
+        }
+    }
     public static void run(ClientFontServices fonts, MediaService service, MediaVideoFrame first, MediaVideoFrame second,
             Target target, Runnable invalidate) throws Exception {
         GlApi gl = fonts.gl(); Set<Integer> textures = new HashSet<>(); AtomicBoolean fail = new AtomicBoolean();
         GlApi videoGl = proxy(gl, textures, fail, "glTexImage2D");
+        geometryVisibility(gl, service, first, second, new LayoutBox(0, 0, target.width(), target.height()));
         long limit = Math.addExact(first.bytes(), second.bytes());
         try (GlVideoResources videos = new GlVideoResources(videoGl, service, 2, limit);
                 GlImageResources images = new GlImageResources(gl, 2, 1024)) {
