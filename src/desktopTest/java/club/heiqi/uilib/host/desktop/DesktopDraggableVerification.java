@@ -98,44 +98,47 @@ public final class DesktopDraggableVerification {
         }
         try(DesktopWindow w=DesktopWindow.openWithServices(output.resolve("gallery.yaml"),s -> DesktopGallery.createGallery(s,TestGallery.Page.DRAGGABLE))) {
             glfwSetWindowSize(w.handle(),1440,1000);settle(w);DesktopTestInput input=new DesktopTestInput(w);
-            for(String name:new String[]{"拖动我","元素 A","元素 B","元素 C"})
-                require(DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&name.equals(e.text.logicalText)
-                        &&e.box.intersect(e.clip).width==e.box.width),"示例元素溢出视口："+name);
-            BufferedImage idle=save(w,output.resolve("draggable-idle.png"));
-            SceneNode surface=DesktopTestInput.geometry(w).ordered().stream().filter(e -> e.text!=null&&"拖动我".equals(e.text.logicalText)).findFirst().get().node.parent().parent();
-            LayoutBox idleFrame=box(w,surface);roundedPixels(idle,idleFrame,idle,idleFrame,"idle");
-            LayoutBox label=DesktopTestInput.geometry(w).ordered().stream().filter(e -> e.text!=null&&"拖动我".equals(e.text.logicalText)).findFirst().get().box;
-            down(w,input,label.x+8,label.y+8);move(w,input,label.x+128,label.y+88);
-            BufferedImage active=save(w,output.resolve("draggable-active.png"));LayoutBox activeFrame=box(w,surface);
-            roundedPixels(active,activeFrame,idle,idleFrame,"drag");
-            require(colorDistance(active.getRGB(activeFrame.x+12,activeFrame.y+12),idle.getRGB(idleFrame.x+12,idleFrame.y+12))>2,"拖动填色未更新");
-            up(w,input,label.x+128,label.y+88);
-            BufferedImage focused=save(w,output.resolve("draggable-released.png"));LayoutBox focusedFrame=box(w,surface);
-            roundedPixels(focused,focusedFrame,idle,idleFrame,"focus");
-            require(colorDistance(focused.getRGB(focusedFrame.x+12,focusedFrame.y+12),idle.getRGB(idleFrame.x+12,idleFrame.y+12))>2
-                    &&colorDistance(focused.getRGB(focusedFrame.x+12,focusedFrame.y+12),active.getRGB(activeFrame.x+12,activeFrame.y+12))>2,"聚焦填色未更新");
-            for(String title:new String[]{"独立把手","双启动把手","拖动预览","只沿横轴","只沿纵轴","网格吸附","容器边界","窗口边界","距离激活","延时激活"})
-                require(DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&title.equals(e.text.logicalText)),"参考扩展示例缺失："+title);
-            for(int step=0;step<12&&!visibleText(w,"拖动预览");step++){input.point(1000,700);input.scroll.invoke(w.handle(),0,-4);w.frame();}
-            require(visibleText(w,"拖动预览")&&visibleText(w,"独立把手"),"更多参考交互无法在真实示例页显露");
-            BufferedImage variants=save(w,output.resolve("draggable-variants.png"));
-            SceneNode variantSurface=DesktopTestInput.geometry(w).ordered().stream().filter(e -> e.text!=null&&"拾起我".equals(e.text.logicalText))
-                    .map(e -> e.node.parent().parent()).filter(n -> same(DesktopTestInput.hit(DesktopTestInput.geometry(w,n)),box(w,n)))
-                    .findFirst().orElseThrow(() -> new AssertionError("圆角像素目标未完整显露"));
-            roundedPixels(variants,box(w,variantSurface),idle,idleFrame,"variant-idle");
-            centeredLabels(w,variants);
-            verifyGraphicGrips(w,input);
-            System.out.println("DRAGGABLE roundedPixels=true idle=true focus=true drag=true variant=true outsideBackground=true");
-            input.point(1000,600);input.scroll.invoke(w.handle(),0,100);w.frame();
-            glfwSetWindowSize(w.handle(),600,900);settle(w);
-            for(String name:new String[]{"元素 A","元素 B","元素 C"})
-                require(DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&name.equals(e.text.logicalText)
-                        &&e.box.intersect(e.clip).width==e.box.width),"窄窗示例被裁掉："+name);
-            BufferedImage narrow=save(w,output.resolve("draggable-narrow.png"));
-            centeredLabels(w,narrow);
-            input.click("返回场景概览");input.click("打开拖拽");settle(w);
-            require(DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&"Draggable".equals(e.text.logicalText)),"真实目录重入失效");
-            System.out.println("DRAGGABLE gallery=true actualGpu=true normalEntry=true");
+            // 自动指针序列独占光标来源；原生窗口事件仍经正式帧分发。
+            try(DesktopTestInput.ScriptedCursor scripted=input.scriptedCursor()) {
+                for(String name:new String[]{"拖动我","元素 A","元素 B","元素 C"})
+                    require(DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&name.equals(e.text.logicalText)
+                            &&e.box.intersect(e.clip).width==e.box.width),"示例元素溢出视口："+name);
+                BufferedImage idle=save(w,output.resolve("draggable-idle.png"));
+                SceneNode surface=DesktopTestInput.geometry(w).ordered().stream().filter(e -> e.text!=null&&"拖动我".equals(e.text.logicalText)).findFirst().get().node.parent().parent();
+                LayoutBox idleFrame=box(w,surface);roundedPixels(idle,idleFrame,idle,idleFrame,"idle");
+                LayoutBox label=DesktopTestInput.geometry(w).ordered().stream().filter(e -> e.text!=null&&"拖动我".equals(e.text.logicalText)).findFirst().get().box;
+                down(w,input,label.x+8,label.y+8);move(w,input,label.x+128,label.y+88);
+                BufferedImage active=save(w,output.resolve("draggable-active.png"));LayoutBox activeFrame=box(w,surface);
+                roundedPixels(active,activeFrame,idle,idleFrame,"drag");
+                require(colorDistance(active.getRGB(activeFrame.x+12,activeFrame.y+12),idle.getRGB(idleFrame.x+12,idleFrame.y+12))>2,"拖动填色未更新");
+                up(w,input,label.x+128,label.y+88);
+                BufferedImage focused=save(w,output.resolve("draggable-released.png"));LayoutBox focusedFrame=box(w,surface);
+                roundedPixels(focused,focusedFrame,idle,idleFrame,"focus");
+                require(colorDistance(focused.getRGB(focusedFrame.x+12,focusedFrame.y+12),idle.getRGB(idleFrame.x+12,idleFrame.y+12))>2
+                        &&colorDistance(focused.getRGB(focusedFrame.x+12,focusedFrame.y+12),active.getRGB(activeFrame.x+12,activeFrame.y+12))>2,"聚焦填色未更新");
+                for(String title:new String[]{"独立把手","双启动把手","拖动预览","只沿横轴","只沿纵轴","网格吸附","容器边界","窗口边界","距离激活","延时激活"})
+                    require(DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&title.equals(e.text.logicalText)),"参考扩展示例缺失："+title);
+                for(int step=0;step<12&&!visibleText(w,"拖动预览");step++){input.point(1000,700);input.scroll.invoke(w.handle(),0,-4);w.frame();}
+                require(visibleText(w,"拖动预览")&&visibleText(w,"独立把手"),"更多参考交互无法在真实示例页显露");
+                BufferedImage variants=save(w,output.resolve("draggable-variants.png"));
+                SceneNode variantSurface=DesktopTestInput.geometry(w).ordered().stream().filter(e -> e.text!=null&&"拾起我".equals(e.text.logicalText))
+                        .map(e -> e.node.parent().parent()).filter(n -> same(DesktopTestInput.hit(DesktopTestInput.geometry(w,n)),box(w,n)))
+                        .findFirst().orElseThrow(() -> new AssertionError("圆角像素目标未完整显露"));
+                roundedPixels(variants,box(w,variantSurface),idle,idleFrame,"variant-idle");
+                centeredLabels(w,variants);
+                verifyGraphicGrips(w,input);
+                System.out.println("DRAGGABLE roundedPixels=true idle=true focus=true drag=true variant=true outsideBackground=true");
+                input.point(1000,600);input.scroll.invoke(w.handle(),0,100);w.frame();
+                glfwSetWindowSize(w.handle(),600,900);settle(w);
+                for(String name:new String[]{"元素 A","元素 B","元素 C"})
+                    require(DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&name.equals(e.text.logicalText)
+                            &&e.box.intersect(e.clip).width==e.box.width),"窄窗示例被裁掉："+name);
+                BufferedImage narrow=save(w,output.resolve("draggable-narrow.png"));
+                centeredLabels(w,narrow);
+                input.click("返回场景概览");input.click("打开拖拽");settle(w);
+                require(DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&"Draggable".equals(e.text.logicalText)),"真实目录重入失效");
+                System.out.println("DRAGGABLE gallery=true actualGpu=true normalEntry=true scriptedCursor=true nativeCursorEvents="+scripted.nativeMoves());
+            }
         }
     }
     // 正式几何与真实墨迹共同验收，不能用字形Y补偿冒充行内居中。
