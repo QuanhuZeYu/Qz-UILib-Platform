@@ -1,42 +1,40 @@
-name: Build and test
-
+name: Platform build
 on:
-  pull_request:
-    branches: [ 4.0, master, main ]
-  push:
-    branches: [ '**' ]
-
+  workflow_dispatch:
+    inputs:
+      uilib_repository:
+        description: 'Core 正式与测试产物的 Maven 仓库 URL'
+        required: true
+        type: string
+      uilib_version:
+        description: '明确选择的 UILib 产物版本'
+        required: true
+        default: '4.11.1'
+        type: string
 jobs:
-  build-and-test:
-    uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/build-and-test.yml@8d2e9d2fcfd6ea1c5b8f7c7e15359ad031444c7d
-
-  script-host-policy:
-    name: Script host policy
-    runs-on: ubuntu-24.04
+  build:
+    # 完整场景需要实际窗口、GL 设备与音频设备。
+    runs-on: [self-hosted, Windows, X64, qz-desktop]
     steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
-          persist-credentials: false
-
-      - name: Reject disallowed tracked files and workflow hosts
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import subprocess
-          from pathlib import Path
-
-          suffix = "." + "p" + "s" + "1"
-          forbidden = ("p" + "wsh", "power" + "shell", suffix)
-          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
-          bad_files = [path for path in tracked if path.lower().endswith(suffix)]
-          bad_workflows = []
-          for path in Path(".github/workflows").glob("*"):
-              if path.is_file():
-                  text = path.read_text(encoding="utf-8").lower()
-                  hits = [token for token in forbidden if token in text]
-                  if hits:
-                      bad_workflows.append((path.as_posix(), hits))
-          if bad_files or bad_workflows:
-              raise SystemExit(f"disallowed files={bad_files}; workflow tokens={bad_workflows}")
-          PY
+          distribution: temurin
+          java-version: |
+            8
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 构建完整 Platform 与真实桌面场景
+        shell: cmd
+        run: gradlew.bat build "-PuilibVersion=%UILIB_VERSION%" "-PuilibRepository=%UILIB_REPOSITORY%"
+        env:
+          UILIB_REPOSITORY: ${{ inputs.uilib_repository }}
+          UILIB_VERSION: ${{ inputs.uilib_version }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: platform-results
+          path: |
+            build/reports
+            build/distributions

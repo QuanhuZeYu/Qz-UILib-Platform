@@ -1,0 +1,73 @@
+def formalDependency = { node, String artifact, String classifier = null, String scope = 'compile', String dependencyGroup = 'club.heiqi.uilib', String dependencyVersion = project.version.toString() ->
+    def dependency = node.appendNode('dependency')
+    dependency.appendNode('groupId', dependencyGroup); dependency.appendNode('artifactId', artifact); dependency.appendNode('version', dependencyVersion)
+    if (classifier != null) dependency.appendNode('classifier', classifier)
+    dependency.appendNode('scope', scope)
+}
+platformModules.each { module, name ->
+    def sources = tasks.register(module + 'SourcesJar', Jar) {
+        archiveBaseName = name; archiveClassifier = 'sources'; from sourceSets[module].allSource
+        exclude 'assets/qz_uilib/runtime/**'; from('LICENSE', 'build.gradle', 'settings.gradle', 'gradle.properties')
+        from('gradle') { into('gradle'); exclude 'wrapper/gradle-wrapper.jar' }
+        if (module == 'fontAdapter') dependsOn 'packageFontBindings'
+        if (module == 'mediaAdapter') dependsOn 'packageMediaBindings'
+    }
+    publishing.publications.create(module, MavenPublication) {
+        artifactId = name
+        artifact(platformArtifacts[name + ':21']) { classifier = null }
+        artifact(platformArtifacts[name + ':8']) { classifier = 'java8' }
+        artifact(sources) { classifier = 'sources' }
+        pom {
+            delegate.name.set('Qz UILib ' + name)
+            description = 'Platform 正式适配；Java8 classifier 消费者显式选择同目标的上游产物。'
+            licenses { license { delegate.name.set('GNU Lesser General Public License v3.0 or later'); url.set('https://www.gnu.org/licenses/lgpl-3.0.html') } }
+            withXml {
+                def dependencies = asNode().appendNode('dependencies')
+                formalDependency(dependencies,'core')
+                if (module == 'lwjgl2' || module == 'lwjgl3') formalDependency(dependencies,'gl-renderer')
+                if (module == 'lwjgl2') formalDependency(dependencies,'lwjgl',null,'provided','org.lwjgl.lwjgl','2.9.4-nightly-20150209')
+                if (module == 'lwjgl3') ['lwjgl','lwjgl-opengl'].each { formalDependency(dependencies,it,null,'provided','org.lwjgl','3.4.2') }
+            }
+        }
+    }
+}
+def desktopSources = tasks.register('desktopSourcesJar', Jar) {
+    archiveBaseName = 'desktop'; archiveClassifier = 'sources'
+    from sourceSets.desktop.allSource
+    from('LICENSE', 'build.gradle', 'settings.gradle', 'gradle.properties')
+    from('gradle') { into('gradle'); exclude 'wrapper/gradle-wrapper.jar' }
+}
+publishing {
+    publications {
+        desktop(MavenPublication) {
+            artifactId = 'desktop'; artifact(desktopJar) { classifier = null }
+            artifact(desktopSources) { classifier = 'sources' }
+            artifact(tasks.named('desktopDist')) { classifier = 'desktop-dist'; extension = 'zip' }
+            pom.withXml {
+                def dependencies = asNode().appendNode('dependencies')
+                ['core','font-adapter','media-adapter'].each { formalDependency(dependencies,it) }
+            }
+        }
+        verification(MavenPublication) {
+            artifactId = 'platform-verification'; artifact(platformVerification) { classifier = null }
+            pom.withXml {
+                def dependencies = asNode().appendNode('dependencies')
+                formalDependency(dependencies,'core','java8'); formalDependency(dependencies,'core-verification'); formalDependency(dependencies,'gallery')
+                platformModules.values().each { formalDependency(dependencies,it,'java8') }
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = 'Workspace'
+            url = uri(providers.gradleProperty('uilibRepository').getOrElse(layout.buildDirectory.dir('repository').get().asFile.absolutePath))
+        }
+    }
+}
+tasks.withType(PublishToMavenRepository).configureEach {
+    doFirst { if (repository.url.scheme != 'file') throw new GradleException('publishWorkspace 只写入显式本地 Maven 目录') }
+}
+tasks.register('publishWorkspace') {
+    group = 'publishing'; description = '将 Platform 正式双目标与独立验证产物写入本地 Maven 仓'
+    dependsOn tasks.withType(PublishToMavenRepository).matching { it.repository.name == 'Workspace' }
+}

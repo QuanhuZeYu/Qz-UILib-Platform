@@ -1,6 +1,6 @@
 # 媒体适配的许可、来源与可替换动态库
 
-本目录属于独立 media-adapter / media-adapter-java8 两个本地产物。UILib 自有 Java 实现按根许可证；下列第三方按其各自许可。核心不携带媒体绑定或native。版本/发布策略由既有构建管理，本材料不创建publication。
+本目录随独立 media-adapter 正式产物及其 java8 classifier 分发。UILib 自有 Java 实现按根许可证；下列第三方按其各自许可。核心不携带媒体绑定或native。版本由 -PuilibVersion 选择，坐标归属 club.heiqi.uilib。
 
 ## 实际固定组成
 
@@ -42,9 +42,9 @@
 
 ## 对应源码和重建
 
-随附本仓sourcesJar含全部UILib媒体Java源、装配逻辑与本目录。JavaCPP1.5.10和presets1.5.10完整源码归档分别在 https://github.com/bytedeco/javacpp/archive/refs/tags/1.5.10.tar.gz 与 https://github.com/bytedeco/javacpp-presets/archive/refs/tags/1.5.10.tar.gz 。sources/ffmpeg-cppbuild.sh逐项固定所有第三方源码URL/版本与编译选项；对应源码按上表提供，不将所有独立库混称本仓源。上游native库没有本仓修改；本仓变更止于Java适配/私有装配、有限计数和LWJGL多版本覆盖剔除。
+随附 media-adapter 的 sources classifier 含 UILib 媒体 Java 源、Gradle 装配逻辑与本目录。JavaCPP1.5.10和presets1.5.10完整源码归档分别在 https://github.com/bytedeco/javacpp/archive/refs/tags/1.5.10.tar.gz 与 https://github.com/bytedeco/javacpp-presets/archive/refs/tags/1.5.10.tar.gz 。sources/ffmpeg-cppbuild.sh逐项固定所有第三方源码URL/版本与编译选项；对应源码按上表提供，不将所有独立库混称本仓源。上游native库没有本仓修改；本仓变更止于Java适配/私有装配、有限计数和LWJGL多版本覆盖剔除。
 
-本地重建使用既有Gradle任务coreJar/fontAdapterJar/desktopJar/mediaAdapterJar与独立coreLegacyJar/fontAdapterLegacyJar/mediaAdapterLegacyJar；两套算法源同源，主线javac21 --release21，legacy --release8。FFmpeg上游native重建按presets1.5.10顶层cppbuild及此目录脚本选择windows-x86_64；使用相同配置、对应源码和工具链，JNI类名/ABI保持相容。OpenAL Soft按1.25.2源码的CMake说明构建动态库。
+本地重建先通过 -PuilibRepository 与 -PuilibVersion 选择 Core 正式/开发坐标，再执行本仓 Gradle 任务 fontAdapterJar/desktopJar/mediaAdapterJar 与独立 fontAdapterLegacyJar/mediaAdapterLegacyJar；两套算法源同源，主线 javac21 --release21，legacy --release8。FFmpeg上游native重建按presets1.5.10顶层cppbuild及此目录脚本选择windows-x86_64；使用相同配置、对应源码和工具链，JNI类名/ABI保持相容。OpenAL Soft按1.25.2源码的CMake说明构建动态库。
 
 ## 替换和调试动态库
 

@@ -40,6 +40,27 @@ final class DesktopTestInput {
             throw new AssertionError("生产宿主未安装标准GLFW回调");
     }
 
+    /** 脚本独占光标来源，显式输入仍调用借用的生产回调；原生resize等事件继续分发。 */
+    ScriptedCursor scriptedCursor() { return new ScriptedCursor(); }
+
+    final class ScriptedCursor implements AutoCloseable {
+        private final GLFWCursorPosCallback receiver;
+        private final GLFWCursorPosCallback previous;
+        private int nativeMoves;
+
+        private ScriptedCursor() {
+            receiver = GLFWCursorPosCallback.create((handle, x, y) -> nativeMoves++);
+            previous = glfwSetCursorPosCallback(window.handle(), receiver);
+        }
+
+        int nativeMoves() { return nativeMoves; }
+
+        @Override public void close() {
+            glfwSetCursorPosCallback(window.handle(), previous);
+            receiver.free();
+        }
+    }
+
     static SceneGeometryView geometry(DesktopWindow window) {
         final SceneGeometryView[] result = {null};
         window.domain.execute(() -> result[0] = window.page.pipeline().current().geometry);

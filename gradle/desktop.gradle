@@ -1,0 +1,103 @@
+ext.desktopJar = tasks.register('desktopJar', platformShadowJar) {
+    group = 'build'; archiveBaseName = 'desktop'; archiveClassifier = ''
+    from sourceSets.desktop.output, sourceSets.glRenderer21.output, sourceSets.lwjgl321.output
+    configurations = [project.configurations.fontNativeRuntime]; enableAutoRelocation = false
+    contentPackages.each { relocate it, 'club.heiqi.uilib.shadow.' + it }
+    from('LICENSE')
+    exclude 'META-INF/versions/**', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest.attributes('Main-Class':'club.heiqi.uilib.host.desktop.DesktopApplication', 'UILib-Native-Platform':System.getProperty('os.name'), 'UILib-Native-Architecture':System.getProperty('os.arch'))
+}
+ext.desktopArtifacts = files(desktopJar.flatMap { it.archiveFile }, configurations.coreRuntime21,
+        platformArtifacts['font-adapter:21'].flatMap { it.archiveFile }, platformArtifacts['media-adapter:21'].flatMap { it.archiveFile })
+def scripts = layout.buildDirectory.dir('generated/desktop-launchers')
+def mac = System.getProperty('os.name').toLowerCase().contains('mac')
+tasks.register('generateDesktopLaunchers') {
+    outputs.dir(scripts); inputs.property('mac', mac)
+    doLast {
+        def directory = scripts.get().asFile; directory.mkdirs()
+        ['qz-desktop':'DesktopApplication','qz-desktop-settings':'DesktopSettingsMain'].each { name, entry ->
+            def main = 'club.heiqi.uilib.host.desktop.' + entry
+            new File(directory, name + '.bat').setText('@echo off\r\nsetlocal\r\nset "DESKTOP_JAVA=java"\r\nif defined JAVA_HOME set "DESKTOP_JAVA=%JAVA_HOME%\\bin\\java.exe"\r\n"%DESKTOP_JAVA%" -Dfile.encoding=UTF-8 -Xmx1g -cp "%~dp0..\\lib\\*" ' + main + ' %*\r\nexit /b %errorlevel%\r\n', 'UTF-8')
+            new File(directory, name == 'qz-desktop' ? name + '.sh' : name).setText('#!/bin/sh\nDESKTOP_HOME="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"\nDESKTOP_JAVA=java\nif [ -n "$JAVA_HOME" ]; then DESKTOP_JAVA="$JAVA_HOME/bin/java"; fi\nexec "$DESKTOP_JAVA" ' + (mac ? '-XstartOnFirstThread ' : '') + '-Dfile.encoding=UTF-8 -Xmx1g -cp "$DESKTOP_HOME/lib/*" ' + main + ' "$@"\n', 'UTF-8')
+        }
+    }
+}
+tasks.register('installDesktop', Sync) {
+    group = 'distribution'; dependsOn 'generateDesktopLaunchers'
+    into(layout.buildDirectory.dir('install/desktop'))
+    from(desktopArtifacts) { into('lib') }
+    from(scripts) { into('bin'); filePermissions { unix('rwxr-xr-x') } }
+}
+tasks.register('desktopDist', Zip) {
+    group = 'distribution'; dependsOn 'installDesktop'; archiveBaseName = 'qz-uilib-desktop'; archiveClassifier = 'desktop-dist'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(layout.buildDirectory.dir('install/desktop')) { into('qz-uilib-desktop'); filePermissions { unix('rwxr-xr-x') } }
+}
+tasks.register('desktopTestJar') { group = 'verification'; dependsOn platformVerification }
+ext.desktopApplication = { String name, String entry, Closure configure = {} ->
+    tasks.register(name, JavaExec) {
+        group = 'verification'; dependsOn 'installDesktop', platformVerification
+        mainClass = 'club.heiqi.uilib.host.desktop.' + entry
+        classpath = files(platformVerification.flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + desktopArtifacts
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+        jvmArgs '-Dfile.encoding=UTF-8', '-Xmx1g'
+        if (providers.gradleProperty('desktopHidden').isPresent()) systemProperty 'uilib.desktop.visible', 'false'
+        if (mac) jvmArgs '-XstartOnFirstThread'
+        workingDir(layout.buildDirectory.dir('install/desktop'))
+        configure.delegate = delegate; configure.resolveStrategy = Closure.DELEGATE_FIRST; configure()
+    }
+}
+def report = { String name -> layout.buildDirectory.dir('reports/' + name).get().asFile.absolutePath }
+desktopApplication('desktopVerify','DesktopVerification')
+desktopApplication('runDesktopSettings','DesktopSettingsMain') { group = 'application'; classpath = desktopArtifacts }
+desktopApplication('desktopGallery','DesktopGallery') { group = 'application' }
+desktopApplication('desktopGalleryVerify','DesktopGallery') { args '--verify', report('gallery-desktop'); mustRunAfter 'desktopVerify' }
+desktopApplication('desktopGalleryResultScenario','DesktopGalleryResultScenario') { args report('gallery-result') }
+desktopApplication('desktopSettingsVerify','DesktopSettingsVerification') { args report('settings-desktop'); mustRunAfter 'desktopGalleryVerify' }
+desktopApplication('desktopDraggableVerify','DesktopDraggableVerification') { args report('draggable-desktop'); mustRunAfter 'desktopSettingsVerify' }
+desktopApplication('desktopDraggableDeepVerify','DesktopDraggableDeepVerification') { args report('desktop-draggable-deep'); mustRunAfter 'desktopDraggableVerify' }
+desktopApplication('desktopDropSortVerify','DesktopDropSortVerification') { args report('drop-sort-desktop'); mustRunAfter 'desktopDraggableDeepVerify' }
+desktopApplication('desktopScrollAreaVerify','DesktopScrollAreaVerification') { args report('scroll-area-desktop'); mustRunAfter 'desktopDropSortVerify' }
+desktopApplication('desktopMotionVerify','DesktopMotionVerification') { args providers.gradleProperty('motionOutput').getOrElse(report('motion-desktop')); mustRunAfter 'desktopScrollAreaVerify' }
+desktopApplication('desktopGalleryMediaVerify','DesktopGalleryMediaVerification') { args report('gallery-media') }
+desktopApplication('desktopTooltipVerify','DesktopTooltipVerification') { args report('tooltip-desktop') }
+desktopApplication('desktopLiveMediaVerify','DesktopMediaUxVerification') { args report('media-ux') }
+desktopApplication('desktopNetworkMediaVerify','DesktopNetworkMediaVerification') { args report('network-media-desktop') }
+desktopApplication('desktopBilibiliVerify','DesktopBilibiliVerification') {
+    args report('bilibili-desktop'), providers.gradleProperty('bilibiliVideo').getOrElse('BV1GJ411x7h7'), providers.gradleProperty('bilibiliLive').getOrElse('https://live.bilibili.com/6')
+}
+desktopApplication('desktopMediaVerify','DesktopMediaVerification') {
+    args providers.gradleProperty('mediaUrl').getOrElse('http://127.0.0.1:59104/vod.m3u8'), report('media-desktop')
+    systemProperty 'uilib.media.evidence', report('media-desktop')
+}
+desktopApplication('desktopMailboxPerformance','DesktopMailboxPerformance') {
+    group = 'benchmark'; systemProperty 'uilib.version', project.version.toString()
+    systemProperty 'mailbox.paged', providers.gradleProperty('mailboxPaged').getOrElse('true')
+    systemProperty 'mailbox.loads', providers.gradleProperty('mailboxLoads').getOrElse('IDLE,SCROLL,UPDATE,RESIZE')
+    args file(providers.gradleProperty('performanceOutput').getOrElse(report('mailbox-desktop'))).absolutePath,
+            providers.gradleProperty('performanceScale').getOrElse('200'), providers.gradleProperty('performanceWarmup').getOrElse('30'), providers.gradleProperty('performanceFrames').getOrElse('120')
+}
+['desktopPerformance','desktopPerformanceBenchmark'].each { name ->
+    desktopApplication(name,'DesktopPerformance') {
+        group = name == 'desktopPerformance' ? 'application' : 'benchmark'
+        systemProperty 'uilib.version', project.version.toString()
+        args name == 'desktopPerformanceBenchmark' ? '--benchmark' : '--manual', providers.gradleProperty('performanceOutput').getOrElse(report('performance-desktop')),
+                providers.gradleProperty('performanceScale').getOrElse('200'), providers.gradleProperty('performanceWarmup').getOrElse('30'), providers.gradleProperty('performanceFrames').getOrElse('120')
+    }
+}
+desktopApplication('desktopDraggableBenchmark','DesktopDraggablePerformance') {
+    group = 'benchmark'; systemProperty 'uilib.version', project.version.toString()
+    systemProperty 'drag.revision', providers.gradleProperty('dragRevision').getOrElse('unknown')
+    if (providers.gradleProperty('dragProfile').getOrElse('false').toBoolean()) jvmArgs '-Xprof'
+    args file(providers.gradleProperty('dragOutput').getOrElse(report('draggable-performance'))).absolutePath,
+            providers.gradleProperty('dragScale').getOrElse('50,200,1000'), providers.gradleProperty('dragWarmup').getOrElse('30'), providers.gradleProperty('dragFrames').getOrElse('120'),
+            providers.gradleProperty('dragLoads').getOrElse('plain,sort'), providers.gradleProperty('dragEdgeFrames').getOrElse('0')
+}
+tasks.register('galleryVerify') {
+    group = 'verification'; description = '完整验收真实桌面广场、输入、媒体与生命周期'
+    dependsOn 'desktopGalleryVerify','desktopGalleryResultScenario','desktopSettingsVerify','desktopDraggableVerify','desktopDraggableDeepVerify','desktopDropSortVerify','desktopScrollAreaVerify','desktopMotionVerify','desktopGalleryMediaVerify','desktopTooltipVerify','desktopLiveMediaVerify','desktopNetworkMediaVerify'
+}
+tasks.register('galleryBuild') { group = 'build'; dependsOn 'installDesktop', platformVerification }
+tasks.named('check') { dependsOn 'desktopVerify', 'galleryVerify' }
+tasks.named('assemble') { dependsOn desktopJar, 'desktopDist' }

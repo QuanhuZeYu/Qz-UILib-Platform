@@ -615,8 +615,13 @@ public final class ClientFontServicesScenario extends TestApplication {
                     read()[55 * W + 110]
                             == club.heiqi.uilib.ui.scene.control.SceneTheme.light().button,
                     "显露按钮未在实际像素呈现");
-            page.pointer(club.heiqi.uilib.ui.scene.input.ScenePointerEvent.down(0, 110, 55));
-            page.pointer(club.heiqi.uilib.ui.scene.input.ScenePointerEvent.up(0, 110, 55));
+            // 右侧属于自动滚动条的有效命中区；用当前显露按钮正文中心验证点击。
+            LayoutBox[] visible = {null};
+            local.execute(() -> visible[0] = page.pipeline().current().geometry.get(n[2]).box
+                    .intersect(page.pipeline().current().geometry.get(n[0]).box));
+            int hitX = visible[0].x + visible[0].width / 2, hitY = visible[0].y + visible[0].height / 2;
+            page.pointer(club.heiqi.uilib.ui.scene.input.ScenePointerEvent.down(0, hitX, hitY));
+            page.pointer(club.heiqi.uilib.ui.scene.input.ScenePointerEvent.up(0, hitX, hitY));
             page.frame();
             require(clicks[0] == 1, "显露后GPU输入未使用同代几何");
         } finally {
@@ -654,9 +659,14 @@ public final class ClientFontServicesScenario extends TestApplication {
                         page.runtime().focusRouter().clear();
                         theme[0].set(club.heiqi.uilib.ui.scene.control.SceneTheme.light());
                     });
-            clear();
-            page.frame();
-            int light = read()[10 * W + 10];
+            int light;
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
+            // 正式按钮颜色沿 SceneControlMotion 推进；切换首帧仍是前一颜色，观察后续真实呈现。
+            do {
+                clear();
+                page.frame();
+                light = read()[10 * W + 10];
+            } while (light == dark && System.nanoTime() < deadline);
             require(dark != light, "主题切换未改变实际GL颜色");
             page.pointer(club.heiqi.uilib.ui.scene.input.ScenePointerEvent.move(20, 20));
             clear();
@@ -759,17 +769,19 @@ public final class ClientFontServicesScenario extends TestApplication {
         // 宿主typed输入先进入pipeline队列；观察状态/clipboard前先frame结算，再读真实FBO。
         int[] pixels() throws Exception {
             long deadline = System.nanoTime() + 15000000000L;
+            PaintPlan previous = null;
+            int stable = 0;
             for (; ; ) {
                 clear();
                 page.frame();
-                if (owner.rasterizer().stats().pending == 0) {
-                    clear();
-                    page.frame();
-                    return read();
-                }
+                PaintPlan plan = current().paint;
+                if (owner.rasterizer().stats().pending == 0 && plan == previous) stable++;
+                else stable = 0;
+                previous = plan;
+                if (stable >= 4) return read();
                 require(
                         System.nanoTime() < deadline && owner.rasterizer().failures().isEmpty(),
-                        "字段真实字形未ready");
+                        "字段真实字形或颜色呈现未连续稳定");
                 Thread.sleep(2);
             }
         }
@@ -1100,17 +1112,21 @@ public final class ClientFontServicesScenario extends TestApplication {
 
         int[] pixels() throws Exception {
             long deadline = System.nanoTime() + 15000000000L;
+            PaintPlan previous = null;
+            int stable = 0;
             for (; ; ) {
                 clear();
                 page.frame();
-                if (owner.rasterizer().stats().pending == 0) {
-                    clear();
-                    page.frame();
-                    return read();
-                }
+                final PaintPlan[] presented = {null};
+                local.execute(() -> presented[0] = page.pipeline().current().paint);
+                PaintPlan plan = presented[0];
+                if (owner.rasterizer().stats().pending == 0 && plan == previous) stable++;
+                else stable = 0;
+                previous = plan;
+                if (stable >= 4) return read();
                 require(
                         System.nanoTime() < deadline && owner.rasterizer().failures().isEmpty(),
-                        "Area真实字形未ready");
+                        "Area真实字形或颜色呈现未连续稳定");
                 Thread.sleep(2);
             }
         }

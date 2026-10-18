@@ -56,6 +56,7 @@ public final class DesktopMotionVerification extends TestApplication {
     private final class Fixture implements AutoCloseable {
         final DesktopWindow window;
         final DesktopTestInput input;
+        private DesktopTestInput.ScriptedCursor scripted;
         final TestGallery gallery;
         final MotionPage page;
         Fixture(String name, TestGallery.Page initial) throws Exception {
@@ -67,15 +68,21 @@ public final class DesktopMotionVerification extends TestApplication {
             gallery = created[0]; page = gallery.motionPage();
             try {
                 input = new DesktopTestInput(window);
+                scripted = input.scriptedCursor();
                 glfwSetWindowSize(window.handle(), 1180, 920); glfwSwapInterval(1);
                 DesktopTestFrames.settle(window); advance(window, 1000);
             } catch (RuntimeException | Error failure) {
+                if (scripted != null) try { scripted.close(); } catch (Throwable cleanup) { failure.addSuppressed(cleanup); }
                 try { window.close(); } catch (Throwable cleanup) { failure.addSuppressed(cleanup); }
                 throw failure;
             }
         }
         @Override public void close() {
-            SceneNode root = page.root(); window.close();
+            SceneNode root = page.root();
+            try {
+                System.out.println("MOTION_SCRIPTED_CURSOR nativeCursorEvents=" + scripted.nativeMoves());
+                scripted.close();
+            } finally { window.close(); }
             require(root.runtime() == null, "窗口结束后仍保留页面挂载");
         }
     }

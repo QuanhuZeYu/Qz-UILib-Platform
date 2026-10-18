@@ -1,0 +1,198 @@
+import java.util.zip.ZipFile
+
+// 原场景的显式磁盘路径继续有效；输入仅来自已解析 Maven Jar 的本仓解包。
+def fixtureRoot = layout.buildDirectory.dir('verification-workspace')
+tasks.register('prepareVerificationResources') {
+    inputs.files(configurations.coreRuntime8, configurations.coreVerification)
+    outputs.dir(fixtureRoot)
+    doLast {
+        def root = fixtureRoot.get().asFile
+        root.mkdirs()
+        copy { from configurations.coreRuntime8.collect { zipTree(it) }; include 'assets/**'; into new File(root, 'src/core/resources') }
+        copy { from configurations.coreVerification.collect { zipTree(it) }; exclude '**/*.class', 'META-INF/**'; into new File(root, 'src/test/resources') }
+    }
+}
+ext.platformApplication = { String name, String entry, targetOrConfigure = 8, Closure configuration = {} ->
+    int target = targetOrConfigure instanceof Closure ? 8 : targetOrConfigure
+    Closure configure = targetOrConfigure instanceof Closure ? targetOrConfigure : configuration
+    tasks.register(name, JavaExec) {
+        group = 'verification'; dependsOn 'testClasses', 'prepareVerificationResources'
+        mainClass = entry.contains('.') ? entry : 'club.heiqi.uilib.ui.scene.integration.' + entry
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(target) }
+        if (target == 8) {
+            doFirst {
+                def configured = systemProperties['java.library.path']
+                if (configured != null) {
+                    def input = new File(configured.toString())
+                    if (!input.absolute) input = new File(workingDir, configured.toString())
+                    def temporary = java.nio.file.Files.createTempDirectory('qz-uilib-lwjgl2-').toFile()
+                    ext.lwjgl2NativeDirectory = temporary
+                    copy { from input; into temporary }
+                    systemProperty 'java.library.path', temporary.absolutePath
+                    logger.lifecycle('LWJGL2_TEST_NATIVE temporary=' + temporary + ' source=' + input)
+                }
+            }
+        }
+        classpath = sourceSets.test.runtimeClasspath
+        jvmArgs '-Dfile.encoding=UTF-8'; maxHeapSize = '1g'
+        workingDir(fixtureRoot)
+        // Windows Java8 launcher 对中文绝对 classpath 解析失败；相同 JVM 使用工作目录相对路径。
+        if (target == 8) doFirst {
+            def base = workingDir.toPath().toAbsolutePath().normalize()
+            def relative = { File file ->
+                def path = file.toPath().toAbsolutePath().normalize()
+                base.root == path.root ? base.relativize(path).toString() : path.toString()
+            }
+            def entries = classpath.files.collect { relative(it) }.join(File.pathSeparator)
+            classpath = files(); jvmArgs '-cp', entries
+            setArgs(args.collect { value -> def file = new File(value.toString()); file.absolute ? relative(file) : value })
+            def options = new LinkedHashMap(systemProperties)
+            options.each { key, value ->
+                if (value != null && new File(value.toString()).absolute) systemProperty key, relative(new File(value.toString()))
+            }
+        }
+        configure.delegate = delegate; configure.resolveStrategy = Closure.DELEGATE_FIRST; configure()
+    }
+}
+def output = { String path -> layout.buildDirectory.dir(path).get().asFile.absolutePath }
+def fonts = { String path = '' -> new File(fixtureRoot.get().asFile, 'src/core/resources/assets/qz_uilib/fonts/' + path).absolutePath }
+def checks = [richTextScenario:'RichTextScenario', mailboxScenario:'MailboxScenario', layoutFoundationScenario:'LayoutFoundationScenario',
+    incrementalMeasurementScenario:'IncrementalMeasurementScenario', layerInputScenario:'LayerInputScenario', fontPlanSamplingScenario:'FontPlanSamplingScenario',
+    bidiEditingScenario:'BidiEditingScenario', wordEditingScenario:'WordEditingScenario', galleryScenario:'GalleryScenario', largeListScopeScenario:'LargeListScopeScenario',
+    imageServiceScenario:'ImageServiceScenario', markdownReadingScenario:'MarkdownReadingScenario', markdownTableHtmlScenario:'MarkdownTableHtmlScenario',
+    inlineBoxScenario:'InlineBoxScenario', documentSceneScenario:'DocumentSceneScenario', mathFontScenario:'MathFontScenario', mathLayoutScenario:'MathLayoutScenario',
+    mathSceneScenario:'MathSceneScenario', mathArrayScenario:'MathArrayScenario', mathDecorationScenario:'MathDecorationScenario']
+checks.each { name, entry -> platformApplication(name, entry) }
+tasks.named('fontPlanSamplingScenario') { args fonts('unifont/unifont-16.0.04.otf') }
+tasks.named('imageServiceScenario') { systemProperty 'java.awt.headless', 'true' }
+platformApplication('nativeFontScenario','NativeFontScenario') { args fonts('noto') }
+platformApplication('nativeFontVisualScenario','NativeFontVisualScenario') { systemProperty 'java.awt.headless','true'; args fonts('noto'), output('font-machine/native') }
+platformApplication('glyphRasterStyleScenario','GlyphRasterStyleScenario') { args fonts(), output('font-machine/raster-style') }
+platformApplication('orderedBatchScenario','OrderedBatchScenario') { systemProperty 'java.awt.headless','true'; args output('font-machine/batch') }
+platformApplication('mathTextFontScenario','MathTextFontScenario') { args output('math-text-fonts') }
+// 原 check 未纳入的设备出图和性能入口保持显式任务，继续使用同一实现。
+[glBatchScenario:['GlBatchScenario','font-machine/gl'], attributedGlyphGlScenario:['AttributedGlyphGlScenario','font-machine/attributed-gl'],
+ clientFontServicesScenario:['ClientFontServicesScenario','font-machine/client'], documentGlScenario:['DocumentGlScenario','document-gl'],
+ markdownGlScenario:['MarkdownGlScenario','markdown-gl'], mathGlScenario:['MathGlScenario','math-embed/gpu'],
+ paintPrimitiveScenario:['PaintPrimitiveScenario','math-complete/paint-gpu'], mathCoverageScenario:['MathCoverageScenario','math-complete/coverage'],
+ imageGlScenario:['ImageGlScenario','image-system/gpu']].each { name, declaration -> platformApplication(name,declaration[0]) { args output(declaration[1]) } }
+platformApplication('fontDeferredStateScenario','FontDeferredStateScenario')
+platformApplication('presentationEpochScenario','PresentationEpochScenario')
+platformApplication('mailboxPerformanceScenario','MailboxPerformanceScenario') {
+    systemProperty 'uilib.version', project.version.toString()
+    systemProperty 'mailbox.paged', providers.gradleProperty('mailboxPaged').getOrElse('true')
+    systemProperty 'mailbox.loads', providers.gradleProperty('mailboxLoads').getOrElse('IDLE,SCROLL,UPDATE,RESIZE')
+    systemProperty 'performance.scale', providers.gradleProperty('performanceScale').getOrElse('200')
+    systemProperty 'performance.warmup', providers.gradleProperty('performanceWarmup').getOrElse('30')
+    systemProperty 'performance.frames', providers.gradleProperty('performanceFrames').getOrElse('120')
+    systemProperty 'performance.output', providers.gradleProperty('performanceOutput').getOrElse(output('reports/mailbox-core'))
+}
+platformApplication('performanceGalleryScenario','PerformanceGalleryScenario') {
+    systemProperty 'uilib.version', project.version.toString()
+    systemProperty 'performance.scale', providers.gradleProperty('performanceScale').getOrElse('50')
+    systemProperty 'performance.warmup', providers.gradleProperty('performanceWarmup').getOrElse('30')
+    systemProperty 'performance.frames', providers.gradleProperty('performanceFrames').getOrElse('120')
+    systemProperty 'performance.output', providers.gradleProperty('performanceOutput').getOrElse(output('reports/performance-core'))
+}
+[8, 21, 25].each { target ->
+    platformApplication('packagedFontJava' + target, 'PackagedFontScenario', target) {
+        def artifacts = files(configurations[target == 8 ? 'coreRuntime8' : 'coreRuntime21'], platformArtifacts['font-adapter:' + (target == 8 ? 8 : 21)].flatMap { it.archiveFile })
+        dependsOn artifacts; classpath = sourceSets.test.output + configurations.coreVerification
+        doFirst { args artifacts.files.collect { it.absolutePath } }
+    }
+}
+platformApplication('desktopArtifactScenario','CoreArtifactScenario',21) {
+    dependsOn desktopArtifacts; classpath = configurations.coreVerification
+    doFirst { args(['--java21','--desktop'] + files(configurations.coreRuntime21, platformArtifacts['font-adapter:21'].flatMap { it.archiveFile }, desktopJar.flatMap { it.archiveFile }).files.collect { it.absolutePath }) }
+}
+tasks.named('desktopVerify') { dependsOn 'desktopArtifactScenario' }
+def legacyArtifacts = files(configurations.coreRuntime8, platformArtifacts['font-adapter:8'].flatMap { it.archiveFile }, platformArtifacts['gl-renderer:8'].flatMap { it.archiveFile }, platformArtifacts['lwjgl2-adapter:8'].flatMap { it.archiveFile }, platformArtifacts['media-adapter:8'].flatMap { it.archiveFile })
+def legacyTestClasspath = files(platformVerification.flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + legacyArtifacts + configurations.lwjgl2Bindings
+platformApplication('lwjgl2HostScenario','Lwjgl2HostScenario') {
+    dependsOn platformVerification, legacyArtifacts, 'extractLwjgl2TestNatives'
+    classpath = legacyTestClasspath
+    if (providers.gradleProperty('fontLegacyJava').isPresent()) executable = providers.gradleProperty('fontLegacyJava').get()
+    args providers.gradleProperty('fontWorldAtlasMode').getOrElse('2d')
+    systemProperty 'java.library.path', output('lwjgl2-test/natives')
+}
+platformApplication('lwjgl2VideoVerify','Lwjgl2VideoVerification') {
+    dependsOn platformVerification, legacyArtifacts, 'extractLwjgl2TestNatives'
+    classpath = legacyTestClasspath; systemProperty 'java.library.path', output('lwjgl2-test/natives')
+}
+[8,21].each { target ->
+    def core = configurations[target == 8 ? 'coreRuntime8' : 'coreRuntime21']
+    def media = platformArtifacts['media-adapter:' + target].flatMap { it.archiveFile }
+    platformApplication('mediaArtifactJava' + target,'CoreArtifactScenario',target) {
+        dependsOn media; classpath = configurations.coreVerification
+        doFirst { args((target == 21 ? ['--java21','--media'] : ['--media']) + [media.get().asFile.absolutePath]) }
+    }
+    platformApplication(target == 8 ? 'mediaNetworkLegacyScenario' : 'mediaNetworkScenario','club.heiqi.uilib.testing.media.MediaNetworkScenario',target) {
+        dependsOn platformVerification, media; classpath = files(platformVerification.flatMap { it.archiveFile },media) + configurations.coreVerification + configurations.gallery + core
+    }
+    platformApplication(target == 8 ? 'mediaPlaybackLegacyScenario' : 'mediaPlaybackScenario','club.heiqi.uilib.testing.media.MediaPlaybackScenario',target) {
+        dependsOn platformVerification, media; classpath = files(platformVerification.flatMap { it.archiveFile },media) + configurations.coreVerification + configurations.gallery + core
+        args providers.gradleProperty('mediaBaseUrl').getOrElse('http://127.0.0.1:59104')
+    }
+    platformApplication('packagedMediaJava' + target,'club.heiqi.uilib.testing.media.PackagedMediaScenario',target) {
+        dependsOn platformVerification
+        if (target == 8) { dependsOn legacyArtifacts,'extractLwjgl2TestNatives'; classpath = legacyTestClasspath; systemProperty 'java.library.path', output('lwjgl2-test/natives') }
+        else { dependsOn desktopArtifacts; classpath = files(platformVerification.flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + desktopArtifacts; systemProperty 'uilib.desktop.visible','false' }
+        mustRunAfter 'desktopScrollAreaVerify'
+    }
+}
+platformApplication('bilibiliResolverScenario','club.heiqi.uilib.host.media.bilibili.BilibiliResolverScenario',21) {
+    dependsOn platformVerification, platformArtifacts['media-adapter:21']
+    classpath = files(platformVerification.flatMap { it.archiveFile }, platformArtifacts['media-adapter:21'].flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + configurations.coreRuntime21
+}
+platformApplication('bilibiliSourceProbe','club.heiqi.uilib.testing.media.BilibiliSourceProbe',21) {
+    dependsOn platformVerification, platformArtifacts['media-adapter:21']
+    classpath = files(platformVerification.flatMap { it.archiveFile }, platformArtifacts['media-adapter:21'].flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + configurations.coreRuntime21
+    args providers.gradleProperty('bilibiliVideo').getOrElse('BV1GJ411x7h7'), providers.gradleProperty('bilibiliLive').getOrElse('https://live.bilibili.com/6')
+}
+tasks.register('verifyPlatformArtifacts') {
+    group = 'verification'; dependsOn platformArtifacts.values(), desktopJar, platformVerification
+    doLast {
+        def artifacts = platformArtifacts.collect { key, task -> [key: key, file: task.get().archiveFile.get().asFile, target: key.endsWith(':8') ? 52 : 65] }
+        artifacts += [key:'desktop', file:desktopJar.get().archiveFile.get().asFile, target:65]
+        artifacts += [key:'platform-verification', file:platformVerification.get().archiveFile.get().asFile, target:52]
+        artifacts.each { artifact ->
+            new ZipFile(artifact.file).withCloseable { zip ->
+                zip.entries().each { entry ->
+                    def name = entry.name
+                    if (name.endsWith('.class')) {
+                        zip.getInputStream(entry).withCloseable { stream ->
+                            def data = new DataInputStream(stream); assert data.readInt() == (0xCAFEBABE as int)
+                            data.readUnsignedShort(); def major = data.readUnsignedShort()
+                            if (name.startsWith('club/heiqi/uilib/')) assert major == artifact.target : "${artifact.key}:${name} major=${major}"
+                            def bytes = zip.getInputStream(entry).withCloseable { it.bytes }
+                            def bytecode = new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1)
+                            assert !bytecode.contains('me/eigenraven/lwjgl3ify') : name
+                            if (artifact.key != 'platform-verification') {
+                                ['net/minecraft/', 'net/minecraftforge/', 'cpw/mods/'].each { assert !bytecode.contains(it) : name + ' -> ' + it }
+                            }
+                        }
+                        assert !name.startsWith('club/heiqi/uilib/ui/') || artifact.key == 'platform-verification' : '适配包重复核心定义: ' + name
+                        if (artifact.key != 'platform-verification') assert !name.startsWith('club/heiqi/uilib/testing/') && !name.startsWith('club/heiqi/uilib/internal/devtools/') : name
+                    }
+                    if (artifact.key != 'platform-verification') assert !name.startsWith('assets/qz_uilib/gallery/') && !name.startsWith('assets/qz_uilib_test/') && !name.startsWith('uilib/localization/') : name
+                }
+            }
+            logger.lifecycle('PLATFORM_ARTIFACT ' + artifact.key + ' major=' + artifact.target + ' ' + artifact.file)
+        }
+    }
+}
+tasks.register('verifyDevToolsNotPackaged') { group = 'verification'; dependsOn 'verifyPlatformArtifacts' }
+// 构建失败时同样结束该次测试的临时 native 输入，不保留为外部缓存。
+gradle.buildFinished {
+    tasks.withType(JavaExec).each { task ->
+        if (task.extensions.extraProperties.has('lwjgl2NativeDirectory')) {
+            def temporary = task.extensions.extraProperties.get('lwjgl2NativeDirectory')
+            try { delete temporary } catch (Exception cleanup) { logger.warn('无法清理测试 native 临时目录：' + temporary, cleanup) }
+        }
+    }
+}
+tasks.named('check') {
+    dependsOn checks.keySet(), 'nativeFontScenario','nativeFontVisualScenario','glyphRasterStyleScenario','orderedBatchScenario','mathTextFontScenario',
+            'packagedFontJava8','packagedFontJava21','packagedFontJava25','desktopArtifactScenario','mediaArtifactJava8','mediaArtifactJava21',
+            'mediaNetworkLegacyScenario','mediaNetworkScenario','packagedMediaJava8','packagedMediaJava21','bilibiliResolverScenario','verifyPlatformArtifacts'
+}

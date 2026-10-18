@@ -2,11 +2,7 @@ package club.heiqi.uilib.host.client.gl;
 
 import java.nio.ByteBuffer;
 
-/** LWJGL3宿主binding。
- * 直接调用LWJGL3：使用宿主官方逐类标记，防止LWJGL3ify把GL/GL*C误映射到LWJGL2 shim。
- * 标记止于此适配；其他旧GL11/Display调用仍须由宿主转换，不能给整个发行jar标记Aware。
- */
-@me.eigenraven.lwjgl3ify.api.Lwjgl3Aware
+/** LWJGL3 宿主 binding；具体加载器的逐类转换标记由消费方装配。 */
 public final class Lwjgl3GlApi implements GlApi {
     // 矩阵上传使用共同的direct-buffer签名。Angelica2.2.10把glUniformMatrix4fv映射到
     // GLSM.glUniformMatrix4，但只提供FloatBuffer重载，float[]重载会在实机链接失败。

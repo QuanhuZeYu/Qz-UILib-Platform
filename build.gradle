@@ -1,0 +1,120 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+buildscript {
+    repositories { mavenCentral(); gradlePluginPortal() }
+    dependencies { classpath 'com.gradleup.shadow:shadow-gradle-plugin:9.2.2' }
+}
+plugins { id 'java-library'; id 'maven-publish' }
+apply plugin: 'com.gradleup.shadow'
+ext.platformShadowJar = ShadowJar
+
+group = 'club.heiqi.uilib'
+version = providers.gradleProperty('uilibVersion').getOrElse('4.11.1')
+java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
+repositories {
+    if (providers.gradleProperty('uilibRepository').isPresent()) {
+        maven { url = uri(providers.gradleProperty('uilibRepository').get()); content { includeGroup 'club.heiqi.uilib' } }
+    }
+    maven { name = 'mojang'; url = uri('https://libraries.minecraft.net/'); content { includeGroup 'org.lwjgl.lwjgl'; includeModule 'com.ibm.icu', 'icu4j' } }
+    mavenCentral()
+}
+configurations {
+    coreDevelopment8; coreDevelopment21; coreRuntime8; coreRuntime21
+    gallery; coreVerification; coreContent
+}
+dependencies {
+    coreDevelopment8("club.heiqi.uilib:core:${version}:development-java8") { transitive = false }
+    coreDevelopment21("club.heiqi.uilib:core:${version}:development") { transitive = false }
+    coreRuntime8("club.heiqi.uilib:core:${version}:java8") { transitive = false }
+    coreRuntime21("club.heiqi.uilib:core:${version}") { transitive = false }
+    gallery("club.heiqi.uilib:gallery:${version}") { transitive = false }
+    coreVerification("club.heiqi.uilib:core-verification:${version}") { transitive = false }
+    coreContent 'com.ibm.icu:icu4j:76.1'
+    coreContent 'org.yaml:snakeyaml:2.4'
+    coreContent 'org.commonmark:commonmark:0.21.0'
+    coreContent 'org.commonmark:commonmark-ext-gfm-strikethrough:0.21.0'
+    coreContent 'org.commonmark:commonmark-ext-gfm-tables:0.21.0'
+    coreContent 'org.jsoup:jsoup:1.19.1'
+    coreContent 'org.nibor.autolink:autolink:0.10.0'
+}
+apply from: 'gradle/native-runtime.gradle'
+
+// 同一 Java 目标的消费者共享输出；两种目标始终编译同一份生产源。
+ext.platformModules = [fontAdapter:'font-adapter', glRenderer:'gl-renderer', lwjgl2:'lwjgl2-adapter', lwjgl3:'lwjgl3-adapter', mediaAdapter:'media-adapter']
+sourceSets.main { java.setSrcDirs([]); resources.setSrcDirs([]) }
+platformModules.each { module, artifactName ->
+    [8, 21].each { target ->
+        def sourceName = module + (target == 21 ? '21' : '')
+        sourceSets.create(sourceName) {
+            java.setSrcDirs(["src/${module}/java"])
+            resources.setSrcDirs(["src/${module}/resources"])
+            compileClasspath = configurations[target == 8 ? 'coreDevelopment8' : 'coreDevelopment21'] + configurations.coreContent
+            runtimeClasspath = output + compileClasspath
+        }
+    }
+}
+[8, 21].each { target ->
+    def suffix = target == 21 ? '21' : ''
+    sourceSets['fontAdapter' + suffix].compileClasspath += configurations.fontBindings
+    sourceSets['fontAdapter' + suffix].resources.srcDir(layout.buildDirectory.dir('generated/isolated-font'))
+    tasks.named(sourceSets['fontAdapter' + suffix].processResourcesTaskName) { dependsOn 'packageFontBindings' }
+    sourceSets['lwjgl2' + suffix].compileClasspath += sourceSets['glRenderer' + suffix].output + configurations.lwjgl2Bindings
+    sourceSets['lwjgl3' + suffix].compileClasspath += sourceSets['glRenderer' + suffix].output + configurations.fontBindings
+    sourceSets['mediaAdapter' + suffix].compileClasspath += configurations.mediaBindings
+    sourceSets['mediaAdapter' + suffix].resources.srcDir(layout.buildDirectory.dir('generated/isolated-media'))
+    tasks.named(sourceSets['mediaAdapter' + suffix].processResourcesTaskName) { dependsOn 'packageMediaBindings' }
+}
+sourceSets.create('desktop') {
+    compileClasspath = configurations.coreDevelopment21 + configurations.coreContent + configurations.fontBindings + sourceSets.fontAdapter21.output + sourceSets.glRenderer21.output + sourceSets.lwjgl321.output + sourceSets.mediaAdapter21.output
+}
+sourceSets.test {
+    compileClasspath = configurations.coreDevelopment8 + configurations.coreVerification + configurations.gallery + configurations.coreContent + configurations.fontBindings + sourceSets.fontAdapter.output + sourceSets.glRenderer.output + sourceSets.lwjgl3.output
+    runtimeClasspath = output + compileClasspath + configurations.fontNativeRuntime
+}
+sourceSets.create('mediaTest') {
+    compileClasspath = configurations.coreDevelopment8 + configurations.coreVerification + sourceSets.mediaAdapter.output + sourceSets.glRenderer.output
+}
+sourceSets.create('lwjgl2Test') {
+    compileClasspath = configurations.coreDevelopment8 + configurations.coreVerification + configurations.coreContent + configurations.lwjgl2Bindings + sourceSets.fontAdapter.output + sourceSets.glRenderer.output + sourceSets.lwjgl2.output + sourceSets.mediaAdapter.output + sourceSets.mediaTest.output
+}
+sourceSets.create('desktopTest') {
+    compileClasspath = configurations.coreDevelopment21 + configurations.coreVerification + configurations.gallery + configurations.coreContent + configurations.fontBindings + sourceSets.fontAdapter21.output + sourceSets.glRenderer21.output + sourceSets.lwjgl321.output + sourceSets.mediaAdapter21.output + sourceSets.desktop.output + sourceSets.mediaTest.output
+}
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'; options.compilerArgs += ['-proc:none']
+    options.release = name == 'compileDesktopJava' || name.endsWith('21Java') ? 21 : 8
+}
+tasks.named('jar') { enabled = false }
+tasks.named('shadowJar') { enabled = false }
+tasks.named('test', Test) { failOnNoDiscoveredTests = false; maxHeapSize = '1g' }
+
+// 适配包仅重写共同内容引用，不复制或再次嵌入 Core 持有的内容库。
+ext.platformArtifacts = [:]
+ext.contentPackages = ['com.ibm.icu', 'org.yaml.snakeyaml', 'org.commonmark', 'org.jsoup', 'org.nibor.autolink']
+platformModules.each { module, artifactName ->
+    [8, 21].each { target ->
+        def taskName = module == 'lwjgl2' ? (target == 8 ? 'lwjgl2AdapterLegacyJar' : 'lwjgl2AdapterJar') : module + (target == 8 ? 'LegacyJar' : 'Jar')
+        if (module == 'lwjgl3') taskName = target == 8 ? 'lwjgl3AdapterLegacyJar' : 'lwjgl3AdapterJar'
+        def artifact = tasks.register(taskName, ShadowJar) {
+            group = 'build'; archiveBaseName = artifactName; archiveClassifier = target == 8 ? 'java8' : ''
+            from sourceSets[module + (target == 21 ? '21' : '')].output
+            configurations = []; enableAutoRelocation = false
+            contentPackages.each { relocate it, 'club.heiqi.uilib.shadow.' + it }
+            from('LICENSE')
+            exclude 'META-INF/versions/**', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class'
+            duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        }
+        platformArtifacts[artifactName + ':' + target] = artifact
+        tasks.named('assemble') { dependsOn artifact }
+    }
+}
+// 测试消费者只携带本仓测试定义；Core 与共享广场始终经独立坐标供给。
+ext.platformVerification = tasks.register('platformVerificationJar', ShadowJar) {
+    group = 'verification'; archiveBaseName = 'platform-verification'; archiveClassifier = ''
+    from sourceSets.test.output, sourceSets.mediaTest.output, sourceSets.lwjgl2Test.output, sourceSets.desktopTest.output
+    configurations = []; enableAutoRelocation = false
+    contentPackages.each { relocate it, 'club.heiqi.uilib.shadow.' + it }
+}
+apply from: 'gradle/desktop.gradle'
+apply from: 'gradle/verification.gradle'
+apply from: 'gradle/publishing.gradle'

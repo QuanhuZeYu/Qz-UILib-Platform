@@ -31,7 +31,7 @@ import club.heiqi.uilib.ui.scene.text.font.nativefont.FontEngine;
 import club.heiqi.uilib.ui.settings.SettingsConfiguration;
 
 /** 嵌入式应用的资源与配置归属。版本宿主只注入资源事实和具体绑定；页面借用同一服务。
- * 对应 specs/host/2026-10-18-uilib-minecraft-hosts-spec.md，不依赖 Minecraft 或窗口库。
+ * 对应 ../Qz-UILib-Minecraft/specs/host/2026-10-18-uilib-minecraft-hosts-spec.md，不依赖 Minecraft 或窗口库。
  */
 public final class EmbeddedSceneServices implements AutoCloseable {
     private final ReactiveDomain domain = ReactiveDomain.direct();

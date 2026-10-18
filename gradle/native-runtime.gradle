@@ -1,0 +1,72 @@
+import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+
+configurations {
+    fontBindings; fontNativeRuntime { extendsFrom fontBindings }
+    isolatedFontRuntime; lwjgl2Bindings; lwjgl2NativeRuntime
+    mediaBindings; mediaNativeRuntime
+    isolatedMediaRuntime { extendsFrom mediaBindings, mediaNativeRuntime }
+}
+def os = System.getProperty('os.name').toLowerCase()
+def arch = System.getProperty('os.arch').toLowerCase()
+def nativeClassifier = os.contains('win') ? (arch == 'aarch64' ? 'natives-windows-arm64' : arch == 'x86' ? 'natives-windows-x86' : 'natives-windows') : os.contains('mac') ? (arch == 'aarch64' ? 'natives-macos-arm64' : 'natives-macos') : (arch == 'aarch64' ? 'natives-linux-arm64' : 'natives-linux')
+dependencies {
+    lwjgl2Bindings('org.lwjgl.lwjgl:lwjgl:2.9.4-nightly-20150209') { transitive = false }
+    lwjgl2NativeRuntime("org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209:${os.contains('win') ? 'natives-windows' : os.contains('mac') ? 'natives-osx' : 'natives-linux'}") { transitive = false }
+    ['lwjgl','lwjgl-freetype','lwjgl-harfbuzz'].each { module -> isolatedFontRuntime("org.lwjgl:${module}:3.4.2") { transitive = false } }
+    ['natives-windows','natives-windows-x86','natives-windows-arm64','natives-linux','natives-linux-arm64','natives-macos','natives-macos-arm64'].each { classifier ->
+        ['lwjgl','lwjgl-freetype'].each { module -> isolatedFontRuntime("org.lwjgl:${module}:3.4.2:${classifier}") { transitive = false } }
+    }
+    ['lwjgl','lwjgl-freetype','lwjgl-harfbuzz','lwjgl-opengl','lwjgl-glfw'].each { module -> fontBindings("org.lwjgl:${module}:3.4.2") { transitive = false } }
+    ['lwjgl','lwjgl-freetype','lwjgl-opengl','lwjgl-glfw'].each { module -> fontNativeRuntime("org.lwjgl:${module}:3.4.2:${nativeClassifier}") { transitive = false } }
+    mediaBindings('org.bytedeco:javacpp:1.5.10') { transitive = false }
+    mediaBindings('org.bytedeco:ffmpeg:6.1.1-1.5.10') { transitive = false }
+    mediaBindings('io.lindstrom:m3u8-parser:0.29') { transitive = false }
+    ['lwjgl','lwjgl-openal'].each { module ->
+        mediaBindings("org.lwjgl:${module}:3.4.2") { transitive = false }
+        mediaNativeRuntime("org.lwjgl:${module}:3.4.2:natives-windows") { transitive = false }
+    }
+    mediaNativeRuntime('org.bytedeco:javacpp:1.5.10:windows-x86_64') { transitive = false }
+    mediaNativeRuntime('org.bytedeco:ffmpeg:6.1.1-1.5.10:windows-x86_64') { transitive = false }
+}
+// 私有运行时固定官方根 JNI；移除 Java25 FFM 多版本覆盖的原装配语义保持。
+def packageBindings = { String taskName, String runtimeName, String kind, boolean integrityIndex ->
+    tasks.register(taskName) {
+        def bindings = configurations[runtimeName]
+        def target = layout.buildDirectory.dir("generated/isolated-${kind}/assets/qz_uilib/runtime/${kind}")
+        inputs.files(bindings); outputs.dir(target)
+        doLast {
+            def directory = target.get().asFile
+            project.delete(directory); directory.mkdirs()
+            def index = []
+            bindings.files.sort { it.name }.each { artifact ->
+                def output = new File(directory, artifact.name)
+                if (kind == 'font' || artifact.name.startsWith('lwjgl-')) {
+                    new ZipFile(artifact).withCloseable { source ->
+                        new ZipOutputStream(new FileOutputStream(output)).withCloseable { zip ->
+                            source.entries().each { entry ->
+                                if (!entry.name.startsWith('META-INF/versions/')) {
+                                    zip.putNextEntry(new ZipEntry(entry.name).tap { time = 0L })
+                                    if (!entry.directory) source.getInputStream(entry).withCloseable { zip << it }
+                                    zip.closeEntry()
+                                }
+                            }
+                        }
+                    }
+                } else java.nio.file.Files.copy(artifact.toPath(), output.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                // 媒体加载器用此已有清单校验私有绑定；字体沿原文件名索引。
+                index += integrityIndex ? artifact.name + ' ' + MessageDigest.getInstance('SHA-256').digest(output.bytes).encodeHex().toString() : artifact.name
+            }
+            new File(directory, 'index.txt').setText(index.join('\n') + '\n', 'UTF-8')
+        }
+    }
+}
+packageBindings('packageFontBindings', 'isolatedFontRuntime', 'font', false)
+packageBindings('packageMediaBindings', 'isolatedMediaRuntime', 'media', true)
+tasks.register('extractLwjgl2TestNatives', Sync) {
+    group = 'verification'; into(layout.buildDirectory.dir('lwjgl2-test/natives'))
+    from { configurations.lwjgl2NativeRuntime.collect { zipTree(it) } }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

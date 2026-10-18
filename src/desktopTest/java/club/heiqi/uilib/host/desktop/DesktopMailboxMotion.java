@@ -86,6 +86,13 @@ final class DesktopMailboxMotion {
         window.frame();
     }
     private static void navigationHover(DesktopWindow window,DesktopTestInput input,Path output) throws Exception {
+        try (DesktopTestInput.ScriptedCursor scripted=input.scriptedCursor()) {
+            navigationHover(window,input,output,scripted);
+        }
+    }
+
+    private static void navigationHover(DesktopWindow window,DesktopTestInput input,Path output,
+            DesktopTestInput.ScriptedCursor scripted) throws Exception {
         input.click("收件箱");input.point(1100,40);runFor(window,200000000L);
         SceneGeometryView.Entry inbox=action(window,"收件箱");
         int background=presentedPixel(window,0,inbox.box.y);
@@ -109,7 +116,7 @@ final class DesktopMailboxMotion {
         for(int i=0;i<256;i++)images.add(org.lwjgl.system.MemoryUtil.memAlloc(captureWidth*captureHeight*4));
         input.cursor.invoke(window.handle(),36,rowY);window.frame();
         long start=System.nanoTime();int frames=0;boolean intermediate=false;
-        int workspaceX=-1;
+        int workspaceX=-1,endWidth=-1;
         StringBuilder facts=new StringBuilder("{\"readBuffer\":\"GL_FRONT\",\"region\":[0,64,280,272],\"frames\":[");
         try {
         do {
@@ -117,12 +124,18 @@ final class DesktopMailboxMotion {
             long frameStart=System.nanoTime();window.frame();long presented=System.nanoTime();long elapsed=presented-start;
             SceneGeometryView geometry=DesktopTestInput.geometry(window);
             SceneGeometryView.Entry entry=action(window,"星标邮件");
+            endWidth=entry.box.width;
             SceneGeometryView.Entry currentNav=geometry.get(nav);
             SceneNode body=nav.parent();SceneNode workspace=body.children().get(1);
             int x=geometry.get(workspace).box.x;
             if(workspaceX<0)workspaceX=x;
             if(x!=workspaceX)throw new AssertionError("悬停展开推动了工作区");
             if(currentNav.box.width>72&&currentNav.box.width<256)intermediate=true;
+            boolean[] within={false};
+            window.domain.execute(() -> {
+                for(SceneNode target=window.page.runtime().pointerRouter().hoverTarget().get();target!=null;target=target.parent())
+                    if(target==nav) {within[0]=true;break;}
+            });
             int previous=glGetInteger(GL_READ_BUFFER);
             try {
                 glReadBuffer(GL_FRONT);
@@ -133,9 +146,12 @@ final class DesktopMailboxMotion {
                 .append(",\"frameStartNanos\":").append(frameStart-start).append(",\"presentedNanos\":").append(elapsed)
                 .append(",\"sampledNanos\":").append(System.nanoTime()-start).append(",\"elapsedNanos\":").append(elapsed)
                 .append(",\"navigationWidth\":").append(currentNav.box.width)
-                .append(",\"entryWidth\":").append(entry.box.width).append(",\"workspaceX\":").append(x).append('}');
+                .append(",\"entryWidth\":").append(entry.box.width).append(",\"workspaceX\":").append(x)
+                .append(",\"hoverWithinNavigation\":").append(within[0]).append('}');
             frames++;
         }while(System.nanoTime()-start<650000000L);
+        facts.append("],\"scriptedCursor\":true,\"nativeCursorEvents\":").append(scripted.nativeMoves()).append('}');
+        Files.write(output.resolve("mailbox-hover-motion.json"),facts.toString().getBytes("UTF-8"));
         Path frameOutput=output.resolve("mailbox-hover-frames");Files.createDirectories(frameOutput);
         for(int i=0;i<frames;i++) {
             ByteBuffer bytes=images.get(i);BufferedImage image=new BufferedImage(captureWidth,captureHeight,BufferedImage.TYPE_INT_ARGB);
@@ -147,8 +163,8 @@ final class DesktopMailboxMotion {
             ImageIO.write(image,"png",frameOutput.resolve(String.format(java.util.Locale.ROOT,"frame-%04d.png",i)).toFile());
         }
         } finally {for(ByteBuffer image:images)org.lwjgl.system.MemoryUtil.memFree(image);}
-        if(!intermediate||action(window,"星标邮件").box.width!=240)
-            throw new AssertionError("持续悬停未沿真实中间态展开");
+        if(!intermediate||endWidth!=240)
+            throw new AssertionError("持续悬停未沿真实中间态展开：intermediate="+intermediate+",entryWidth="+endWidth);
         DesktopGalleryEvidence.screenshot(window,output.resolve("mailbox-hover-open.png"),new club.heiqi.uilib.ui.scene.control.SceneAppearance.Palette(false).canvas);
         SceneGeometryView beforeScroll=DesktopTestInput.geometry(window);
         java.util.Map<SceneNode,Integer> scrolls=new java.util.IdentityHashMap<>();
@@ -167,7 +183,6 @@ final class DesktopMailboxMotion {
         });
         input.point(1100,40);runFor(window,220000000L);
         if(action(window,"星标邮件").box.width!=32)throw new AssertionError("离开没有收回临时展开");
-        facts.append("]}");Files.write(output.resolve("mailbox-hover-motion.json"),facts.toString().getBytes("UTF-8"));
         // 等待中切出，再进入须重新等待；展开中切出不能保留临时覆盖状态。
         focusAction(window,input,"场景概览");
         input.cursor.invoke(window.handle(),36,rowY);window.frame();runFor(window,120000000L);
@@ -179,7 +194,7 @@ final class DesktopMailboxMotion {
         activateKey(window,input);input.click("打开收件箱");input.point(1100,40);runFor(window,420000000L);
         if(action(window,"星标邮件").box.width!=32)throw new AssertionError("重挂保留了旧临时展开呈现");
         input.click("展开导航");runFor(window,200000000L);input.click("收件箱");input.point(1100,40);runFor(window,200000000L);
-        System.out.println("MAILBOX_HOVER delay=true cancellation=true overlayWithoutReflow=true currentHit=true scrollBlocked=true reverse=true remount=true actualGpuFrames=true frames="+frames);
+        System.out.println("MAILBOX_HOVER delay=true cancellation=true overlayWithoutReflow=true currentHit=true scrollBlocked=true reverse=true remount=true actualGpuFrames=true scriptedCursor=true nativeCursorEvents="+scripted.nativeMoves()+" frames="+frames);
     }
 
     private static int presentedPixel(DesktopWindow window,int x,int y) {

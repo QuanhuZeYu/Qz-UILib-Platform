@@ -1,19 +1,18 @@
-# Qz-UILib 协作入口
+# Qz-UILib-Platform 协作入口
 
-开发流程仅使用当前会话提供的 Superpowers 技能。本文件维护项目约束，不复制技能流程或另立编排、审计标准。
+## 规格与职责
 
-## 规格权威与职责归属
+开始工作先读 [Core 核心职责与交互规格](<../Qz-UILib-Core/specs/2026-10-07-uilib-core-contract-design.md>)，再读本仓[桌面宿主规格](<specs/host/2026-10-11-uilib-desktop-spec.md>)。Core 维护共同合同，本仓维护 CPU 字体 native、共享 GL、LWJGL binding、媒体实现和桌面宿主。正式规格是行为权威，源码与测试说明实现和证据。
 
-开始工作先读 [UILib 核心职责与交互规格](<specs/2026-10-07-uilib-core-contract-design.md>)。再按 [规格入口](<specs/README.md>) 阅读对应模块规格。核心定义跨模块合同，模块定义所属能力与验收；两者共同构成项目规格体系，同一要求只在其归属规格维护。源码、注释与测试描述实现或证据，不能另立要求，也不能以旧约定覆盖 spec。
-
-遇到实现与 spec 不符，记录偏差并按 spec 设计；spec 未覆盖的行为不得从旧母本、历史编号或结构快照推导为强制要求。现有能力不因缺少规格而自动删除；必要的目标或核心边界缺口先向用户确认，并把认可结果更新到所属核心或模块规格。
+跨仓只消费明确版本和 Java 目标的 Maven 坐标；禁止读取邻仓 src、classes 或构建目录。复用 Core 的 scene、Signal、PaintCommand、控件和字体合同。公共包名、资源与许可保持。具体游戏兼容由 Minecraft 仓装配，不反向依赖加载器。
 
 ## 工作方式
 
 - 中文沟通、文档、注释与提交；技术标识符保留原文。
-- 先查实时 Git 与相关实现，保护用户和协作者改动；只提交本任务文件。
-- 优先复用 UILib 自有能力，按 spec 的职责组织实现；局部注释解释实现原因并指向 spec，不复制另一套红线。
-- 测试按 spec 的真实场景评价，不以测试现状反向定义需求。生产代码改动运行完整 build；仅文档或注释变更检查差异与引用，明确未验证的运行行为。
-- 公共接口或兼容承诺变化须有明确设计与授权；当前任务授权持续有效，不重复确认。push、tag、release、实机 runClient/runServer 由用户明确授权。
+- 先查 Git 与受影响实现，保护协作者改动，只提交本仓任务文件。
+- 开发模式 runtime-driven-development：由真实 Gradle 与原场景提供反馈，生产与测试组织变更运行完整 build。
+- 同一 Java 目标共享同一生产编译输出；Java8 和 Java21 编译同源实现。
+- 真实桌面、字体、媒体和生命周期验收保留；测试只消费独立 Core 验证与广场坐标，不进入正式发行。
+- push、tag、release 与游戏 runClient/runServer 需要另行授权。
 
-只维护 `specs/` 中的正式规格，不创建 docs、接入指南或与实现并行维护的说明文档。实现意图、不变量与失败语义写在相关源码旁；用法通过接口与可运行示例表达；临时计划、任务笔记和验证记录统一放在忽略的 `.superpowers/`，不定义项目行为。构建与验证命令以 [Gradle 任务声明](<gradle/>) 为准。
+构建入口为 [Gradle 脚本](<build.gradle>)：传入 -PuilibVersion 与 -PuilibRepository 后执行 build；publishWorkspace 写入该本地 Maven 仓。任务细节见 [验证声明](<gradle/verification.gradle>)与[桌面声明](<gradle/desktop.gradle>)。临时记录与日志放在忽略的 .superpowers/platform-build/，正式行为只在 specs/ 维护。
