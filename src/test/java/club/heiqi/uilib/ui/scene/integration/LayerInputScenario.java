@@ -1,6 +1,7 @@
 package club.heiqi.uilib.ui.scene.integration;
 
 import club.heiqi.uilib.host.font.freetype.LwjglFontEngine;
+import club.heiqi.uilib.host.embedded.EmbeddedSceneInputs;
 import club.heiqi.uilib.testing.TestApplication;
 import club.heiqi.uilib.ui.reactive.Owner;
 import club.heiqi.uilib.ui.reactive.ReactiveDomain;
@@ -36,6 +37,10 @@ import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
 import club.heiqi.uilib.ui.scene.paint.PaintPlanBuilder;
 import club.heiqi.uilib.ui.scene.runtime.NodeBinding;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticId;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticRequest;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticSnapshot;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemantics;
 import club.heiqi.uilib.ui.scene.text.TextStyle;
 import club.heiqi.uilib.ui.scene.text.TextLayout;
 import club.heiqi.uilib.ui.scene.text.font.FontTextService;
@@ -46,6 +51,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /** 正式 PageSession、真实 FT/HB、标准编辑/按钮及同批 PaintCommand 的所属层验收。 */
 public final class LayerInputScenario extends TestApplication {
@@ -55,6 +61,7 @@ public final class LayerInputScenario extends TestApplication {
     protected void runTests() throws Exception {
         scenario("所属层首次焦点颜色在本帧结算", this::focusColorAtFirstLayout);
         scenario("真实所属Layer按钮和编辑完整业务链路", this::inputLoop);
+        scenario("宿主语义纯值发布和嵌入异步动作共用原session", this::semanticHostInput);
         scenario("PASSIVE祖先传播指针透明且Tab保逻辑顺序", this::passiveAndOrder);
         scenario("modal盒外所属点击内层返回及结束", this::modalInput);
         scenario("来源失效取消范围手势组字而不提交草稿", this::sourceEnds);
@@ -75,6 +82,9 @@ public final class LayerInputScenario extends TestApplication {
     private final class Host implements SceneHost {
         int width = 420, height = 320;
         PaintPlan paint;
+        private volatile SceneSemanticSnapshot semantics = SceneSemanticSnapshot.EMPTY;
+        public SceneSemanticSnapshot semantics() { return semantics; }
+        @Override public void semanticsChanged(SceneSemanticSnapshot snapshot) { semantics = snapshot; }
         public int width() { return width; }
         public int height() { return height; }
         public long metricsRevision() { return fonts.generation(); }
@@ -180,6 +190,70 @@ public final class LayerInputScenario extends TestApplication {
                 System.out.println("LAYER INPUT business=" + value[0].get());
             });
         }
+    }
+    private void semanticHostInput() {
+        Host host = new Host(); ReactiveDomain domain = ReactiveDomain.direct();
+        Signal<String>[] saved = new Signal[1]; Signal<Boolean>[] visible = new Signal[1];
+        SceneEditState[] draft = new SceneEditState[1];
+        SceneSemanticId fieldId;
+        CompletableFuture<SceneSemanticRequest.Result> pending;
+        SceneSemanticSnapshot retained;
+        ScenePageSession page = ScenePageSession.open(domain, host, fonts, ctx -> {
+            saved[0] = domain.signal("尚未应用"); visible[0] = domain.signal(true);
+            draft[0] = new SceneEditState(domain, "原始草稿");
+            SceneNode field = SceneTextField.create(ctx, draft[0], ctx.theme(), () -> false, request -> {});
+            field.bind(NodeBinding.value(visible[0], SceneNode::visible));
+            SceneNode apply = SceneButton.create(ctx, () -> "应用语义草稿", ctx.theme(),
+                    () -> saved[0].set(draft[0].text().get()));
+            ctx.mount(new SceneNode().size(Size.fill(1), Size.fill(1)).gap(8).add(field).add(apply));
+        });
+        EmbeddedSceneInputs inputs = new EmbeddedSceneInputs(page, new SceneEditEvent.Clipboard() {
+            public String read() { return ""; }
+            public void write(String text) { }
+        }, () -> {});
+        try {
+            page.frame(); retained = host.semantics();
+            require(!retained.entries.isEmpty(), "真实SceneHost未收到语义发布");
+            require(CompletableFuture.supplyAsync(host::semantics).join() == retained, "跨线程读取没有取得原不可变快照");
+            fieldId = retained.entries.stream().filter(e -> "原始草稿".equals(e.values.value)
+                    && e.actions.contains(SceneSemantics.Action.SET_TEXT)).findFirst()
+                    .orElseThrow(() -> new AssertionError("宿主快照缺少当前字段值和动作")).id;
+            SceneSemanticId buttonId = retained.entries.stream().filter(e -> "应用语义草稿".equals(e.values.name)
+                    && e.actions.contains(SceneSemantics.Action.ACTIVATE)).findFirst()
+                    .orElseThrow(() -> new AssertionError("宿主快照缺少正式按钮名称和动作")).id;
+            List<SceneSemanticRequest.Result> completions = new ArrayList<>();
+            CompletableFuture<SceneSemanticRequest.Result> focus = CompletableFuture.supplyAsync(() ->
+                    inputs.semantic(SceneSemanticRequest.of(fieldId, SceneSemantics.Action.FOCUS))).join();
+            CompletableFuture<SceneSemanticRequest.Result> text = inputs.semantic(SceneSemanticRequest.text(fieldId, "语义定向替换"));
+            CompletableFuture<SceneSemanticRequest.Result> apply = inputs.semantic(
+                    SceneSemanticRequest.of(buttonId, SceneSemantics.Action.ACTIVATE), (result, failure) -> {
+                        require(failure == null, "合法宿主语义动作意外失败");
+                        completions.add(result);
+                        domain.execute(() -> require("语义定向替换".equals(saved[0].get()), "完成回调早于同批前序编辑和真实按钮动作"));
+                    });
+            require(!focus.isDone() && !text.isDone() && !apply.isDone(), "语义入队被当作已执行");
+            page.frame();
+            require(focus.isDone() && text.isDone() && apply.isDone(), "成功结算后语义结果仍悬挂");
+            require(focus.join() == SceneSemanticRequest.Result.APPLIED && text.join() == SceneSemanticRequest.Result.APPLIED
+                    && apply.join() == SceneSemanticRequest.Result.APPLIED
+                    && completions.equals(Collections.singletonList(SceneSemanticRequest.Result.APPLIED)),
+                    "宿主语义动作未在原事件批次异步完成");
+            require(fieldId.equals(host.semantics().focused) && "语义定向替换".equals(host.semantics().get(fieldId).values.value),
+                    "语义动作后的实际焦点或独立草稿没有发布");
+            require("原始草稿".equals(retained.get(fieldId).values.value), "保留旧快照会随新草稿变化");
+            domain.execute(() -> visible[0].set(false)); page.frame();
+            CompletableFuture<SceneSemanticRequest.Result> hidden = inputs.semantic(SceneSemanticRequest.text(fieldId, "不可写入"));
+            page.frame(); require(hidden.isDone() && hidden.join() == SceneSemanticRequest.Result.REJECTED, "已退出阅读范围的字段仍接受语义修改或结果未结算");
+            domain.execute(() -> require("语义定向替换".equals(draft[0].text().get()), "拒绝动作改变了原草稿"));
+            pending = inputs.semantic(SceneSemanticRequest.of(buttonId, SceneSemantics.Action.ACTIVATE));
+            require(!pending.isDone(), "关闭前待执行语义请求提前完成");
+        } finally { page.close(); }
+        require(pending.isDone() && pending.join() == SceneSemanticRequest.Result.CLOSED && host.semantics().entries.isEmpty(),
+                "关闭后仍有悬挂请求或宿主保留已退出语义");
+        CompletableFuture<SceneSemanticRequest.Result> closed = inputs.semantic(SceneSemanticRequest.text(fieldId, "关闭后"), (result, failure) ->
+                require(result == SceneSemanticRequest.Result.CLOSED && failure == null, "关闭后完成回调未报告CLOSED"));
+        require(closed.isDone() && closed.join() == SceneSemanticRequest.Result.CLOSED, "旧ID在已结束页面仍被执行或结果悬挂");
+        require(!retained.entries.isEmpty(), "关闭改写了宿主已保留的旧纯值");
     }
     private int[] center(ScenePageSession page, ReactiveDomain domain, SceneNode node) {
         int[] xy = new int[2]; domain.execute(() -> { LayoutBox b = geometry(page).get(node).box; xy[0] = b.x + b.width / 2; xy[1] = b.y + b.height / 2; }); return xy;

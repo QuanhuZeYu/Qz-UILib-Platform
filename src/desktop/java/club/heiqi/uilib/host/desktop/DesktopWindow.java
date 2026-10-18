@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.EnumSet;
 import java.util.Set;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import org.lwjgl.glfw.Callbacks;
 import org.lwjgl.glfw.GLFWErrorCallback;
@@ -47,6 +49,8 @@ import club.heiqi.uilib.ui.scene.input.SceneKey;
 import club.heiqi.uilib.ui.scene.input.SceneKeyEvent;
 import club.heiqi.uilib.ui.scene.input.ScenePointerEvent;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticRequest;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticSnapshot;
 import club.heiqi.uilib.ui.scene.text.font.FontCandidateConfiguration;
 import club.heiqi.uilib.ui.scene.text.font.FontFamilyResolver;
 import club.heiqi.uilib.ui.scene.text.font.FontSource;
@@ -54,7 +58,8 @@ import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 
 /** 单窗口GLFW宿主；核心空间使用framebuffer像素，原生事件只在此转换一次。
  * GLFW只提供Unicode提交，不提供平台IME预编辑；不宣称支持预编辑组合界面。
- * 所有操作须在创建线程执行；关闭仍在有效GL上下文内结束GPU资源。
+ * 窗口、输入与GL操作须在创建线程执行；语义快照可跨线程读取，语义请求经原session异步结算。
+ * 关闭仍在有效GL上下文内结束GPU资源。
  */
 public final class DesktopWindow implements SceneHost, AutoCloseable {
     final DesktopApplicationConfiguration applicationConfiguration;
@@ -79,7 +84,8 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     private final club.heiqi.uilib.ui.media.MediaService mediaService;
     private club.heiqi.uilib.ui.scene.video.MediaViewPump mediaViews;
     private List<club.heiqi.uilib.ui.media.MediaPresentation> mediaPresentations = Collections.emptyList();
-    ScenePageSession page;
+    volatile ScenePageSession page;
+    private volatile SceneSemanticSnapshot semanticSnapshot = SceneSemanticSnapshot.EMPTY;
     PaintPlan lastPlan;
     int resizeCallbacks;
     private final SceneKeyInputAdapter keys = new SceneKeyInputAdapter(this::dispatchKey);
@@ -224,6 +230,17 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         installCallbacks();
         keyAvailability(true);
         if (visible) glfwShowWindow(window);
+    }
+    /** 最新已发布纯值；读取不进入状态域，不触发绘制或改变焦点。 */
+    public SceneSemanticSnapshot semantics() { return semanticSnapshot; }
+    @Override public void semanticsChanged(SceneSemanticSnapshot snapshot) { semanticSnapshot = snapshot; }
+    /** 任意宿主线程可递交；完成表示原handler和Effect已结算，入队本身不表示业务接受。 */
+    public CompletableFuture<SceneSemanticRequest.Result> semantic(SceneSemanticRequest request) {
+        return page.semantic(request);
+    }
+    public CompletableFuture<SceneSemanticRequest.Result> semantic(SceneSemanticRequest request,
+            BiConsumer<SceneSemanticRequest.Result, Throwable> completion) {
+        return page.semantic(request, completion);
     }
     private Signal<Long> reloadRevision;
     private void resourcesReloaded() {
@@ -534,6 +551,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
             try { resources.pop().close(); }
             catch (Throwable next) { if (failure == null) failure = next; else if (failure != next) failure.addSuppressed(next); }
         }
+        semanticSnapshot = SceneSemanticSnapshot.EMPTY;
         if (failure instanceof Error) throw (Error)failure;
         if (failure instanceof RuntimeException) throw (RuntimeException)failure;
         if (failure != null) throw new IllegalStateException("桌面窗口释放失败", failure);

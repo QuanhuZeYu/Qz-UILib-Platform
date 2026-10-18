@@ -12,6 +12,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.Collections;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import javax.imageio.ImageIO;
 import club.heiqi.uilib.host.client.font.FramebufferSceneRenderer;
 import club.heiqi.uilib.ui.config.ConfigSchema;
@@ -25,6 +26,10 @@ import club.heiqi.uilib.ui.scene.control.ThemeConfiguration;
 import club.heiqi.uilib.ui.scene.control.ThemeMode;
 import club.heiqi.uilib.ui.scene.layout.Size;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticId;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticRequest;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticSnapshot;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemantics;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
 import club.heiqi.uilib.ui.scene.paint.PaintPlanBuilder;
@@ -212,11 +217,15 @@ public final class DesktopVerification {
             frames(w, 2);
             w.domain.execute(() -> require((edited + "!?").equals(view.editing.text().get()), "恢复后新手势无法编辑"));
             pass("focus gain confirms physical release -> new gesture can edit again");
+            SceneSemanticRequest closedSemanticRequest = verifySemantics(w, view);
             require(rasterizer.workerFailure() == null && rasterizer.failures().isEmpty(), "字体worker存在未报告失败");
             input.close.invoke(w.handle());
             require(w.shouldClose(), "native close callback未结束窗口循环");
             w.close();
             require(session.ended() && w.handle() == 0 && rasterizer.stats().terminated, "页面/窗口/font native worker未完整关闭");
+            CompletableFuture<SceneSemanticRequest.Result> closedSemantic = w.semantic(closedSemanticRequest);
+            require(w.semantics().entries.isEmpty() && closedSemantic.isDone() && closedSemantic.join() == SceneSemanticRequest.Result.CLOSED,
+                    "已关闭窗口仍暴露旧语义或接受动作");
             pass("installed close callback -> page ended, subscriptions/GPU released, native worker terminated, GLFW destroyed");
             window = null;
             customPageFirstClick(output.resolve("custom-page.yaml"));
@@ -237,6 +246,32 @@ public final class DesktopVerification {
                 }
             }
         }
+    }
+    private static SceneSemanticRequest verifySemantics(DesktopWindow w, DesktopVerificationPage view) {
+        SceneSemanticSnapshot before = CompletableFuture.supplyAsync(w::semantics).join();
+        require(!before.entries.isEmpty(), "桌面宿主未发布可跨线程读取的语义快照");
+        SceneSemanticSnapshot.Entry field = before.entries.stream().filter(e -> e.actions.contains(SceneSemantics.Action.SET_TEXT))
+                .findFirst().orElseThrow(() -> new AssertionError("桌面快照缺少原文本字段"));
+        SceneSemanticId button = before.entries.stream().filter(e -> "Count: 1".equals(e.values.name)
+                && e.actions.contains(SceneSemantics.Action.ACTIVATE)).findFirst()
+                .orElseThrow(() -> new AssertionError("桌面快照缺少原计数按钮")).id;
+        CompletableFuture<SceneSemanticRequest.Result> focus = CompletableFuture.supplyAsync(() ->
+                w.semantic(SceneSemanticRequest.of(field.id, SceneSemantics.Action.FOCUS))).join();
+        CompletableFuture<SceneSemanticRequest.Result> text = w.semantic(SceneSemanticRequest.text(field.id, "语义桌面草稿"));
+        CompletableFuture<SceneSemanticRequest.Result> activate = w.semantic(
+                SceneSemanticRequest.of(button, SceneSemantics.Action.ACTIVATE), (result, failure) -> {
+                    require(result == SceneSemanticRequest.Result.APPLIED && failure == null, "桌面语义回调未报告真实执行结果");
+                    w.domain.execute(() -> require(view.counter.get() == 2, "桌面语义完成早于原按钮业务动作"));
+                });
+        require(!focus.isDone() && !text.isDone() && !activate.isDone(), "桌面语义入队即被误报完成");
+        frames(w, 1);
+        require(focus.isDone() && text.isDone() && activate.isDone(), "桌面语义结果在帧结算后仍悬挂");
+        require(focus.join() == SceneSemanticRequest.Result.APPLIED && text.join() == SceneSemanticRequest.Result.APPLIED
+                && activate.join() == SceneSemanticRequest.Result.APPLIED, "桌面原会话未完成语义定向动作");
+        require(field.id.equals(w.semantics().focused) && "语义桌面草稿".equals(w.semantics().get(field.id).values.value)
+                && !"语义桌面草稿".equals(before.get(field.id).values.value), "新快照未同步原焦点/草稿或旧快照被改写");
+        pass("semantic snapshot cross-thread read -> original session FOCUS/SET_TEXT/ACTIVATE futures settled, prior snapshot immutable");
+        return SceneSemanticRequest.of(field.id, SceneSemantics.Action.FOCUS);
     }
     private static void customPageFirstClick(Path config) throws Exception {
         @SuppressWarnings("unchecked") final Signal<Integer>[] clicks = new Signal[1];

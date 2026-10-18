@@ -18,14 +18,24 @@
 
 组合页面可通过宿主服务登记关闭与快捷重载请求委托，Ctrl+R 先交中性键路径，只有当前批成功、未被编辑或应用命令消费且原范围仍为当前范围、无模态/组字隔离时才请求原重载动作。宿主在当前输入批次结算后转交；配置页统一决定确认及字段错误。返回目录和确认退出窗口使用各自明确完成动作，不能由原生入口绕过确认。结束窗口同时清理这些委托。
 
-## 3. 配置与资源
+## 3. 语义快照与异步动作
+
+语义投影与请求遵循 Core [无障碍语义与宿主读取规格](<../../../Qz-UILib-Core/specs/scene/2026-10-18-uilib-semantics-spec.md>)。名称、说明、当前值和只读/禁用状态各自来自正式控件与业务来源，沿 React Aria [TextField 的标签、受控值与说明示例](<https://react-aria.adobe.com/TextField.md>)；FOCUS 使用原范围与唯一路由，沿 [FocusScope 的显式焦点和返回用法](<https://react-aria.adobe.com/FocusScope.md>)，不建立另一份控件或焦点树。
+
+DesktopWindow.semantics() 与 EmbeddedSceneHost.semantics() 返回最新 SceneSemanticSnapshot。原 SceneHost.semanticsChanged 回调收到实际变化后，仅以 volatile 替换引用；初始值为 EMPTY。快照只有不可变值、挂载语义 ID、关系和同代几何，可跨线程读取并保留，读取不访问状态域或触发绘制。其动作资格描述发布时事实，执行时仍由原会话核验当前目标和范围。
+
+DesktopWindow.semantic(request) 与 EmbeddedSceneInputs.semantic(request) 直接返回原 ScenePageSession 的 CompletableFuture<SceneSemanticRequest.Result>；两者也提供 semantic(request, BiConsumer<Result, Throwable>) 重载。宿主桥可从其调用线程递交，原队列先结算前序输入和 Effect，再完成 APPLIED/REJECTED/CLOSED 或原异常。回调与 future 表达同一请求的完成，业务是否接受仍读取原业务状态。页面运行方继续驱动原 frame；不能在该线程阻塞等待尚未结算的请求。窗口与 GL 操作继续只在创建线程进行。
+
+嵌入页面先关闭原 ScenePageSession，接收 Core 空快照及移除事实，再关闭 EmbeddedSceneHost；本 consumer 不接管会话所有权。桌面窗口按原资源栈先结束页面，再结束 GPU/native 资源。两种 host 关闭后将最新引用清为 EMPTY，旧语义 ID 的后续请求由原已结束会话报告 CLOSED。旧宿主、旧键鼠入口以及未接原生无障碍桥的调用方保持原前提。
+
+## 4. 配置与资源
 
 桌面调用核心[对象配置能力](<../../../Qz-UILib-Core/specs/config/2026-10-11-uilib-config-spec.md>)，显式路径读取或首次生成 YAML。桌面操作可触发重载，变化沿配置状态订阅更新窗口标题、页面内容或主题及字体来源；页面无需关闭重开。重载事件属于桌面宿主，不将桌面按键或窗口类型引入核心。字体沿既有来源与代际更新机制，完整候选列表及显式空值行为不另定义。
 
-## 4. 生命周期与失败
+## 5. 生命周期与失败
 
 关闭窗口终止输入，结束页面和配置订阅，释放 GPU、字体 CPU/native、回调与窗口资源，再结束平台初始化；释放仍在有效上下文内完成，失败保持原始异常并完成其余必要清理。不增加自动重试、失败降级、旧资源恢复等分支。一次初始化中途失败也释放已取得资源；允许新进程再次启动。
 
-## 5. 验收
+## 6. 验收
 
-完整 build 验证生产源集、独立分发与平台隔离。真实桌面运行验证窗口创建、正式页面绘制（包括字形实际像素）、按钮、文本提交、滚动、尺寸变化、YAML 修改后重载及关闭释放。命令键验收覆盖共享保存条件及实际文件、共享邮箱 Ctrl+F 后同批文字、编辑空操作/只读消费、模态结束后 repeat 隔离、旧持键与失焦释放门，以及原 Ctrl+R 确认、ESC/Tab/Enter 和小键盘 Enter 条件；Space 单独检查 DOWN/repeat 不激活、UP 单次、Tab/失焦取消及离开再返回不复活；嵌入字符回归覆盖命名文本键重复 DOWN 的高低代理拼接，以及导航/修饰命令边界清除。弹层 Tab 在一次输入内关闭并继续相邻逻辑控件，ESC 返回合法触发器。自动运行可以在真实窗口/GL 上注入明确事件以取得可复核反馈，但需区分自动路径、真实 native 事件与人工交互；不使用模拟窗口或只看启动日志替代绘制/交互验收。最终分发以自身运行库启动，同一真实闭环不借 MC 开发类路径成立。
+完整 build 验证生产源集、独立分发与平台隔离。原 LayerInputScenario 无窗口入口验证 host 收到不可变快照、跨线程经 EmbeddedSceneInputs 递交定向语义动作、完成结果与关闭清空；原 DesktopVerification 在真实窗口中使用 DesktopWindow 对应端口验证同一流程。真实桌面运行验证窗口创建、正式页面绘制（包括字形实际像素）、按钮、文本提交、滚动、尺寸变化、YAML 修改后重载及关闭释放。命令键验收覆盖共享保存条件及实际文件、共享邮箱 Ctrl+F 后同批文字、编辑空操作/只读消费、模态结束后 repeat 隔离、旧持键与失焦释放门，以及原 Ctrl+R 确认、ESC/Tab/Enter 和小键盘 Enter 条件；Space 单独检查 DOWN/repeat 不激活、UP 单次、Tab/失焦取消及离开再返回不复活；嵌入字符回归覆盖命名文本键重复 DOWN 的高低代理拼接，以及导航/修饰命令边界清除。弹层 Tab 在一次输入内关闭并继续相邻逻辑控件，ESC 返回合法触发器。自动运行可以在真实窗口/GL 上注入明确事件以取得可复核反馈，但需区分自动路径、真实 native 事件与人工交互；不使用模拟窗口或只看启动日志替代绘制/交互验收。最终分发以自身运行库启动，同一真实闭环不借 MC 开发类路径成立。

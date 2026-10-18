@@ -4,6 +4,8 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import club.heiqi.uilib.ui.scene.host.ScenePageSession;
 import club.heiqi.uilib.ui.scene.host.SceneEditInputAdapter;
 import club.heiqi.uilib.ui.scene.host.SceneEscapeInputAdapter;
@@ -15,6 +17,7 @@ import club.heiqi.uilib.ui.scene.input.SceneKey;
 import club.heiqi.uilib.ui.scene.input.SceneKeyEvent;
 import club.heiqi.uilib.ui.scene.input.SceneNavigationEvent;
 import club.heiqi.uilib.ui.scene.input.ScenePointerEvent;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticRequest;
 
 /** 版本输入只提供语义键、物理段和历史耗尽事实；焦点、范围、手势仍归正式session。 */
 public final class EmbeddedSceneInputs {
@@ -47,6 +50,14 @@ public final class EmbeddedSceneInputs {
         enter = new SceneKeyPressInputAdapter(() -> keys.key(event(SceneKey.ENTER)));
         keypadEnter = new SceneKeyPressInputAdapter(() -> keys.key(event(SceneKey.KEYPAD_ENTER)));
         space = new SceneKeyPressInputAdapter(() -> keys.key(event(SceneKey.SPACE)));
+    }
+    /** 不访问runtime或本地键盘状态；请求从调用线程进入原session有序队列。 */
+    public CompletableFuture<SceneSemanticRequest.Result> semantic(SceneSemanticRequest request) {
+        return page.semantic(request);
+    }
+    public CompletableFuture<SceneSemanticRequest.Result> semantic(SceneSemanticRequest request,
+            BiConsumer<SceneSemanticRequest.Result, Throwable> completion) {
+        return page.semantic(request, completion);
     }
     private SceneKeyEvent event(SceneKey key) {
         return new SceneKeyEvent(key, control, shift, alt, extra, repeat, clipboard);
