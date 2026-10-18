@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
+import java.util.EnumSet;
+import java.util.Set;
 import java.util.Objects;
 import java.util.function.Function;
 import org.lwjgl.glfw.Callbacks;
@@ -39,7 +41,10 @@ import club.heiqi.uilib.ui.scene.host.SceneHost;
 import club.heiqi.uilib.ui.scene.host.ScenePage;
 import club.heiqi.uilib.ui.scene.host.ScenePageSession;
 import club.heiqi.uilib.ui.scene.input.SceneEditEvent;
-import club.heiqi.uilib.ui.scene.input.SceneNavigationEvent;
+import club.heiqi.uilib.ui.scene.host.SceneKeyInputAdapter;
+import club.heiqi.uilib.ui.scene.host.SceneKeyPressInputAdapter;
+import club.heiqi.uilib.ui.scene.input.SceneKey;
+import club.heiqi.uilib.ui.scene.input.SceneKeyEvent;
 import club.heiqi.uilib.ui.scene.input.ScenePointerEvent;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
 import club.heiqi.uilib.ui.scene.text.font.FontCandidateConfiguration;
@@ -77,6 +82,14 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     ScenePageSession page;
     PaintPlan lastPlan;
     int resizeCallbacks;
+    private final SceneKeyInputAdapter keys = new SceneKeyInputAdapter(this::dispatchKey);
+    // 保留桌面单次DOWN门；所有合法起手的UP继续交Core，小键盘Enter保持独立。
+    private final SceneKeyPressInputAdapter tab = new SceneKeyPressInputAdapter(this::dispatchSpecialKey);
+    private final SceneKeyPressInputAdapter enter = new SceneKeyPressInputAdapter(this::dispatchSpecialKey);
+    private final SceneKeyPressInputAdapter keypadEnter = new SceneKeyPressInputAdapter(this::dispatchSpecialKey);
+    private final SceneKeyPressInputAdapter space = new SceneKeyPressInputAdapter(this::dispatchSpecialKey);
+    private final SceneKeyPressInputAdapter escape = new SceneKeyPressInputAdapter(this::dispatchSpecialKey);
+    private SceneKeyEvent specialKey;
 
     private DesktopWindow(Path path) { this(path, null); }
     private DesktopWindow(Path path, club.heiqi.uilib.ui.media.MediaService mediaService) {
@@ -209,6 +222,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         }
         page = own(ScenePageSession.open(domain, this, fonts, content));
         installCallbacks();
+        keyAvailability(true);
         if (visible) glfwShowWindow(window);
     }
     private Signal<Long> reloadRevision;
@@ -352,55 +366,90 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     }
     void key(int key, int action, int mods) {
         check();
-        if (action == GLFW_RELEASE) return;
-        boolean shift = (mods & GLFW_MOD_SHIFT) != 0, control = (mods & GLFW_MOD_CONTROL) != 0;
-        boolean fresh = action == GLFW_PRESS;
-        if (control && key == GLFW_KEY_R) { if (fresh) reloadUnchecked(); return; }
-        SceneEditEvent.Command command = null;
-        if (control) {
-            switch (key) {
-                case GLFW_KEY_LEFT: command = SceneEditEvent.Command.WORD_LEFT; break;
-                case GLFW_KEY_RIGHT: command = SceneEditEvent.Command.WORD_RIGHT; break;
-                case GLFW_KEY_BACKSPACE: command = SceneEditEvent.Command.WORD_BACKSPACE; break;
-                case GLFW_KEY_DELETE: command = SceneEditEvent.Command.WORD_DELETE; break;
-                case GLFW_KEY_A: command = SceneEditEvent.Command.SELECT_ALL; break;
-                case GLFW_KEY_C: command = SceneEditEvent.Command.COPY; break;
-                case GLFW_KEY_X: command = SceneEditEvent.Command.CUT; break;
-                case GLFW_KEY_V: command = SceneEditEvent.Command.PASTE; break;
-                case GLFW_KEY_Z: command = shift ? SceneEditEvent.Command.REDO : SceneEditEvent.Command.UNDO; break;
-                case GLFW_KEY_Y: command = SceneEditEvent.Command.REDO; break;
-                case GLFW_KEY_HOME: command = SceneEditEvent.Command.DOCUMENT_HOME; break;
-                case GLFW_KEY_END: command = SceneEditEvent.Command.DOCUMENT_END; break;
-                default: break;
-            }
-        } else {
-            switch (key) {
-                case GLFW_KEY_LEFT: command = SceneEditEvent.Command.LEFT; break;
-                case GLFW_KEY_RIGHT: command = SceneEditEvent.Command.RIGHT; break;
-                case GLFW_KEY_HOME: command = SceneEditEvent.Command.HOME; break;
-                case GLFW_KEY_END: command = SceneEditEvent.Command.END; break;
-                case GLFW_KEY_BACKSPACE: command = SceneEditEvent.Command.BACKSPACE; break;
-                case GLFW_KEY_DELETE: command = SceneEditEvent.Command.DELETE; break;
-                case GLFW_KEY_UP: command = SceneEditEvent.Command.UP; break;
-                case GLFW_KEY_DOWN: command = SceneEditEvent.Command.DOWN; break;
-                case GLFW_KEY_PAGE_UP: command = SceneEditEvent.Command.PAGE_UP; break;
-                case GLFW_KEY_PAGE_DOWN: command = SceneEditEvent.Command.PAGE_DOWN; break;
-                default: break;
-            }
+        SceneKey named = namedKey(key);
+        if (named == null) return;
+        boolean down = action != GLFW_RELEASE;
+        SceneKeyEvent event = new SceneKeyEvent(named, (mods & GLFW_MOD_CONTROL) != 0,
+                (mods & GLFW_MOD_SHIFT) != 0, (mods & GLFW_MOD_ALT) != 0,
+                (mods & GLFW_MOD_SUPER) != 0, action == GLFW_REPEAT, clipboard,
+                down ? SceneKeyEvent.Phase.DOWN : SceneKeyEvent.Phase.UP);
+        specialKey = event;
+        switch (key) {
+            case GLFW_KEY_TAB: tab.key(down, event.repeat); break;
+            case GLFW_KEY_ENTER: enter.key(down, event.repeat); break;
+            case GLFW_KEY_KP_ENTER: keypadEnter.key(down, event.repeat); break;
+            case GLFW_KEY_SPACE: space.key(down, event.repeat); break;
+            case GLFW_KEY_ESCAPE: escape.key(down, event.repeat); break;
+            default: keys.key(event); return;
         }
-        if (command != null) { page.edit(SceneEditEvent.command(command, shift, clipboard)); return; }
-        if (!fresh) return;
-        if (key == GLFW_KEY_TAB) page.editOrNavigate(SceneEditEvent.command(SceneEditEvent.Command.TAB, shift, clipboard),
-                shift ? SceneNavigationEvent.PREVIOUS : SceneNavigationEvent.NEXT);
-        else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER)
-            // Ctrl+Enter是多行显式提交，普通Enter仍先交编辑目标处理组字/换行。
-            page.editOrNavigate(SceneEditEvent.command(control ? SceneEditEvent.Command.SUBMIT : SceneEditEvent.Command.CONFIRM, shift, clipboard), SceneNavigationEvent.ACTIVATE);
-        else if (key == GLFW_KEY_SPACE)
-            page.editOrNavigate(SceneEditEvent.command(SceneEditEvent.Command.ACTIVATE_ONLY, shift, clipboard), SceneNavigationEvent.ACTIVATE);
-        else if (key == GLFW_KEY_ESCAPE) page.escape(this::requestClose);
+        // DOWN由既有单次门递交；UP经同一中性适配器核对合法起手，宿主不合成click。
+        if (!down) keys.key(event);
+    }
+    private void dispatchSpecialKey() { keys.key(specialKey); }
+    private void dispatchKey(SceneKeyEvent event) {
+        Runnable fallback = null;
+        if (event.phase == SceneKeyEvent.Phase.DOWN) {
+            if (event.key == SceneKey.ESCAPE) fallback = this::requestClose;
+            else if (event.key == SceneKey.R && event.primary && !event.alt && !event.extra) fallback = this::reloadUnchecked;
+        }
+        page.key(event, fallback);
+    }
+    private static SceneKey namedKey(int key) {
+        if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z) return SceneKey.values()[key - GLFW_KEY_A];
+        if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F12) return SceneKey.valueOf("F" + (key - GLFW_KEY_F1 + 1));
+        if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9) return SceneKey.valueOf("DIGIT_" + (key - GLFW_KEY_0));
+        switch (key) {
+            case GLFW_KEY_LEFT: return SceneKey.LEFT;
+            case GLFW_KEY_RIGHT: return SceneKey.RIGHT;
+            case GLFW_KEY_UP: return SceneKey.UP;
+            case GLFW_KEY_DOWN: return SceneKey.DOWN;
+            case GLFW_KEY_HOME: return SceneKey.HOME;
+            case GLFW_KEY_END: return SceneKey.END;
+            case GLFW_KEY_PAGE_UP: return SceneKey.PAGE_UP;
+            case GLFW_KEY_PAGE_DOWN: return SceneKey.PAGE_DOWN;
+            case GLFW_KEY_BACKSPACE: return SceneKey.BACKSPACE;
+            case GLFW_KEY_DELETE: return SceneKey.DELETE;
+            case GLFW_KEY_INSERT: return SceneKey.INSERT;
+            case GLFW_KEY_SLASH: return SceneKey.SLASH;
+            case GLFW_KEY_COMMA: return SceneKey.COMMA;
+            case GLFW_KEY_PERIOD: return SceneKey.PERIOD;
+            case GLFW_KEY_MINUS: return SceneKey.MINUS;
+            case GLFW_KEY_EQUAL: return SceneKey.EQUAL;
+            case GLFW_KEY_SEMICOLON: return SceneKey.SEMICOLON;
+            case GLFW_KEY_APOSTROPHE: return SceneKey.APOSTROPHE;
+            case GLFW_KEY_LEFT_BRACKET: return SceneKey.LEFT_BRACKET;
+            case GLFW_KEY_RIGHT_BRACKET: return SceneKey.RIGHT_BRACKET;
+            case GLFW_KEY_BACKSLASH: return SceneKey.BACKSLASH;
+            case GLFW_KEY_GRAVE_ACCENT: return SceneKey.GRAVE;
+            case GLFW_KEY_TAB: return SceneKey.TAB;
+            case GLFW_KEY_ENTER: return SceneKey.ENTER;
+            case GLFW_KEY_KP_ENTER: return SceneKey.KEYPAD_ENTER;
+            case GLFW_KEY_SPACE: return SceneKey.SPACE;
+            case GLFW_KEY_ESCAPE: return SceneKey.ESCAPE;
+            default: return null;
+        }
+    }
+    private void keyAvailability(boolean available) {
+        keys.availability(available); tab.availability(available); enter.availability(available);
+        keypadEnter.availability(available); space.availability(available); escape.availability(available);
+    }
+    private void keyHistoryDrained() {
+        // 本宿主的唯一poll已耗尽本批回调，才读取真实物理释放事实。
+        Set<SceneKey> physical = EnumSet.noneOf(SceneKey.class);
+        for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; key++) {
+            SceneKey named = namedKey(key);
+            if (named != null && glfwGetKey(window, key) == GLFW_PRESS) physical.add(named);
+        }
+        keys.historyDrained(physical);
+        tab.historyDrained(glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS);
+        enter.historyDrained(glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS);
+        keypadEnter.historyDrained(glfwGetKey(window, GLFW_KEY_KP_ENTER) == GLFW_PRESS);
+        space.historyDrained(glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS);
+        escape.historyDrained(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS);
     }
     void focus(boolean focused) {
         check();
+        keyAvailability(focused);
         if (!focused) {
             page.focusLost();
         } else {
@@ -430,6 +479,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     @Override public void replay(PaintPlan plan) { lastPlan = plan; renderer.replay(plan, width(), height()); }
     public void frame() {
         check(); glfwPollEvents();
+        keyHistoryDrained();
         if (shouldClose() || width() <= 0 || height() <= 0) return;
         glfwMakeContextCurrent(window);
         glViewport(0, 0, width(), height());
@@ -475,6 +525,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     @Override public void close() {
         if (closed) return;
         if (Thread.currentThread() != thread) throw new IllegalStateException("桌面窗口必须在创建线程关闭");
+        keyAvailability(false);
         closed = true;
         lastPlan = null; mediaPresentations = Collections.emptyList();
         if(pageServices!=null)pageServices.releaseRequests();

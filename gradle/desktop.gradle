@@ -55,10 +55,17 @@ desktopApplication('desktopGallery','DesktopGallery') { group = 'application' }
 desktopApplication('desktopGalleryVerify','DesktopGallery') { args '--verify', report('gallery-desktop'); mustRunAfter 'desktopVerify' }
 desktopApplication('desktopGalleryResultScenario','DesktopGalleryResultScenario') { args report('gallery-result') }
 desktopApplication('desktopSettingsVerify','DesktopSettingsVerification') { args report('settings-desktop'); mustRunAfter 'desktopGalleryVerify' }
+desktopApplication('desktopCommandVerify','DesktopCommandVerification') { args report('commands-desktop'); mustRunAfter 'desktopSettingsVerify' }
 desktopApplication('desktopDraggableVerify','DesktopDraggableVerification') { args report('draggable-desktop'); mustRunAfter 'desktopSettingsVerify' }
 desktopApplication('desktopDraggableDeepVerify','DesktopDraggableDeepVerification') { args report('desktop-draggable-deep'); mustRunAfter 'desktopDraggableVerify' }
 desktopApplication('desktopDropSortVerify','DesktopDropSortVerification') { args report('drop-sort-desktop'); mustRunAfter 'desktopDraggableDeepVerify' }
 desktopApplication('desktopScrollAreaVerify','DesktopScrollAreaVerification') { args report('scroll-area-desktop'); mustRunAfter 'desktopDropSortVerify' }
+desktopApplication('desktopDirectionVerify','DesktopDirectionVerification') { args report('direction-desktop'); mustRunAfter 'desktopScrollAreaVerify' }
+desktopApplication('desktopDataTableVerify','DesktopDataTableVerification') { args report('data-table-desktop'); mustRunAfter 'desktopDirectionVerify' }
+desktopApplication('desktopTreeVerify','DesktopTreeVerification') { args report('tree-desktop'); mustRunAfter 'desktopDataTableVerify' }
+desktopApplication('desktopStateControlsVerify','DesktopStateControlsVerification') { args report('state-controls-desktop'); mustRunAfter 'desktopTreeVerify' }
+desktopApplication('desktopTabsVerify','DesktopTabsVerification') { args report('tabs-desktop'); mustRunAfter 'desktopStateControlsVerify' }
+desktopApplication('desktopPopupVerify','DesktopPopupVerification') { args report('popup-desktop'); mustRunAfter 'desktopTabsVerify' }
 desktopApplication('desktopMotionVerify','DesktopMotionVerification') { args providers.gradleProperty('motionOutput').getOrElse(report('motion-desktop')); mustRunAfter 'desktopScrollAreaVerify' }
 desktopApplication('desktopGalleryMediaVerify','DesktopGalleryMediaVerification') { args report('gallery-media') }
 desktopApplication('desktopTooltipVerify','DesktopTooltipVerification') { args report('tooltip-desktop') }
@@ -96,7 +103,7 @@ desktopApplication('desktopDraggableBenchmark','DesktopDraggablePerformance') {
 }
 tasks.register('galleryVerify') {
     group = 'verification'; description = '完整验收真实桌面广场、输入、媒体与生命周期'
-    dependsOn 'desktopGalleryVerify','desktopGalleryResultScenario','desktopSettingsVerify','desktopDraggableVerify','desktopDraggableDeepVerify','desktopDropSortVerify','desktopScrollAreaVerify','desktopMotionVerify','desktopGalleryMediaVerify','desktopTooltipVerify','desktopLiveMediaVerify','desktopNetworkMediaVerify'
+    dependsOn 'desktopGalleryVerify','desktopGalleryResultScenario','desktopSettingsVerify','desktopCommandVerify','desktopDraggableVerify','desktopDraggableDeepVerify','desktopDropSortVerify','desktopScrollAreaVerify','desktopDirectionVerify','desktopDataTableVerify','desktopTreeVerify','desktopStateControlsVerify','desktopTabsVerify','desktopPopupVerify','desktopMotionVerify','desktopGalleryMediaVerify','desktopTooltipVerify','desktopLiveMediaVerify','desktopNetworkMediaVerify'
 }
 tasks.register('galleryBuild') { group = 'build'; dependsOn 'installDesktop', platformVerification }
 tasks.named('check') { dependsOn 'desktopVerify', 'galleryVerify' }
