@@ -34,6 +34,8 @@ public final class BidiEditingScenario extends TestApplication {
         PaintPlan plan;
         public int width() { return width; }
         public int height() { return height; }
+        private long frameTime = System.nanoTime();
+        public long frameNanos() { return frameTime += 5_000_000L; }
         public long metricsRevision() { return 0; }
         public void replay(PaintPlan plan) { this.plan = plan; }
     }

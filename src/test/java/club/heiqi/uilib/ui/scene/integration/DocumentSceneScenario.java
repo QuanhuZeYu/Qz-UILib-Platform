@@ -179,6 +179,9 @@ public final class DocumentSceneScenario extends TestApplication {
                         return height;
                     }
 
+                    private long frameTime = System.nanoTime();
+                    public long frameNanos() { return frameTime += 5_000_000L; }
+
                     public long metricsRevision() {
                         return fonts.generation();
                     }
@@ -498,6 +501,9 @@ public final class DocumentSceneScenario extends TestApplication {
                     public int height() {
                         return 300;
                     }
+
+                    private long frameTime = System.nanoTime();
+                    public long frameNanos() { return frameTime += 5_000_000L; }
 
                     public long metricsRevision() {
                         return fonts.generation();

@@ -48,6 +48,8 @@ public final class DesktopSettingsVerification extends TestApplication {
         scenario("字体浏览回填、嵌套ESC与显式添加应用保存",this::fontPicker);
         w=own(DesktopWindow.openSettings(path));
         glfwSetWindowSize(w.handle(),1440,1000);settle(w);input=new DesktopTestInput(w);
+        int[] framebufferWidth={0},framebufferHeight={0};glfwGetFramebufferSize(w.handle(),framebufferWidth,framebufferHeight);
+        require(framebufferWidth[0]==1440&&framebufferHeight[0]==1000&&w.width()==framebufferWidth[0]&&w.height()==framebufferHeight[0],"设置功能验收需要实际1440×1000 framebuffer");
         original=current(w);before=Files.readAllBytes(path);
 
         scenario("统一外观首屏与主题草稿预览",this::appearanceDraft);
@@ -120,11 +122,14 @@ public final class DesktopSettingsVerification extends TestApplication {
         input.click("深色模式");
         input.click("管理字体来源");screenshot(w,output.resolve("settings-font-manager.png"));
         fontDrag(w,input,true);require(current(w).equals(original),"取消拖动提前发布字体");
+        require(java.util.Arrays.equals(before,Files.readAllBytes(path)),"取消拖动误写文件");
         fontDrag(w,input,false);require(current(w).equals(original),"排序草稿提前发布");require(hasText(w,"有待应用修改"),"排序未标记草稿");
+        require(java.util.Arrays.equals(before,Files.readAllBytes(path)),"排序草稿误写文件");
         screenshot(w,output.resolve("settings-font-dragged.png"));
         input.click("完成字体编辑");input.click("配置文件");require(hasText(w,"有待应用修改"),"切分类丢草稿");input.click("外观");
         input.click("应用全部更改");settle(w);applied=current(w);
-        require(applied.get(0).equals(original.get(1))&&applied.get(1).equals(original.get(0)),"正式应用没有发布顺序");
+        List<String> expected=new ArrayList<>(original);java.util.Collections.swap(expected,0,1);
+        require(!expected.equals(original)&&applied.equals(expected),"正式应用没有发布拖动后的完整顺序");
         require(currentTheme(w)==ThemeMode.DARK&&titleInk(w)!=lightInk,"应用没有发布深色主题");
         screenshot(w,output.resolve("settings-dark.png"));
         require(java.util.Arrays.equals(before,Files.readAllBytes(path)),"应用误写文件");require(hasText(w,"已应用，未保存"),"已应用未保存状态不实");
@@ -338,20 +343,41 @@ public final class DesktopSettingsVerification extends TestApplication {
 
     /** 真实把手输入替代旧相邻按钮，后续原应用/保存/重载检查验证拖动确实影响草稿顺序。 */
     private static void fontDrag(DesktopWindow w,DesktopTestInput input,boolean cancel) throws Exception {
-        List<SceneGeometryView.Entry> handles=geometry(w).ordered().stream().filter(e -> "::".equals(e.node.text())&&hit(e).height>0)
-                .collect(java.util.stream.Collectors.toList());
+        settleReorder(w);
+        List<SceneGeometryView.Entry> handles=fontHandles(w);
         require(handles.size()>=2,"字体来源没有两个可见拖动把手");
         club.heiqi.uilib.ui.scene.layout.LayoutBox first=geometry(w,handles.get(0).node.parent()).box,
                 second=geometry(w,handles.get(1).node.parent()).box;
         require(first.width>=44&&first.height>=44,"字体排序把手没有可操作的外围热区");
         int x=first.x+2,y=first.y+first.height/2,target=second.y+second.height-3;
         require(x<handles.get(0).box.x,"拖动未覆盖标记之外的把手留白");
+        SceneNode handle=handles.get(0).node.parent();
         input.point(x,y);input.mouse.invoke(w.handle(),0,GLFW_PRESS,0);w.frame();
+        requireFontDragOwner(w,handle);
         input.point(x+1,target);w.frame();
         screenshot(w,w.configPath.getParent().resolve(cancel?"settings-font-drag-cancel.png":"settings-font-drag-active.png"));
+        requireFontDragOwner(w,handle);
         if(cancel){input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_PRESS,0);input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_RELEASE,0);w.frame();}
         input.mouse.invoke(w.handle(),0,GLFW_RELEASE,0);w.frame();
+        requireNoFontDragOwner(w);
         require(visible(w,"完成字体编辑"),"字体拖动错误关闭模态");
+    }
+    static List<SceneGeometryView.Entry> fontHandles(DesktopWindow window){
+        return geometry(window).ordered().stream().filter(e -> "::".equals(e.node.text())&&hit(e).width>0&&hit(e).height>0)
+                .collect(java.util.stream.Collectors.toList());
+    }
+    static void requireFontDragOwner(DesktopWindow window,SceneNode handle){
+        window.domain.execute(() -> {
+            SceneNode expected=handle;
+            // 把手是正式target身份；SceneSortableList由拥有它的排序行捕获手势。
+            while(expected!=null&&(expected.control()==null||!expected.control().capturesPointer()
+                    ||!expected.control().pointerTargetValid(expected,handle)))expected=expected.parent();
+            SceneNode owner=window.page.runtime().pointerRouter().pressedTarget().get();
+            require(expected!=null&&owner==expected,"字体拖动capture owner不是拥有指定把手的排序行");
+        });
+    }
+    static void requireNoFontDragOwner(DesktopWindow window){
+        window.domain.execute(() -> require(window.page.runtime().pointerRouter().pressedTarget().get()==null,"字体release后仍有捕获owner"));
     }
     private static void settleReorder(DesktopWindow window){
         long deadline=System.nanoTime()+5_000_000_000L;
@@ -369,11 +395,11 @@ public final class DesktopSettingsVerification extends TestApplication {
         }while(System.nanoTime()<deadline);
         throw new AssertionError("排序行在实机等待界限内未回到目标几何");
     }
-    private static List<String> current(DesktopWindow w){final List<String>[] result=new List[1];w.domain.execute(() -> result[0]=new ArrayList<>(w.configuration.get(w.fontCandidates)));return result[0];}
+    static List<String> current(DesktopWindow w){final List<String>[] result=new List[1];w.domain.execute(() -> result[0]=new ArrayList<>(w.configuration.get(w.fontCandidates)));return result[0];}
     private static ThemeMode currentTheme(DesktopWindow w){final ThemeMode[] result={null};w.domain.execute(() -> result[0]=w.configuration.get(ThemeConfiguration.KEY));return result[0];}
     private static int titleInk(DesktopWindow w){return w.lastPlan.commands().stream().filter(c -> c.kind==PaintCommand.Kind.TEXT&&"QZ  /  UILib 设置".equals(c.text.logicalText)).findFirst().orElseThrow(() -> new AssertionError("正式设置标题缺失")).color;}
     // 断言呈现的逻辑内容；TextInput 入口允许 originalText 为空，不能把可选原串当显示文字。
-    private static boolean hasText(DesktopWindow w,String text){return geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&text.equals(e.text.logicalText));}
+    static boolean hasText(DesktopWindow w,String text){return geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&text.equals(e.text.logicalText));}
     private static boolean hasTextContaining(DesktopWindow w,String text){return geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&e.text.logicalText.contains(text)&&hit(e).width>0&&hit(e).height>0);}
     private static boolean visible(DesktopWindow w,String text){return geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&text.equals(e.text.logicalText)&&hit(e).width>0&&hit(e).height>0);}
     private static void screenshot(DesktopWindow w,Path path) throws Exception {

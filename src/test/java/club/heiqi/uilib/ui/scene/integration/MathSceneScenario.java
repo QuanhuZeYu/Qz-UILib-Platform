@@ -329,6 +329,9 @@ public final class MathSceneScenario extends TestApplication {
                         return 180;
                     }
 
+                    private long frameTime = System.nanoTime();
+                    public long frameNanos() { return frameTime += 5_000_000L; }
+
                     public long metricsRevision() {
                         return fonts.generation();
                     }
@@ -491,6 +494,9 @@ public final class MathSceneScenario extends TestApplication {
                     public int height() {
                         return height;
                     }
+
+                    private long frameTime = System.nanoTime();
+                    public long frameNanos() { return frameTime += 5_000_000L; }
 
                     public long metricsRevision() {
                         return fonts.generation();
@@ -1678,6 +1684,9 @@ public final class MathSceneScenario extends TestApplication {
                     public int height() {
                         return 100;
                     }
+
+                    private long frameTime = System.nanoTime();
+                    public long frameNanos() { return frameTime += 5_000_000L; }
 
                     public long metricsRevision() {
                         return fonts.generation();

@@ -94,6 +94,10 @@ desktopApplication('desktopMailboxPerformance','DesktopMailboxPerformance') {
 }
 desktopApplication('desktopSettingsBenchmark','DesktopSettingsPerformance') {
     group = 'benchmark'; description = '真实设置页纯UI一毫秒预算、输入与窗口帧率基准'
+    systemProperty 'uilib.version', project.version.toString()
+    systemProperty 'settings.revision', providers.gradleProperty('settingsRevision').getOrElse('unknown')
+    systemProperty 'settings.coreCoordinate', "${project.group}:core:${project.version}"
+    systemProperty 'settings.galleryCoordinate', "${project.group}:gallery:${project.version}"
     args file(providers.gradleProperty('settingsOutput').getOrElse(report('settings-performance'))).absolutePath
 }
 desktopApplication('desktopDraggableBenchmark','DesktopDraggablePerformance') {
