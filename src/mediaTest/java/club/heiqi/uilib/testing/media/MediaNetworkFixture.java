@@ -21,7 +21,10 @@ import club.heiqi.uilib.ui.media.MediaSource;
 public final class MediaNetworkFixture implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService worker;
-    public final AtomicInteger accepted=new AtomicInteger(),rejected=new AtomicInteger();
+    public final java.util.List<String> requestLog=java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+    public final AtomicInteger accepted=new AtomicInteger(),rejected=new AtomicInteger(),heads=new AtomicInteger();
+    private final java.util.concurrent.ConcurrentHashMap<String,AtomicInteger> requests=new java.util.concurrent.ConcurrentHashMap<>();
+    public final java.util.concurrent.CountDownLatch prefixSent=new java.util.concurrent.CountDownLatch(1),releasePrefix=new java.util.concurrent.CountDownLatch(1);
     public MediaNetworkFixture()throws Exception{
         byte[] video=MediaLiveFixture.video(96,64),audio=MediaLiveFixture.audio();
         byte[] shortAudio=java.util.Arrays.copyOf(audio,44+22050*2);
@@ -36,9 +39,24 @@ public final class MediaNetworkFixture implements AutoCloseable {
             try{
                 if(!"https://fixture.example/watch".equals(exchange.getRequestHeaders().getFirst("Referer"))
                         ||!"UILib-Network-Verification".equals(exchange.getRequestHeaders().getFirst("User-Agent"))){rejected.incrementAndGet();exchange.sendResponseHeaders(403,-1);return;}
-                accepted.incrementAndGet();String path=exchange.getRequestURI().getPath();byte[] data;
+                accepted.incrementAndGet();String path=exchange.getRequestURI().getPath();requests.computeIfAbsent(path,key->new AtomicInteger()).incrementAndGet();
+                if("HEAD".equals(exchange.getRequestMethod()))heads.incrementAndGet();
+                requestLog.add(exchange.getRequestMethod()+" "+path+" "+exchange.getRequestHeaders().getFirst("Range"));
+                if(path.equals("/blocked")){
+                    exchange.sendResponseHeaders(200,262144);
+                    try(OutputStream output=exchange.getResponseBody()){
+                        output.write("#EXTM3U\n#EXT-X-".getBytes(StandardCharsets.UTF_8));output.flush();prefixSent.countDown();
+                        try{releasePrefix.await();}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}
+                    }
+                    return;
+                }
+                byte[] data;
                 if(path.equals("/video.avi"))data=video;else if(path.equals("/audio.wav"))data=audio;else if(path.equals("/short.wav"))data=shortAudio;
                 else if(path.equals("/segment.ts"))data=segment;
+                else if(path.equals("/entry")){
+                    exchange.getResponseHeaders().set("Content-Type","application/vnd.apple.mpegurl");
+                    data="#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000\nvod.m3u8\n".getBytes(StandardCharsets.UTF_8);
+                }
                 else if(path.equals("/vod.m3u8"))data="#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegment.ts\n#EXT-X-ENDLIST\n".getBytes(StandardCharsets.UTF_8);
                 else{exchange.sendResponseHeaders(404,-1);return;}
                 exchange.getResponseHeaders().set("Accept-Ranges","bytes");int start=0,end=data.length-1,status=200;
@@ -52,9 +70,10 @@ public final class MediaNetworkFixture implements AutoCloseable {
             }finally{exchange.close();}
         });server.start();
     }
+    public int requests(String path){AtomicInteger count=requests.get(path);return count==null?0:count.get();}
     public URI uri(String path){return URI.create("http://127.0.0.1:"+server.getAddress().getPort()+path);}
     public Map<String,String> headers(){Map<String,String> result=new LinkedHashMap<>();result.put("Referer","https://fixture.example/watch");result.put("User-Agent","UILib-Network-Verification");return Collections.unmodifiableMap(result);}
     public MediaSource source(String path){return MediaSource.http(uri(path),headers());}
     public MediaSource split(boolean shortAudio){return MediaSource.split(source("/video.avi"),source(shortAudio?"/short.wav":"/audio.wav"));}
-    @Override public void close(){server.stop(0);worker.shutdownNow();}
+    @Override public void close(){releasePrefix.countDown();server.stop(0);worker.shutdownNow();}
 }

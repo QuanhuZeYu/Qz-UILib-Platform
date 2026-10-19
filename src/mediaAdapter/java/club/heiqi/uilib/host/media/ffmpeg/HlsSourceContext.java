@@ -20,27 +20,43 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
-/** 单个会话/来源的有限列表与媒体锚点。只由 decoder owner 使用；不扫描媒体流或共享 URL 游标。 */
+/** 单个会话/来源的有限列表与媒体锚点；首次事实来自decoder的同一输入，刷新仍归本owner。 */
 final class HlsSourceContext implements MediaDecoderSource {
-    private static final int MAX_BYTES=262144,MAX_SEGMENTS=2048,MAX_URL=8192;
+    static final int MAX_BYTES=262144;
+    private static final int MAX_SEGMENTS=2048,MAX_URL=8192;
     private final MediaSource source;
     private final MediaCancellation lifetime;
     private Snapshot window;
-    private long windowStart,openingPosition,origin=Long.MIN_VALUE,deadline=Long.MAX_VALUE;
+    private long windowStart,openingPosition,requestPosition,origin=Long.MIN_VALUE,deadline=Long.MAX_VALUE;
+    private boolean requestSeeking;
     private boolean closed;
-    private final boolean liveTimeline;
-    HlsSourceContext(MediaSource source,MediaCancellation lifetime) throws Exception {
+    private boolean liveTimeline;
+    HlsSourceContext(MediaSource source,MediaCancellation lifetime) {
         this.source=source;this.lifetime=lifetime;
-        String scheme=source.uri.getScheme();
-        if(("http".equalsIgnoreCase(scheme)||"https".equalsIgnoreCase(scheme))
-                &&source.uri.getPath()!=null&&source.uri.getPath().endsWith(".m3u8"))window=load(lifetime);
-        liveTimeline=window!=null&&window.live;
+    }
+    int firstPlaylist(byte[] bytes,MediaCancellation cancellation)throws Exception {
+        check(cancellation);
+        String text=new String(bytes,StandardCharsets.UTF_8);
+        // Master声明变体而非EXTINF片段；原字节继续由FFmpeg解析及打开子列表。
+        if(text.contains("\n#EXT-X-STREAM-INF:")||text.contains("\n#EXT-X-I-FRAME-STREAM-INF:"))return 0;
+        window=parse(bytes,cancellation);liveTimeline=window.live;
+        return liveTimeline?selectOpening(requestPosition,requestSeeking):0;
     }
     @Override public MediaDecoder open(long position,boolean seeking,MediaCancellation operation) throws Exception {
         check(operation);
-        if(!liveTimeline)return openVod(position,seeking,operation);
-        if(origin!=Long.MIN_VALUE&&window.live)update(operation);
-        // 初次join沿FFmpeg默认-3留出实际启动余量；不是对过期位置的自动跳转。
+        final MediaCancellation request=operation;
+        MediaCancellation active=()->lifetime.cancelled()||request.cancelled();
+        requestPosition=position;requestSeeking=seeking;
+        if(!liveTimeline)return openVod(position,seeking,active);
+        if(origin!=Long.MIN_VALUE&&window.live)update(active);
+        int index=selectOpening(position,seeking);
+        // ENDLIST只改变正常结束事实；同来源cursor仍用原origin，不能退回独立VOD零点。
+        FfmpegDecoder decoder=new FfmpegDecoder(source,active,this,window.bytes,window.live?index:0);
+        try{if(!window.live&&seeking)decoder.seek(position);return decoder;}
+        catch(Throwable error){try{decoder.close();}catch(Throwable next){error.addSuppressed(next);}if(error instanceof Error)throw(Error)error;if(error instanceof Exception)throw(Exception)error;throw new RuntimeException(error);}
+    }
+    private int selectOpening(long position,boolean seeking){
+        // 初次join沿FFmpeg默认-3留出实际启动余量；显式seek从同一列表选择实际片段。
         int index=seeking?0:Math.max(window.durations.length-3,0);
         if(seeking) {
             MediaRange range=range();
@@ -50,19 +66,18 @@ final class HlsSourceContext implements MediaDecoderSource {
             if(index==window.durations.length)throw new IllegalArgumentException("live窗口末端没有可解码片段");
         }
         openingPosition=windowStart;for(int i=0;i<index;i++)openingPosition=Math.addExact(openingPosition,window.durations[i]);
-        // ENDLIST只改变正常结束事实；同来源cursor仍用原origin，不能退回独立VOD零点。
-        FfmpegDecoder decoder=new FfmpegDecoder(source,operation,this,window.bytes,window.live?index:0);
-        try{if(!window.live&&seeking)decoder.seek(position);return decoder;}
-        catch(Throwable error){try{decoder.close();}catch(Throwable next){error.addSuppressed(next);}if(error instanceof Error)throw(Error)error;if(error instanceof Exception)throw(Exception)error;throw new RuntimeException(error);}
+        return index;
     }
     private MediaDecoder openVod(long position,boolean seeking,MediaCancellation operation) throws Exception {
-        FfmpegDecoder decoder=new FfmpegDecoder(source,operation);
+        FfmpegDecoder decoder=window==null?new FfmpegDecoder(source,operation,this,null,0)
+                :new FfmpegDecoder(source,operation,this,window.bytes,0);
         // 新建VOD cursor已位于首包；0应保留首音频。HLS首DTS可晚于format.start_time，
         // 再物理seek到0会被demuxer拒绝，钳到首视频又会丢失合法的前导音频。
-        try{if(seeking&&position!=0)decoder.seek(position);return decoder;}
+        try{if(!liveTimeline&&seeking&&position!=0)decoder.seek(position);return decoder;}
         catch(Throwable error){try{decoder.close();}catch(Throwable next){error.addSuppressed(next);}if(error instanceof Error)throw(Error)error;if(error instanceof Exception)throw(Exception)error;throw new RuntimeException(error);}
     }
     long anchor(long detected) {
+        if(!liveTimeline)return detected;
         if(origin==Long.MIN_VALUE)origin=Math.subtractExact(detected,openingPosition);
         return origin;
     }
@@ -73,7 +88,7 @@ final class HlsSourceContext implements MediaDecoderSource {
         return new MediaInfo(decoded.ready,decoded.hasVideo,decoded.hasAudio,duration,range,decoded.buffered,decoded.width,decoded.height);
     }
     private MediaRange range() {
-        if(origin==Long.MIN_VALUE)return null;
+        if(window==null)return null;
         long end=windowStart;
         for(long duration:window.durations)end=Math.addExact(end,duration);
         return end<=windowStart?null:new MediaRange(windowStart,end-1);
@@ -119,6 +134,10 @@ final class HlsSourceContext implements MediaDecoderSource {
                 bytes=output.toByteArray();
             }
         }finally{connection.disconnect();}
+        return parse(bytes,cancellation);
+    }
+    private Snapshot parse(byte[] bytes,MediaCancellation cancellation)throws Exception {
+        if(source.uri.toString().length()>MAX_URL)throw new IOException("媒体URL超过预算");
         MediaPlaylist parsed=new MediaPlaylistParser().readPlaylist(new String(bytes,StandardCharsets.UTF_8));
         List<MediaSegment> segments=parsed.mediaSegments();
         if(segments.isEmpty()||segments.size()>MAX_SEGMENTS)throw new IOException("HLS片段数为空或超过预算");

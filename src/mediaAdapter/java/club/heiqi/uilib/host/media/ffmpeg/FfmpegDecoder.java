@@ -46,6 +46,7 @@ final class FfmpegDecoder implements MediaDecoder {
     private boolean ownsFormat;
     private HlsSourceContext sourceContext;
     private InitialPlaylistIo initialIo;
+    private FfmpegInput openedInput;
     private AVCodecContext video,audio;
     private AVPacket packet;
     private AVFrame frame;
@@ -95,9 +96,16 @@ final class FfmpegDecoder implements MediaDecoder {
         acquired(CALLBACK);input.interrupt_callback().callback(callback);
     }
 
-    private void openInput(MediaSource source,byte[] initial,int index){
+    private void openInput(MediaSource source,byte[] initial,int index)throws Exception{
         AVDictionary options=new AVDictionary(null);
         try{
+            String scheme=source.uri.getScheme();
+            if(initial==null&&("http".equalsIgnoreCase(scheme)||"https".equalsIgnoreCase(scheme))){
+                openedInput=new FfmpegInput(source,input.interrupt_callback(),cancellation);
+                initial=openedInput.playlist();
+                if(initial==null)openedInput.attach(input);
+                else if(sourceContext!=null)index=sourceContext.firstPlaylist(initial,cancellation);
+            }
             configureInput(source,initial,index,options);
             // file URI保留来源身份；native文件API消费平台路径，保留空格与Unicode语义。
             String name="file".equalsIgnoreCase(source.uri.getScheme())?java.nio.file.Paths.get(source.uri).toString():source.uri.toString();
@@ -108,17 +116,20 @@ final class FfmpegDecoder implements MediaDecoder {
         }finally{av_dict_free(options);}
     }
 
-    private void configureInput(MediaSource source,byte[] initial,int index,AVDictionary options){
-        check(av_dict_set(options,"live_start_index",Integer.toString(index),0),"live_start_index");
+    static void configureOptions(MediaSource source,int index,AVDictionary options){
+        checkNative(av_dict_set(options,"live_start_index",Integer.toString(index),0),"live_start_index");
         if(!source.headers.isEmpty()){
             StringBuilder headers=new StringBuilder();
             source.headers.forEach((name,value)->headers.append(name).append(": ").append(value).append("\r\n"));
-            check(av_dict_set(options,"headers",headers.toString(),0),"headers");
+            checkNative(av_dict_set(options,"headers",headers.toString(),0),"headers");
         }
         if("http".equalsIgnoreCase(source.uri.getScheme())||"https".equalsIgnoreCase(source.uri.getScheme()))
-            check(av_dict_set(options,"rw_timeout","10000000",0),"rw_timeout");
+            checkNative(av_dict_set(options,"rw_timeout","10000000",0),"rw_timeout");
+    }
+    private void configureInput(MediaSource source,byte[] initial,int index,AVDictionary options){
+        configureOptions(source,index,options);
         if(initial!=null){
-            initialIo=new InitialPlaylistIo(initial);initialIo.attach(input);
+            initialIo=new InitialPlaylistIo(initial,source);initialIo.attach(input);
             check(av_dict_set(options,"protocol_whitelist","http,https,tcp,tls,crypto",0),"protocol_whitelist");
         }
     }
@@ -378,6 +389,9 @@ final class FfmpegDecoder implements MediaDecoder {
     }
     private void check(int result,String stage) {
         cancellation.check();
+        checkNative(result,stage);
+    }
+    static void checkNative(int result,String stage) {
         if (result<0) {
             byte[] text=new byte[256]; av_strerror(result,text,text.length);
             int length=0; while(length<text.length && text[length]!=0) length++;
@@ -393,7 +407,7 @@ final class FfmpegDecoder implements MediaDecoder {
             this::clearDeferred,this::releaseFrame,this::releasePacket,
             ()->releaseCodec(video),()->releaseCodec(audio),this::releaseScale,this::releaseResample,
             ()->releaseBuffer(rgba),()->releaseBuffer(pcm),()->releaseBuffer(rgbaPlanes),()->releaseBuffer(pcmPlanes),
-            ()->releaseBuffer(rgbaStride),this::releaseOutputLayout,this::releaseInput,this::releaseInitialIo,this::releaseCallback
+            ()->releaseBuffer(rgbaStride),this::releaseOutputLayout,this::releaseInput,this::releaseInitialIo,()->{if(openedInput!=null)openedInput.close();},this::releaseCallback
         };
         for(AutoCloseable release:releases)try{release.close();}catch(Throwable next){
             if(failure==null)failure=next;else if(failure!=next)failure.addSuppressed(next);
