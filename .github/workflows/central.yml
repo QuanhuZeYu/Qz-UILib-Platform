@@ -168,10 +168,19 @@ jobs:
           const deployment = await status();
           const purls = [...new Set(deployment.purls ?? [])];
           if (deployment.deploymentId !== id || purls.length !== expected.length || expected.some(purl => !purls.includes(purl))) throw new Error('部署内容与本仓本版 Maven 坐标不匹配');
-          if (deployment.deploymentState !== 'VALIDATED') throw new Error('部署尚未处于 VALIDATED：' + deployment.deploymentState);
-          const response = await fetch(api + 'deployment/' + encodeURIComponent(id), { method: 'POST', headers });
-          if (!response.ok) throw new Error('公开部署失败 HTTP ' + response.status);
-          const result = await status();
+          if (deployment.deploymentState === 'VALIDATED') {
+            const response = await fetch(api + 'deployment/' + encodeURIComponent(id), { method: 'POST', headers });
+            if (!response.ok) throw new Error('公开部署失败 HTTP ' + response.status);
+          } else if (!['PUBLISHING', 'PUBLISHED'].includes(deployment.deploymentState)) {
+            throw new Error('部署尚未处于 VALIDATED：' + deployment.deploymentState);
+          }
+          // 重试已受理的部署只读取状态；成功必须对应最终 PUBLISHED。
+          const deadline = Date.now() + 10 * 60 * 1000;
+          let result = await status();
+          while (result.deploymentState === 'PUBLISHING' && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 15000));
+            result = await status();
+          }
           console.log(JSON.stringify({ deploymentId: id, version, state: result.deploymentState, purls }));
-          if (!['PUBLISHING', 'PUBLISHED'].includes(result.deploymentState)) throw new Error('公开后部署状态异常：' + result.deploymentState);
+          if (result.deploymentState !== 'PUBLISHED') throw new Error('部署未完成公开：' + result.deploymentState);
           JS
