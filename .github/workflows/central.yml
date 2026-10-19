@@ -10,6 +10,11 @@ on:
         description: '发布确认短语：PUBLISH <tag>'
         required: true
         type: string
+      deploymentId:
+        description: '仅公开已 VALIDATED 的本版部署时填写 ID；留空仍只构建并上传'
+        required: false
+        default: ''
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -17,6 +22,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
+    if: inputs.deploymentId == ''
     runs-on: windows-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -132,3 +138,40 @@ jobs:
           REPOSITORY="$(cygpath -w "$PWD/.release/maven")"
           ./gradlew build "-PuilibVersion=$VERSION" "-PuilibRepository=$REPOSITORY" --no-daemon --console=plain
           ./gradlew publishToMavenCentral "-PuilibVersion=$VERSION" "-PuilibRepository=$REPOSITORY" --no-daemon --console=plain
+  release:
+    if: inputs.deploymentId != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: 公开已验证的指定部署
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+          DEPLOYMENT_ID: ${{ inputs.deploymentId }}
+          CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          node --input-type=module <<'JS'
+          const { INPUT_TAG: tag, INPUT_CONFIRM: confirm, DEPLOYMENT_ID: id, CENTRAL_USERNAME: username, CENTRAL_PASSWORD: password } = process.env;
+          if (!/^v?5\.\d+\.\d+(?:[.-](?:alpha|beta|rc)[.-]?\d+)?$/.test(tag) || confirm !== 'PUBLISH ' + tag) throw new Error('tag 或发布确认不匹配');
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new Error('deploymentId 格式无效');
+          if (!username || !password) throw new Error('Central 发布凭据未配置');
+          const version = tag.replace(/^v/, '');
+          const expected = ["font-adapter","gl-renderer","lwjgl2-adapter","lwjgl3-adapter","media-adapter","desktop"].map(name => 'pkg:maven/asia.quanhuzeyu.uilib/' + name + '@' + version);
+          const headers = { Authorization: 'Bearer ' + Buffer.from(username + ':' + password).toString('base64') };
+          const api = 'https://central.sonatype.com/api/v1/publisher/';
+          async function status() {
+            const response = await fetch(api + 'status?id=' + encodeURIComponent(id), { method: 'POST', headers });
+            if (!response.ok) throw new Error('读取部署状态失败 HTTP ' + response.status);
+            return await response.json();
+          }
+          const deployment = await status();
+          const purls = [...new Set(deployment.purls ?? [])];
+          if (deployment.deploymentId !== id || purls.length !== expected.length || expected.some(purl => !purls.includes(purl))) throw new Error('部署内容与本仓本版 Maven 坐标不匹配');
+          if (deployment.deploymentState !== 'VALIDATED') throw new Error('部署尚未处于 VALIDATED：' + deployment.deploymentState);
+          const response = await fetch(api + 'deployment/' + encodeURIComponent(id), { method: 'POST', headers });
+          if (!response.ok) throw new Error('公开部署失败 HTTP ' + response.status);
+          const result = await status();
+          console.log(JSON.stringify({ deploymentId: id, version, state: result.deploymentState, purls }));
+          if (!['PUBLISHING', 'PUBLISHED'].includes(result.deploymentState)) throw new Error('公开后部署状态异常：' + result.deploymentState);
+          JS
