@@ -9,11 +9,12 @@ apply plugin: 'com.gradleup.shadow'
 ext.platformShadowJar = ShadowJar
 
 group = 'club.heiqi.uilib'
-version = providers.gradleProperty('uilibVersion').getOrElse('4.11.1')
+// 本地开发组合由工作站 init 脚本供给项目属性；独立构建继续读取原 -P 与工程默认值。
+version = findProperty('uilibVersion') ?: '4.11.1'
 java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
 repositories {
-    if (providers.gradleProperty('uilibRepository').isPresent()) {
-        maven { url = uri(providers.gradleProperty('uilibRepository').get()); content { includeGroup 'club.heiqi.uilib' } }
+    if (findProperty('uilibRepository')) {
+        maven { url = uri(findProperty('uilibRepository')); content { includeGroup 'club.heiqi.uilib' } }
     }
     maven { name = 'mojang'; url = uri('https://libraries.minecraft.net/'); content { includeGroup 'org.lwjgl.lwjgl'; includeModule 'com.ibm.icu', 'icu4j' } }
     mavenCentral()
