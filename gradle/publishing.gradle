@@ -1,13 +1,53 @@
-def formalDependency = { node, String artifact, String classifier = null, String scope = 'compile', String dependencyGroup = 'club.heiqi.uilib', String dependencyVersion = project.version.toString() ->
+apply plugin: 'signing'
+
+// Central 与 Release Maven ZIP 复用 POM 元数据；测试消费者只随 ZIP 分发。
+def pomMetadata = { pom, String artifactName, String description ->
+    pom.name.set('Qz UILib ' + artifactName)
+    pom.description.set(description)
+    pom.url.set('https://github.com/QuanhuZeYu/Qz-UILib-Platform')
+    pom.licenses {
+        license {
+            delegate.name.set('MIT License')
+            url.set('https://opensource.org/licenses/MIT')
+            distribution.set('repo')
+        }
+    }
+    pom.developers {
+        developer {
+            delegate.id.set('QuanhuZeYu')
+            delegate.name.set('QuanhuZeYu')
+        }
+    }
+    pom.scm {
+        connection.set('scm:git:https://github.com/QuanhuZeYu/Qz-UILib-Platform.git')
+        developerConnection.set('scm:git:ssh://git@github.com/QuanhuZeYu/Qz-UILib-Platform.git')
+        url.set('https://github.com/QuanhuZeYu/Qz-UILib-Platform')
+    }
+}
+def formalDependency = { node, String artifact, String classifier = null, String scope = 'compile', String dependencyGroup = project.group.toString(), String dependencyVersion = project.version.toString() ->
     def dependency = node.appendNode('dependency')
     dependency.appendNode('groupId', dependencyGroup); dependency.appendNode('artifactId', artifact); dependency.appendNode('version', dependencyVersion)
     if (classifier != null) dependency.appendNode('classifier', classifier)
     dependency.appendNode('scope', scope)
 }
+def javadocJar = { String taskName, String baseName, javadocTask ->
+    tasks.register(taskName, Jar) {
+        archiveBaseName = baseName; archiveClassifier = 'javadoc'; from javadocTask
+        from('LICENSE'); from('THIRD-PARTY-NOTICES.md') { into 'META-INF' }
+    }
+}
 platformModules.each { module, name ->
+    def javadoc = tasks.register(module + 'Javadoc', Javadoc) {
+        source = sourceSets[module].allJava
+        classpath = sourceSets[module].compileClasspath
+        dependsOn sourceSets[module].classesTaskName
+        destinationDir = layout.buildDirectory.dir('docs/javadoc/' + name).get().asFile
+        options.encoding = 'UTF-8'; options.addStringOption('Xdoclint:none', '-quiet')
+    }
+    def javadocArtifact = javadocJar(module + 'JavadocJar', name, javadoc)
     def sources = tasks.register(module + 'SourcesJar', Jar) {
         archiveBaseName = name; archiveClassifier = 'sources'; from sourceSets[module].allSource
-        exclude 'assets/qz_uilib/runtime/**'; from('LICENSE', 'build.gradle', 'settings.gradle', 'gradle.properties')
+        exclude 'assets/qz_uilib/runtime/**'; from('LICENSE', 'THIRD-PARTY-NOTICES.md', 'build.gradle', 'settings.gradle', 'gradle.properties')
         from('gradle') { into('gradle'); exclude 'wrapper/gradle-wrapper.jar' }
         if (module == 'fontAdapter') dependsOn 'packageFontBindings'
         if (module == 'mediaAdapter') dependsOn 'packageMediaBindings'
@@ -17,10 +57,9 @@ platformModules.each { module, name ->
         artifact(platformArtifacts[name + ':21']) { classifier = null }
         artifact(platformArtifacts[name + ':8']) { classifier = 'java8' }
         artifact(sources) { classifier = 'sources' }
+        artifact(javadocArtifact) { classifier = 'javadoc' }
         pom {
-            delegate.name.set('Qz UILib ' + name)
-            description = 'Platform 正式适配；Java8 classifier 消费者显式选择同目标的上游产物。'
-            licenses { license { delegate.name.set('GNU Lesser General Public License v3.0 or later'); url.set('https://www.gnu.org/licenses/lgpl-3.0.html') } }
+            pomMetadata(delegate, name, 'Platform 正式适配；Java8 classifier 消费者显式选择同目标的上游产物。')
             withXml {
                 def dependencies = asNode().appendNode('dependencies')
                 formalDependency(dependencies,'core')
@@ -31,29 +70,61 @@ platformModules.each { module, name ->
         }
     }
 }
+def desktopJavadoc = tasks.register('desktopJavadoc', Javadoc) {
+    source = sourceSets.desktop.allJava
+    classpath = sourceSets.desktop.compileClasspath
+    dependsOn sourceSets.desktop.classesTaskName
+    destinationDir = layout.buildDirectory.dir('docs/javadoc/' + name).get().asFile
+    options.encoding = 'UTF-8'; options.addStringOption('Xdoclint:none', '-quiet')
+}
+def desktopJavadocJar = javadocJar('desktopJavadocJar', 'desktop', desktopJavadoc)
+def verificationSources = tasks.register('platformVerificationSourcesJar', Jar) {
+    archiveBaseName = 'platform-verification'; archiveClassifier = 'sources'
+    from sourceSets.test.allSource, sourceSets.mediaTest.allSource, sourceSets.lwjgl2Test.allSource, sourceSets.desktopTest.allSource
+    from('LICENSE', 'THIRD-PARTY-NOTICES.md', 'build.gradle', 'settings.gradle', 'gradle.properties')
+    from('gradle') { into('gradle'); exclude 'wrapper/gradle-wrapper.jar' }
+}
+def verificationJavadoc = tasks.register('platformVerificationJavadoc', Javadoc) {
+    source sourceSets.test.allJava, sourceSets.mediaTest.allJava, sourceSets.lwjgl2Test.allJava, sourceSets.desktopTest.allJava
+    classpath = sourceSets.test.compileClasspath + sourceSets.mediaTest.compileClasspath + sourceSets.lwjgl2Test.compileClasspath + sourceSets.desktopTest.compileClasspath
+    dependsOn sourceSets.test.classesTaskName, sourceSets.mediaTest.classesTaskName, sourceSets.lwjgl2Test.classesTaskName, sourceSets.desktopTest.classesTaskName
+    destinationDir = layout.buildDirectory.dir('docs/javadoc/' + name).get().asFile
+    options.encoding = 'UTF-8'; options.addStringOption('Xdoclint:none', '-quiet')
+}
+def verificationJavadocJar = javadocJar('platformVerificationJavadocJar', 'platform-verification', verificationJavadoc)
 def desktopSources = tasks.register('desktopSourcesJar', Jar) {
     archiveBaseName = 'desktop'; archiveClassifier = 'sources'
     from sourceSets.desktop.allSource
-    from('LICENSE', 'build.gradle', 'settings.gradle', 'gradle.properties')
+    from('LICENSE', 'THIRD-PARTY-NOTICES.md', 'build.gradle', 'settings.gradle', 'gradle.properties')
     from('gradle') { into('gradle'); exclude 'wrapper/gradle-wrapper.jar' }
 }
+def releaseStage = layout.buildDirectory.dir('release/maven')
 publishing {
     publications {
         desktop(MavenPublication) {
             artifactId = 'desktop'; artifact(desktopJar) { classifier = null }
             artifact(desktopSources) { classifier = 'sources' }
             artifact(tasks.named('desktopDist')) { classifier = 'desktop-dist'; extension = 'zip' }
-            pom.withXml {
-                def dependencies = asNode().appendNode('dependencies')
-                ['core','font-adapter','media-adapter'].each { formalDependency(dependencies,it) }
+            artifact(desktopJavadocJar) { classifier = 'javadoc' }
+            pom {
+                pomMetadata(delegate, 'desktop', '独立桌面宿主与分发产物。')
+                withXml {
+                    def dependencies = asNode().appendNode('dependencies')
+                    ['core','font-adapter','media-adapter'].each { formalDependency(dependencies,it) }
+                }
             }
         }
         verification(MavenPublication) {
             artifactId = 'platform-verification'; artifact(platformVerification) { classifier = null }
-            pom.withXml {
-                def dependencies = asNode().appendNode('dependencies')
-                formalDependency(dependencies,'core','java8'); formalDependency(dependencies,'core-verification'); formalDependency(dependencies,'gallery')
-                platformModules.values().each { formalDependency(dependencies,it,'java8') }
+            artifact(verificationSources) { classifier = 'sources' }
+            artifact(verificationJavadocJar) { classifier = 'javadoc' }
+            pom {
+                pomMetadata(delegate, 'platform-verification', 'Platform 测试消费者，不进入正式发行。')
+                withXml {
+                    def dependencies = asNode().appendNode('dependencies')
+                    formalDependency(dependencies,'core','java8'); formalDependency(dependencies,'core-verification'); formalDependency(dependencies,'gallery')
+                    platformModules.values().each { formalDependency(dependencies,it,'java8') }
+                }
             }
         }
     }
@@ -62,12 +133,47 @@ publishing {
             name = 'Workspace'
             url = uri(findProperty('uilibRepository') ?: layout.buildDirectory.dir('repository').get().asFile.absolutePath)
         }
+        maven {
+            name = 'ReleaseStage'
+            url = uri(releaseStage.get().asFile)
+        }
     }
 }
-tasks.withType(PublishToMavenRepository).configureEach {
+tasks.withType(PublishToMavenRepository).matching { it.repository?.name == 'Workspace' || it.repository?.name == 'ReleaseStage' }.configureEach {
     doFirst { if (repository.url.scheme != 'file') throw new GradleException('publishWorkspace 只写入显式本地 Maven 目录') }
+}
+// Central 与本地 ZIP 共用这一套签名入口；没有密钥时本地 build/releaseAssets 保持可用。
+def signingInMemoryKey = findProperty('signingInMemoryKey') ?: findProperty('signingKey') ?: System.getenv('ORG_GRADLE_PROJECT_signingInMemoryKey') ?: System.getenv('SIGNING_KEY')
+def signingInMemoryKeyId = findProperty('signingInMemoryKeyId') ?: System.getenv('ORG_GRADLE_PROJECT_signingInMemoryKeyId')
+def signingInMemoryKeyPassword = findProperty('signingInMemoryKeyPassword') ?: findProperty('signingPassword') ?: System.getenv('ORG_GRADLE_PROJECT_signingInMemoryKeyPassword') ?: System.getenv('SIGNING_PASSWORD') ?: ''
+if (signingInMemoryKey) {
+    signing {
+        useInMemoryPgpKeys(signingInMemoryKeyId as String, signingInMemoryKey as String, signingInMemoryKeyPassword as String)
+        sign publishing.publications
+    }
+}
+mavenPublishing { publishToMavenCentral(false) }
+tasks.withType(PublishToMavenRepository).matching { it.repository?.name == 'mavenCentral' }.configureEach {
+    // 只约束 Central，Workspace 与 ReleaseStage 仍保留完整测试消费者。
+    onlyIf('Central 只发布生产 publication') { publication.name in ['fontAdapter', 'glRenderer', 'lwjgl2', 'lwjgl3', 'mediaAdapter', 'desktop'] }
+    doFirst { if (!signingInMemoryKey) throw new GradleException('Maven Central 发布缺少 signingInMemoryKey（或 SIGNING_KEY）') }
 }
 tasks.register('publishWorkspace') {
     group = 'publishing'; description = '将 Platform 正式双目标与独立验证产物写入本地 Maven 仓'
-    dependsOn tasks.withType(PublishToMavenRepository).matching { it.repository.name == 'Workspace' }
+    dependsOn tasks.withType(PublishToMavenRepository).matching { it.repository?.name == 'Workspace' }
+}
+// 发布资产只取本次发布阶段目录，避免 build/distributions 的旧版本残留混入。
+def prepareReleaseStage = tasks.register('prepareReleaseStage', Delete) {
+    delete releaseStage
+}
+tasks.withType(PublishToMavenRepository).matching { it.repository?.name == 'ReleaseStage' }.configureEach {
+    dependsOn prepareReleaseStage
+}
+tasks.register('releaseAssets', Zip) {
+    group = 'publishing'; description = '把本次版本的 Maven 布局写成固定名发布 ZIP'
+    dependsOn tasks.withType(PublishToMavenRepository).matching { it.repository?.name == 'ReleaseStage' }
+    archiveFileName = "qz-uilib-platform-${version}-maven.zip"
+    destinationDirectory = layout.buildDirectory.dir('release')
+    from releaseStage
+    if (signingInMemoryKey) dependsOn tasks.withType(org.gradle.plugins.signing.Sign)
 }

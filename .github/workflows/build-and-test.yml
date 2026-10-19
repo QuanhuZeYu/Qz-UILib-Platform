@@ -1,22 +1,34 @@
 name: Platform build
 on:
+  push:
+  pull_request:
   workflow_dispatch:
     inputs:
-      uilib_repository:
-        description: 'Core 正式与测试产物的 Maven 仓库 URL'
-        required: true
-        type: string
       uilib_version:
-        description: '明确选择的 UILib 产物版本'
-        required: true
-        default: '4.11.1'
+        description: 'UILib 版本；留空使用 gradle.properties'
+        required: false
         type: string
+      uilib_core_tag:
+        description: 'Core Release tag；留空使用 gradle.properties 的 uilibCoreTag'
+        required: false
+        type: string
+      uilib_repository:
+        description: '可选显式 Maven URL；留空则下载同 tag 的 Core Maven ZIP'
+        required: false
+        type: string
+permissions:
+  contents: read
 jobs:
   build:
-    # 完整场景需要实际窗口、GL 设备与音频设备。
-    runs-on: [self-hosted, Windows, X64, qz-desktop]
+    runs-on: windows-latest
+    env:
+      INPUT_VERSION: ${{ inputs.uilib_version }}
+      INPUT_CORE_TAG: ${{ inputs.uilib_core_tag }}
+      EXPLICIT_REPOSITORY: ${{ inputs.uilib_repository }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,16 +37,47 @@ jobs:
             21
             25
       - uses: gradle/actions/setup-gradle@v4
-      - name: 构建完整 Platform 与真实桌面场景
-        shell: cmd
-        run: gradlew.bat build "-PuilibVersion=%UILIB_VERSION%" "-PuilibRepository=%UILIB_REPOSITORY%"
+      - name: 解析版本与 Core 来源
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${INPUT_VERSION:-$(sed -n 's/^uilibVersion=//p' gradle.properties | tr -d '\r')}"
+          CORE_TAG="${INPUT_CORE_TAG:-$(sed -n 's/^uilibCoreTag=//p' gradle.properties | tr -d '\r')}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "CORE_TAG=$CORE_TAG" >> "$GITHUB_ENV"
+      - name: 下载同 tag Core Maven ZIP
+        if: env.EXPLICIT_REPOSITORY == ''
+        shell: bash
         env:
-          UILIB_REPOSITORY: ${{ inputs.uilib_repository }}
-          UILIB_VERSION: ${{ inputs.uilib_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf .release
+          mkdir -p .release/core .release/maven
+          if ! gh release download "$CORE_TAG" --repo QuanhuZeYu/Qz-UILib-Core \
+            --pattern "qz-uilib-core-$VERSION-maven.zip" --dir .release/core --clobber; then
+            echo "需要先发布 Core $CORE_TAG 的同版本 Maven ZIP（发布顺序 Core → Platform）" >&2
+            exit 1
+          fi
+          tar -xf ".release/core/qz-uilib-core-$VERSION-maven.zip" -C .release/maven
+      - name: 完整构建与发布资产
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$EXPLICIT_REPOSITORY" ]]; then
+            REPOSITORY="$EXPLICIT_REPOSITORY"
+          else
+            REPOSITORY="$(cygpath -w "$PWD/.release/maven")"
+          fi
+          ./gradlew build releaseAssets "-PuilibVersion=$VERSION" "-PuilibRepository=$REPOSITORY" --no-daemon --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-maven-zip
+          path: build/release/qz-uilib-platform-*-maven.zip
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: platform-results
           path: |
             build/reports
-            build/distributions

@@ -4,17 +4,23 @@ buildscript {
     repositories { mavenCentral(); gradlePluginPortal() }
     dependencies { classpath 'com.gradleup.shadow:shadow-gradle-plugin:9.2.2' }
 }
-plugins { id 'java-library'; id 'maven-publish' }
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'com.vanniktech.maven.publish.base' version '0.37.0'
+}
 apply plugin: 'com.gradleup.shadow'
 ext.platformShadowJar = ShadowJar
 
-group = 'club.heiqi.uilib'
 // 本地开发组合由工作站 init 脚本供给项目属性；独立构建继续读取原 -P 与工程默认值。
-version = findProperty('uilibVersion') ?: '4.11.1'
+version = findProperty('uilibVersion') ?: '5.0.0-beta1'
+// 旧版调用仍使用历史坐标；新系列默认使用已验证的 Central namespace。
+group = findProperty('uilibGroup') ?: (version.toString().tokenize('.')[0].toInteger() >= 5 ? 'asia.quanhuzeyu.uilib' : 'club.heiqi.uilib')
+def uilibGroup = project.group.toString()
 java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
 repositories {
     if (findProperty('uilibRepository')) {
-        maven { url = uri(findProperty('uilibRepository')); content { includeGroup 'club.heiqi.uilib' } }
+        maven { url = uri(findProperty('uilibRepository')); content { includeGroup uilibGroup } }
     }
     maven { name = 'mojang'; url = uri('https://libraries.minecraft.net/'); content { includeGroup 'org.lwjgl.lwjgl'; includeModule 'com.ibm.icu', 'icu4j' } }
     mavenCentral()
@@ -24,12 +30,12 @@ configurations {
     gallery; coreVerification; coreContent
 }
 dependencies {
-    coreDevelopment8("club.heiqi.uilib:core:${version}:development-java8") { transitive = false }
-    coreDevelopment21("club.heiqi.uilib:core:${version}:development") { transitive = false }
-    coreRuntime8("club.heiqi.uilib:core:${version}:java8") { transitive = false }
-    coreRuntime21("club.heiqi.uilib:core:${version}") { transitive = false }
-    gallery("club.heiqi.uilib:gallery:${version}") { transitive = false }
-    coreVerification("club.heiqi.uilib:core-verification:${version}") { transitive = false }
+    coreDevelopment8("${uilibGroup}:core:${version}:development-java8") { transitive = false }
+    coreDevelopment21("${uilibGroup}:core:${version}:development") { transitive = false }
+    coreRuntime8("${uilibGroup}:core:${version}:java8") { transitive = false }
+    coreRuntime21("${uilibGroup}:core:${version}") { transitive = false }
+    gallery("${uilibGroup}:gallery:${version}") { transitive = false }
+    coreVerification("${uilibGroup}:core-verification:${version}") { transitive = false }
     coreContent 'com.ibm.icu:icu4j:76.1'
     coreContent 'org.yaml:snakeyaml:2.4'
     coreContent 'org.commonmark:commonmark:0.21.0'
@@ -101,7 +107,7 @@ platformModules.each { module, artifactName ->
             from sourceSets[module + (target == 21 ? '21' : '')].output
             configurations = []; enableAutoRelocation = false
             contentPackages.each { relocate it, 'club.heiqi.uilib.shadow.' + it }
-            from('LICENSE')
+            from('LICENSE'); from('THIRD-PARTY-NOTICES.md') { into 'META-INF' }
             exclude 'META-INF/versions/**', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class'
             duplicatesStrategy = DuplicatesStrategy.EXCLUDE
         }

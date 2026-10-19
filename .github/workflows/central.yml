@@ -1,0 +1,134 @@
+name: Platform Central publish
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已存在的 Platform 与 Core 发布 tag，例如 5.0.0-beta1 或 v5.0.0-beta1'
+        required: true
+        type: string
+      confirm:
+        description: '发布确认短语：PUBLISH <tag>'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: central-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 校验 tag、确认短语与版本
+        id: version
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          TAG="$INPUT_TAG"
+          if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-](alpha|beta|rc)[.-]?[0-9]+)?$ ]]; then
+            echo "tag 格式无效：$TAG" >&2; exit 1
+          fi
+          if [[ "$INPUT_CONFIRM" != "PUBLISH $TAG" ]]; then
+            echo "确认短语不匹配：需要 PUBLISH $TAG" >&2; exit 1
+          fi
+          VERSION="${TAG#v}"
+          DECLARED="$(sed -n 's/^uilibVersion=//p' gradle.properties | tr -d '\r')"
+          if [[ "$DECLARED" != "$VERSION" ]]; then
+            echo "gradle.properties 版本 $DECLARED 与 tag $TAG 不一致" >&2; exit 1
+          fi
+          git fetch --force --tags origin
+          if [[ "$(git rev-parse "refs/tags/$TAG^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+            echo "tag $TAG 未指向本次检出的提交" >&2; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 下载同 tag Core Maven ZIP
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_TAG: ${{ inputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf .release
+          mkdir -p .release/core .release/maven
+          if ! gh release download "$CORE_TAG" --repo QuanhuZeYu/Qz-UILib-Core \
+            --pattern "qz-uilib-core-$VERSION-maven.zip" --dir .release/core --clobber; then
+            echo "需要先发布 Core $CORE_TAG 的同版本 Maven ZIP（发布顺序 Core → Platform）" >&2
+            exit 1
+          fi
+          tar -xf ".release/core/qz-uilib-core-$VERSION-maven.zip" -C .release/maven
+      - name: 无凭据完整构建
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          REPOSITORY="$(cygpath -w "$PWD/.release/maven")"
+          ./gradlew build "-PuilibVersion=$VERSION" "-PuilibRepository=$REPOSITORY" --no-daemon --console=plain
+  publish:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 下载同 tag Core Maven ZIP
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_TAG: ${{ inputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf .release
+          mkdir -p .release/core .release/maven
+          if ! gh release download "$CORE_TAG" --repo QuanhuZeYu/Qz-UILib-Core \
+            --pattern "qz-uilib-core-$VERSION-maven.zip" --dir .release/core --clobber; then
+            echo "需要先发布 Core $CORE_TAG 的同版本 Maven ZIP（发布顺序 Core → Platform）" >&2
+            exit 1
+          fi
+          tar -xf ".release/core/qz-uilib-core-$VERSION-maven.zip" -C .release/maven
+      - name: 签名并上传 Central Portal
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_IN_MEMORY_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          REPOSITORY="$(cygpath -w "$PWD/.release/maven")"
+          ./gradlew build "-PuilibVersion=$VERSION" "-PuilibRepository=$REPOSITORY" --no-daemon --console=plain
+          ./gradlew publishToMavenCentral "-PuilibVersion=$VERSION" "-PuilibRepository=$REPOSITORY" --no-daemon --console=plain

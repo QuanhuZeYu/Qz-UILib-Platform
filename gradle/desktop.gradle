@@ -3,7 +3,7 @@ ext.desktopJar = tasks.register('desktopJar', platformShadowJar) {
     from sourceSets.desktop.output, sourceSets.glRenderer21.output, sourceSets.lwjgl321.output
     configurations = [project.configurations.fontNativeRuntime]; enableAutoRelocation = false
     contentPackages.each { relocate it, 'club.heiqi.uilib.shadow.' + it }
-    from('LICENSE')
+    from('LICENSE'); from('THIRD-PARTY-NOTICES.md') { into 'META-INF' }
     exclude 'META-INF/versions/**', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class'
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest.attributes('Main-Class':'club.heiqi.uilib.host.desktop.DesktopApplication', 'UILib-Native-Platform':System.getProperty('os.name'), 'UILib-Native-Architecture':System.getProperty('os.arch'))
