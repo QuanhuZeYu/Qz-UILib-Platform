@@ -160,8 +160,11 @@ public final class DesktopSettingsVerification extends TestApplication {
         input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_PRESS,0);input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_RELEASE,0);w.frame();require(!hasText(w,"添加字体来源")&&visible(w,"完成字体编辑"),"ESC未返回字体管理");
         input.click("完成字体编辑");
         input.click("管理字体来源");int sources=current(w).size();
-        for(int i=0;i<sources;i++)input.click("移除");
-        require(visible(w,"未配置字体候选。不会自动补入默认字体。"),"移除最后一项未呈现合法空列表");
+        for(int i=0;i<sources;i++){
+            // 上一项删除后，下一项沿弹簧重排；从已复位的共同几何取点击坐标。
+            settleReorder(w);input.click("移除");
+        }
+        require(!hasText(w,"移除")&&visible(w,"+ 添加来源"),"移除最后一项未保留合法空列表及添加入口");
         screenshot(w,output.resolve("settings-font-empty.png"));
         input.click("完成字体编辑");
         w.domain.execute(() -> require(w.page.runtime().focusRouter().focused().get()!=null
@@ -171,7 +174,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         input.click("保存到文件");input.click("配置文件");input.click("从文件重新加载");settle(w);
         require(current(w).isEmpty(),"已保存空列表重新加载后被补回");
         input.click("外观");input.click("管理字体来源");
-        require(visible(w,"未配置字体候选。不会自动补入默认字体。")&&!visible(w,"移除"),"空值重开管理未保持实际空态");
+        require(!hasText(w,"移除")&&visible(w,"+ 添加来源"),"空值重开管理未保持实际空态");
         input.click("恢复默认");input.click("完成字体编辑");input.click("应用全部更改");settle(w);input.click("保存到文件");
         System.out.println("SETTINGS emptySources=true removeLast=true applySaveReloadEmpty=true reopenEmptyManager=true returnFocus=true restoreDefaults=true");
     }
@@ -257,8 +260,8 @@ public final class DesktopSettingsVerification extends TestApplication {
                 pathStyle.candidates().subList(1,pathStyle.candidates().size()));
         require(Math.abs(window.fonts.layout("i",uiOnly,4096).advanceWidth-window.fonts.layout("W",uiOnly,4096).advanceWidth)>0.001f,
                 "更换正式候选后仍被固定advance伪装等宽");
-        buttonFocus(window,events,"从文件重新加载",false);
-        events.click("外观");buttonFocus(window,events,"外观",true);
+        buttonFocus(window,events,"从文件重新加载");
+        events.click("外观");buttonFocus(window,events,"外观");
         events.click("管理字体来源");events.click("+ 添加来源");events.click("本地字体文件");clickField(window,events);
         SceneNode editor=focused(window);
         window.domain.execute(() -> require(editor!=null&&editor.control().acceptsTextInput(editor)
@@ -311,11 +314,11 @@ public final class DesktopSettingsVerification extends TestApplication {
         long started=System.nanoTime();
         do {window.frame();Thread.sleep(10);} while(System.nanoTime()-started<nanos);
     }
-    private static void buttonFocus(DesktopWindow window,DesktopTestInput events,String name,boolean ownOutline) throws Exception {
+    private static void buttonFocus(DesktopWindow window,DesktopTestInput events,String name) throws Exception {
         events.click(name);SceneNode target=focused(window);
         require(target!=null&&name.equals(target.text()),"点击普通按钮未取得逻辑焦点："+name);
         window.domain.execute(() -> require(!window.page.runtime().focusRouter().focusVisible(target),"鼠标按钮错误显示键盘焦点："+name));
-        SceneNode surface=ownOutline?target:target.parent();int pointerEdge=edgePixel(window,surface);
+        SceneNode surface=target;int pointerEdge=edgePixel(window,surface);
         press(window,events,GLFW_KEY_TAB,0);
         for(int attempt=0;attempt<80&&focused(window)!=target;attempt++)press(window,events,GLFW_KEY_TAB,0);
         require(focused(window)==target,"真实Tab未回到目标按钮："+name);
@@ -338,14 +341,33 @@ public final class DesktopSettingsVerification extends TestApplication {
         List<SceneGeometryView.Entry> handles=geometry(w).ordered().stream().filter(e -> "::".equals(e.node.text())&&hit(e).height>0)
                 .collect(java.util.stream.Collectors.toList());
         require(handles.size()>=2,"字体来源没有两个可见拖动把手");
-        club.heiqi.uilib.ui.scene.layout.LayoutBox first=hit(handles.get(0)),second=geometry(w,handles.get(1).node.parent()).box;
-        int x=first.x+first.width/2,y=first.y+first.height/2,target=second.y+second.height-3;
+        club.heiqi.uilib.ui.scene.layout.LayoutBox first=geometry(w,handles.get(0).node.parent()).box,
+                second=geometry(w,handles.get(1).node.parent()).box;
+        require(first.width>=44&&first.height>=44,"字体排序把手没有可操作的外围热区");
+        int x=first.x+2,y=first.y+first.height/2,target=second.y+second.height-3;
+        require(x<handles.get(0).box.x,"拖动未覆盖标记之外的把手留白");
         input.point(x,y);input.mouse.invoke(w.handle(),0,GLFW_PRESS,0);w.frame();
         input.point(x+1,target);w.frame();
         screenshot(w,w.configPath.getParent().resolve(cancel?"settings-font-drag-cancel.png":"settings-font-drag-active.png"));
         if(cancel){input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_PRESS,0);input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_RELEASE,0);w.frame();}
         input.mouse.invoke(w.handle(),0,GLFW_RELEASE,0);w.frame();
         require(visible(w,"完成字体编辑"),"字体拖动错误关闭模态");
+    }
+    private static void settleReorder(DesktopWindow window){
+        long deadline=System.nanoTime()+5_000_000_000L;
+        do{
+            window.frame();boolean[] moving={false};
+            window.domain.execute(()->{
+                club.heiqi.uilib.ui.scene.layout.SceneLayoutPresentation positions=window.page.runtime().layoutPresentation(true);
+                club.heiqi.uilib.ui.scene.layout.LayoutBox origin=new club.heiqi.uilib.ui.scene.layout.LayoutBox(0,0,0,0);
+                for(SceneGeometryView.Entry entry:geometry(window).ordered()){
+                    club.heiqi.uilib.ui.scene.layout.LayoutBox projected=positions.place(entry.node,origin);
+                    if(projected.x!=0||projected.y!=0){moving[0]=true;break;}
+                }
+            });
+            if(!moving[0])return;
+        }while(System.nanoTime()<deadline);
+        throw new AssertionError("排序行在实机等待界限内未回到目标几何");
     }
     private static List<String> current(DesktopWindow w){final List<String>[] result=new List[1];w.domain.execute(() -> result[0]=new ArrayList<>(w.configuration.get(w.fontCandidates)));return result[0];}
     private static ThemeMode currentTheme(DesktopWindow w){final ThemeMode[] result={null};w.domain.execute(() -> result[0]=w.configuration.get(ThemeConfiguration.KEY));return result[0];}
