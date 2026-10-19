@@ -167,7 +167,7 @@ jobs:
           }
           const deployment = await status();
           const purls = [...new Set(deployment.purls ?? [])];
-          if (deployment.deploymentId !== id || purls.length !== expected.length || expected.some(purl => !purls.includes(purl))) throw new Error('部署内容与本仓本版 Maven 坐标不匹配');
+          if (deployment.deploymentId !== id || purls.length !== expected.length || expected.some(purl => !purls.includes(purl))) throw new Error('部署内容与本仓本版 Maven 坐标不匹配：' + JSON.stringify({ deploymentId: deployment.deploymentId, state: deployment.deploymentState, purls }));
           if (deployment.deploymentState === 'VALIDATED') {
             const response = await fetch(api + 'deployment/' + encodeURIComponent(id), { method: 'POST', headers });
             if (!response.ok) throw new Error('公开部署失败 HTTP ' + response.status);
