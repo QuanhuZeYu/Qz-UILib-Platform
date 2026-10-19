@@ -84,6 +84,16 @@ public final class DesktopDropSortVerification extends TestApplication {
             options = ctx.domain().signal(scope.draggable("source", new SceneDraggable.Options().overlay(preview)
                     .onDrop(value -> finalDrag = value)));
             source = SceneDraggable.create(ctx, body, state, options);
+            if (releaseProbe != null) source.bind((runtime, node, owner) -> {
+                owner.own(runtime.observeGeometry(node, view -> {
+                    // 输入先准备当批几何，整页 paint 留到回放；不能以历史 paint 判断 UP 的最终 Entry。
+                    releaseProbe.entry = view == null ? null : view.get(releaseProbe.overlay ? preview : body);
+                }));
+                return new club.heiqi.uilib.ui.scene.runtime.BindingActivation() {
+                    public void refresh() {}
+                    public void close() {}
+                };
+            });
             source.bind(NodeBinding.value(sourceVisible, SceneNode::visible));
             first = SceneDroppable.create(ctx, scope, "A", target("目标 A"),
                     () -> new SceneDroppable.Options<String>().accepts(key -> { if (failNext) { failNext = false; throw failure; } return accept.get(); }));
@@ -118,12 +128,12 @@ public final class DesktopDropSortVerification extends TestApplication {
         DropPage page = new DropPage(collision);
         try (DesktopWindow w = open(page, "collision-" + collision)) {
             DesktopTestInput input = new DesktopTestInput(w);
-            pickup(w, input, page.source); pointAt(w, input, page.first);
+            pickup(w, input, page.source); pointAt(w, input, page.first, page.scope);
             require("A".equals(over(w, page)), "未沿当前几何命中 A：" + over(w, page));
             save(w, output.resolve("droppable-" + collision + "-active.png"));
             release(w, input);
             require(page.drops == 1 && "A".equals(page.last) && !active(w, page), "正常放下未发布一次 A");
-            pickup(w, input, page.source); pointAt(w, input, page.second); key(w, input, GLFW_KEY_ESCAPE); release(w, input);
+            pickup(w, input, page.source); pointAt(w, input, page.second, page.scope); key(w, input, GLFW_KEY_ESCAPE); release(w, input);
             require(page.drops == 1 && !active(w, page), "取消仍投放或遗留会话");
             require(glGetError() == GL_NO_ERROR, "接收回放GL错误");
         }
@@ -161,7 +171,7 @@ public final class DesktopDropSortVerification extends TestApplication {
             require(glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_FALSE, "边缘验证必须隐藏窗口");
             DesktopTestInput input = new DesktopTestInput(w);
             LayoutBox start = geometry(w, source[0]).box;
-            pickup(w, input, source[0]); move(w, input, w.width() - 2, w.height() - 2);
+            pickup(w, input, source[0]); move(w, input, w.width() - 2, w.height() - 2, scope[0]);
             LayoutBox edge = geometry(w, preview[0]).box;
             require(edge.x + edge.width == w.width() && edge.y + edge.height == w.height(), "Bounds.NONE 预览未统一限位窗口右下");
             requireDragGeometry(w, scope[0], state[0], start, edge, "old-box");
@@ -196,9 +206,11 @@ public final class DesktopDropSortVerification extends TestApplication {
         return a != null && b != null && a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
     }
 
-    /** 只记录正式 paint 收到的 Entry，断言不参与生产位置求解。 */
+    /** 只观察同批正式几何，绘制只消费该几何，不参与生产位置求解。 */
     private static final class ReleaseGeometryProbe implements club.heiqi.uilib.ui.scene.control.SceneControl {
+        final boolean overlay;
         club.heiqi.uilib.ui.scene.layout.SceneGeometryView.Entry entry;
+        ReleaseGeometryProbe(boolean overlay) { this.overlay = overlay; }
         public club.heiqi.uilib.ui.scene.layout.MeasuredSize measure(SceneNode node,
                 club.heiqi.uilib.ui.scene.layout.Constraints constraints, club.heiqi.uilib.ui.scene.text.SceneTextMeasurer text) {
             return new club.heiqi.uilib.ui.scene.layout.MeasuredSize(0, 0);
@@ -214,12 +226,12 @@ public final class DesktopDropSortVerification extends TestApplication {
         }
         public void paint(SceneNode node, club.heiqi.uilib.ui.scene.layout.SceneGeometryView geometry,
                 club.heiqi.uilib.ui.scene.paint.PaintPlanBuilder paint) {
-            entry = geometry.get(node);
-            paint.add(club.heiqi.uilib.ui.scene.paint.PaintCommand.rect(entry.box, entry.clip, node.background()));
+            club.heiqi.uilib.ui.scene.layout.SceneGeometryView.Entry current = geometry.get(node);
+            paint.add(club.heiqi.uilib.ui.scene.paint.PaintCommand.rect(current.box, current.clip, node.background()));
         }
     }
     private void releaseWithoutMove(SceneDragDrop.Collision collision, boolean overlay, SceneDraggable.Bounds bounds) throws Exception {
-        DropPage page = new DropPage(collision); page.releaseProbe = new ReleaseGeometryProbe();
+        DropPage page = new DropPage(collision); page.releaseProbe = new ReleaseGeometryProbe(overlay);
         try (DesktopWindow w = open(page, "up-only-" + collision + "-" + overlay + "-" + bounds)) {
             w.domain.execute(() -> {
                 // 声明变更在输入前完成；无 overlay 时直接使用同一普通内容 Entry。
@@ -231,7 +243,7 @@ public final class DesktopDropSortVerification extends TestApplication {
             w.frame();
             DesktopTestInput input = new DesktopTestInput(w);
             LayoutBox start = geometry(w, page.source).box, destination = geometry(w, page.second).box;
-            pickup(w, input, page.source); pointAt(w, input, page.first);
+            pickup(w, input, page.source); pointAt(w, input, page.first, page.scope);
             require("A".equals(over(w, page)), "无MOVE-UP反例没有先在 A 建立活动反馈");
             int x = destination.x + destination.width / 2, y = destination.y + destination.height / 2;
             int expectedX = x - 12, expectedY = y - 12;
@@ -246,7 +258,7 @@ public final class DesktopDropSortVerification extends TestApplication {
             require(page.lastBox.x == expectedX && page.lastBox.y == expectedY
                     && page.lastBox.width == 140 && page.lastBox.height == 110, "UP 未正式排列新坐标或边界解错误");
             require(page.entryAtDrop != null && sameBox(page.entryAtDrop.box, page.lastBox),
-                    "UP observer 不是消费正式 paint 的同一最终 Entry");
+                    "UP observer 未消费当批正式几何的最终 Entry");
             require(page.finalDrag != null && page.finalDrag.deltaX == expectedX - start.x
                     && page.finalDrag.deltaY == expectedY - start.y, "UP 有效 delta 与当前 Entry 不同");
             require(page.releaseX == x && page.releaseY == y, "POINTER 接收点未使用 UP 新坐标");
@@ -263,23 +275,24 @@ public final class DesktopDropSortVerification extends TestApplication {
         DropPage page = new DropPage(SceneDragDrop.Collision.POINTER);
         try (DesktopWindow w = open(page, "dynamic-targets")) {
             DesktopTestInput input = new DesktopTestInput(w);
-            pickup(w, input, page.source); pointAt(w, input, page.first);
+            pickup(w, input, page.source); pointAt(w, input, page.first, page.scope);
             w.domain.execute(() -> page.accept.set(false)); w.frame();
-            require(over(w, page) == null, "静止指针下接收规则变化未失效"); release(w, input);
+            // 接收重判沿输入周期推进；呈现帧不限频，必须等待实际状态，不假定一帧已跨过采样门。
+            await(w, () -> over(w, page) == null, "静止指针下接收规则变化未失效"); release(w, input);
             require(page.drops == 0, "失格接收区仍提交");
             w.domain.execute(() -> page.accept.set(true)); w.frame();
-            pickup(w, input, page.source); pointAt(w, input, page.first);
+            pickup(w, input, page.source); pointAt(w, input, page.first, page.scope);
             w.domain.execute(() -> page.attached.set(false)); w.frame();
-            require(over(w, page) == null, "卸载目标仍保留候选"); release(w, input);
+            await(w, () -> over(w, page) == null, "卸载目标仍保留候选"); release(w, input);
             require(page.drops == 0, "卸载目标收到晚UP");
             w.domain.execute(() -> page.attached.set(true)); settle(w);
-            pickup(w, input, page.source); pointAt(w, input, page.first); release(w, input);
+            pickup(w, input, page.source); pointAt(w, input, page.first, page.scope); release(w, input);
             require(page.drops == 1, "重挂目标重复注册或未接收");
-            pickup(w, input, page.source); pointAt(w, input, page.second);
+            pickup(w, input, page.source); pointAt(w, input, page.second, page.scope);
             w.domain.execute(() -> page.sourceVisible.set(false)); w.frame();
             w.domain.execute(() -> page.sourceVisible.set(true)); w.frame(); release(w, input);
             require(page.drops == 1 && !active(w, page), "来源失格后尾部复活");
-            pickup(w, input, page.source); pointAt(w, input, page.second);
+            pickup(w, input, page.source); pointAt(w, input, page.second, page.scope);
             w.domain.execute(() -> page.options.set(page.scope.draggable("replacement", new SceneDraggable.Options()))); w.frame(); release(w, input);
             require(page.drops == 1 && !active(w, page), "中途替换来源把旧手势提交为新身份");
         }
@@ -289,11 +302,11 @@ public final class DesktopDropSortVerification extends TestApplication {
         try (DesktopWindow w = open(page, "target-eligibility")) {
             DesktopTestInput input = new DesktopTestInput(w);
             LayoutBox hidden = geometry(w, page.clipped).box;
-            pickup(w, input, page.source); move(w, input, hidden.x + hidden.width - 8, hidden.y + 20);
+            pickup(w, input, page.source); move(w, input, hidden.x + hidden.width - 8, hidden.y + 20, page.scope);
             require(over(w, page) == null, "clip 隐藏部分参与接收"); release(w, input);
-            pickup(w, input, page.source); pointAt(w, input, page.passive);
+            pickup(w, input, page.source); pointAt(w, input, page.passive, page.scope);
             require(over(w, page) == null, "PASSIVE 层参与接收"); release(w, input);
-            pickup(w, input, page.source); pointAt(w, input, page.first);
+            pickup(w, input, page.source); pointAt(w, input, page.first, page.scope);
             w.domain.execute(() -> page.modal.set(true)); w.frame(); release(w, input);
             require(page.drops == 0 && !active(w, page), "模态隔离仍向后台投放");
         }
@@ -312,7 +325,9 @@ public final class DesktopDropSortVerification extends TestApplication {
             key(w, input, GLFW_KEY_SPACE); key(w, input, GLFW_KEY_RIGHT); key(w, input, GLFW_KEY_ESCAPE);
             require(page.drops == 1 && !active(w, page), "键盘取消误投放");
             key(w, input, GLFW_KEY_ENTER);
-            for (int i = 0; i < 3; i++) key(w, input, GLFW_KEY_RIGHT);
+            // 验证真实键盘可达，不把拾取时已有候选误算成固定的按键次数。
+            int remaining = geometry(w).ordered().size();
+            while (!"clipped".equals(over(w, page)) && remaining-- > 0) key(w, input, GLFW_KEY_RIGHT);
             require("clipped".equals(over(w, page)), "部分裁剪接收区未保持键盘可达：" + over(w, page));
             key(w, input, GLFW_KEY_ESCAPE);
         }
@@ -320,6 +335,10 @@ public final class DesktopDropSortVerification extends TestApplication {
     private void keyboardFailure() throws Exception {
         DropPage page = new DropPage(SceneDragDrop.Collision.POINTER);
         try (DesktopWindow w = open(page, "keyboard-failure")) {
+            // 普通内容几何始终存在，确保拾取和方向键在本次 handler 内实际触达失败规则。
+            // 独立预览的出现与释放另由无前置 MOVE 的 UP 组合覆盖。
+            w.domain.execute(() -> page.options.set(page.scope.draggable("source", new SceneDraggable.Options())));
+            w.frame();
             DesktopTestInput input = new DesktopTestInput(w);
             w.domain.execute(() -> require(w.page.runtime().focusRouter().request(w.page.runtime().captureMount(page.source)), "正式来源焦点失败"));
             for (boolean direction : new boolean[]{false, true}) {
@@ -350,7 +369,7 @@ public final class DesktopDropSortVerification extends TestApplication {
         })) {
             settle(w); DesktopTestInput input = new DesktopTestInput(w); pickup(w, input, source[0]);
             LayoutBox viewport = hit(geometry(w, list[0])); int x = viewport.x + 120, y = viewport.y + viewport.height - 2;
-            move(w, input, x, y);
+            move(w, input, x, y, scope[0]);
             for (int i = 0; i < 18; i++) {
                 Thread.sleep(20); w.frame(); Integer expected = null;
                 for (club.heiqi.uilib.ui.scene.layout.SceneGeometryView.Entry entry : geometry(w).ordered())
@@ -409,6 +428,27 @@ public final class DesktopDropSortVerification extends TestApplication {
     }
     static void pointAt(DesktopWindow w, DesktopTestInput input, SceneNode node) {
         LayoutBox box = hit(geometry(w, node)); move(w, input, box.x + box.width / 2, box.y + box.height / 2);
+    }
+    private static void pointAt(DesktopWindow w, DesktopTestInput input, SceneNode node, SceneDragDrop<?> scope) {
+        LayoutBox box = hit(geometry(w, node));
+        move(w, input, box.x + box.width / 2, box.y + box.height / 2, scope);
+    }
+    private static void move(DesktopWindow w, DesktopTestInput input, int x, int y, SceneDragDrop<?> scope) {
+        move(w, input, x, y);
+        // 一个呈现帧不保证跨过连续输入采样门；只等坐标到达，不等待目标选择成功。
+        boolean[] consumed = {false};
+        await(w, () -> {
+            w.domain.execute(() -> {
+                SceneDragDrop.Snapshot<?> value = scope.snapshot().get();
+                consumed[0] = value.active && !value.keyboard && value.x == x && value.y == y;
+            });
+            return consumed[0];
+        }, "已提交的 MOVE 未到达当前拖放会话：" + x + "," + y);
+    }
+    private static void await(DesktopWindow w, java.util.function.BooleanSupplier condition, String message) {
+        long deadline = System.nanoTime() + 5_000_000_000L;
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) DesktopTestFrames.frames(w, 1);
+        require(condition.getAsBoolean(), message);
     }
     static void down(DesktopWindow w, DesktopTestInput input, int x, int y) {
         input.point(x, y); input.mouse.invoke(w.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0); w.frame();

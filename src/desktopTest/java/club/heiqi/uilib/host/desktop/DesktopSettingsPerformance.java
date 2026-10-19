@@ -96,8 +96,8 @@ public final class DesktopSettingsPerformance {
                 sample(window, input, cursor, mode, "font-modal-hover8", 8, 1000, false, null);
                 List<SceneGeometryView.Entry> handles = DesktopSettingsVerification.fontHandles(window);
                 require(handles.size() >= 2 && original.size() >= 2, "字体排序基准至少需要两行");
-                SceneNode handle = handles.get(0).node.parent();
-                LayoutBox second = DesktopTestInput.geometry(window, handles.get(1).node.parent()).box;
+                SceneNode handle = handles.get(0).node;
+                LayoutBox second = handles.get(1).box;
                 int releaseX = second.x + second.width / 2, releaseY = second.y + second.height - 1;
                 input.moveTo(handle);
                 input.mouse.invoke(window.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0);

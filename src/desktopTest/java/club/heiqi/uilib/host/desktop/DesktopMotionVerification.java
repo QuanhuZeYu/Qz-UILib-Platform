@@ -6,6 +6,8 @@ import club.heiqi.uilib.testing.TestApplication;
 import club.heiqi.uilib.testing.gallery.MotionPage;
 import club.heiqi.uilib.testing.gallery.TestGallery;
 import club.heiqi.uilib.ui.reactive.ReadableSignal;
+import club.heiqi.uilib.ui.scene.control.SceneLayer;
+import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.layout.SceneGeometryView;
 import club.heiqi.uilib.ui.scene.motion.MotionPolicy;
@@ -27,6 +29,7 @@ public final class DesktopMotionVerification extends TestApplication {
     private final Path output;
     private final StringBuilder samples = new StringBuilder("sequence,elapsedNanos,translationX,panelHeight,dragX,dragY,dragWidth,dragHeight,parentX,parentY,parentWidth,parentHeight,scrollOffset,scrollMaximum,policy,clicks,drops,sliderOffset,volume,sortCommits\n");
     private final StringBuilder inputs = new StringBuilder("sequence,elapsedNanos,kind,x,y,source\n");
+    private final StringBuilder sortScroll = new StringBuilder("sequence,elapsedNanos,ancestor,scrollOffset,grabbedY,neighborY,thirdY,sortCommits\n");
     private DesktopMotionVerification(Path output) { this.output = output; }
     public static void main(String[] args) throws Exception {
         Path output = Paths.get(args.length == 0 ? "motion-report" : args[0]);
@@ -51,6 +54,7 @@ public final class DesktopMotionVerification extends TestApplication {
     @Override protected void teardown() throws Exception {
         Files.write(output.resolve("frames.csv"), samples.toString().getBytes(StandardCharsets.UTF_8));
         Files.write(output.resolve("inputs.csv"), inputs.toString().getBytes(StandardCharsets.UTF_8));
+        Files.write(output.resolve("elastic-sort-scroll.csv"), sortScroll.toString().getBytes(StandardCharsets.UTF_8));
         Files.write(output.resolve("source.txt"), ("开发模式：runtime-driven-development\n宿主：既有 DesktopWindow / GLFW / OpenGL\n输入：自动调用已安装 GLFW 回调；不是物理鼠标或触控板采集\n画面：GL_FRONT 实际呈现帧，PNG 在连续采样结束后编码\n").getBytes(StandardCharsets.UTF_8));
     }
     private final class Fixture implements AutoCloseable {
@@ -155,18 +159,98 @@ public final class DesktopMotionVerification extends TestApplication {
     }
     private void elasticSort() throws Exception {
         Fixture f = open("elastic-sort"); SceneNode handle = f.page.sortHandle("清晨");
-        LayoutBox grip = geometry(f.window, handle).box; SceneNode neighbor = f.page.sortHandle("漫步");
+        SceneNode neighbor = f.page.sortHandle("漫步"), third = f.page.sortHandle("夜航");
+        SceneNode[] observed = {handle, neighbor, third, sortText(f, "清晨"), sortText(f, "漫步"), sortText(f, "夜航")};
         int originalY = geometry(f.window, neighbor).box.y;
-        f.input.moveTo(handle); f.input.mouse.invoke(f.window.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0); f.window.frame();
-        f.input.point(grip.x + grip.width / 2.0, geometry(f.window, f.page.sortHandle("夜航")).box.y + 45); f.window.frame();
+        int[] edge = DesktopSettingsVerification.dragHandleEdge(f.window, handle);
+        long started = System.nanoTime();
+        recordInput("elastic-sort", started, "DOWN_EDGE", edge[0], edge[1]);
+        f.input.point(edge[0], edge[1]); f.input.mouse.invoke(f.window.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0); f.window.frame();
+        DesktopSettingsVerification.requireDragOwner(f.window, handle);
+        LayoutBox last = geometry(f.window, third).box; int targetY = last.y + last.height - 1;
+        recordInput("elastic-sort", started, "MOVE", edge[0], targetY);
+        f.input.point(edge[0], targetY); f.window.frame();
+        DesktopSettingsVerification.requireDragOwner(f.window, handle);
         require(read(f.window, f.page.sortOrder()).get(0).equals("清晨"), "拖中修改了权威队列");
         Set<Integer> yielding = new HashSet<>();
         series(f, "elastic-sort-yield", 500, elapsed -> yielding.add(geometry(f.window, neighbor).box.y));
         require(yielding.size() >= 3 && geometry(f.window, neighbor).box.y < originalY, "队列邻项没有弹簧让位");
+        recordInput("elastic-sort", started, "UP", edge[0], targetY);
         f.input.mouse.invoke(f.window.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0); f.window.frame();
         series(f, "elastic-sort-land", 700, elapsed -> {});
-        require(read(f.window, f.page.sortOrder()).get(2).equals("清晨") && read(f.window, f.page.sortCommits()) == 1, "队列没有只在放下时提交一次顺序");
-        save(f.window, "14-elastic-sort");
+        long deadline = System.nanoTime() + 5_000_000_000L;
+        while (!sortQuiet(f) && System.nanoTime() < deadline) f.window.frame();
+        require(sortQuiet(f), "排序释放后未完成有限落定");
+        List<String> expected = java.util.Arrays.asList("漫步", "夜航", "清晨");
+        require(read(f.window, f.page.sortOrder()).equals(expected) && read(f.window, f.page.sortCommits()) == 1, "队列没有只在放下时提交一次完整顺序");
+        assertSortRest(f, expected); save(f.window, "14-elastic-sort");
+        SceneNode ancestor = scrollAncestor(f, handle);
+        int offset = geometry(f.window, ancestor).scrollOffset;
+        LayoutBox[] resting = new LayoutBox[observed.length];
+        for (int i = 0; i < observed.length; i++) resting[i] = geometry(f.window, observed[i]).box;
+        int wheel = 0;
+        for (int amount : new int[] {-1, -1, 1, -1, 1, 1}) {
+            String sequence = "elastic-sort-scroll-" + wheel++;
+            LayoutBox viewport = hit(geometry(f.window, ancestor));
+            double x = viewport.x + 1, y = viewport.y + viewport.height / 2.0;
+            require(geometry(f.window).contains(ancestor, x, y), "滚轮采样未位于真实滚动祖先内");
+            int before = geometry(f.window, ancestor).scrollOffset;
+            f.input.point(x, y); recordInput(sequence, started, "WHEEL_" + amount, x, y);
+            f.input.scroll.invoke(f.window.handle(), 0, amount); f.window.frame();
+            int after = geometry(f.window, ancestor).scrollOffset;
+            require(amount < 0 ? after > before : after < before, "滚轮未即时驱动真实滚动祖先");
+            assertSortScroll(f, sequence, started, ancestor, offset, observed, resting, expected);
+            series(f, sequence, 180, elapsed -> assertSortScroll(f, sequence, started, ancestor, offset, observed, resting, expected));
+        }
+        System.out.println("MOTION_SORT edgeWhitespaceGrab=true sourceOwner=true settledAncestorWheel=true immediateRowTranslation=true noGhostOrRetrigger=true singleCommit=true");
+    }
+    private static SceneNode sortText(Fixture f, String name) {
+        return geometry(f.window).ordered().stream().filter(entry -> entry.text != null && name.equals(entry.text.logicalText))
+                .map(entry -> entry.node).findFirst().orElseThrow(() -> new AssertionError("缺少真实排序行文字：" + name));
+    }
+    private static SceneNode scrollAncestor(Fixture f, SceneNode handle) {
+        SceneGeometryView view = geometry(f.window);
+        for (SceneNode node = handle.parent(); node != null; node = node.parent()) {
+            SceneGeometryView.Entry entry = view.get(node);
+            if (node.scrollable() && node.axis() == SceneNode.Axis.COLUMN && entry != null && entry.scrollMaximum > 0) return node;
+        }
+        throw new AssertionError("排序行没有实际可滚动祖先");
+    }
+    private static boolean sortQuiet(Fixture f) {
+        return read(f.window, () -> f.page.sortable().control().nextInputNanos(f.page.sortable()) == Long.MAX_VALUE);
+    }
+    private static void assertSortRest(Fixture f, List<String> expected) {
+        require(sortQuiet(f) && read(f.window, f.page.sortOrder()).equals(expected) && read(f.window, f.page.sortCommits()) == 1,
+                "滚动重启排序轨迹或重复发布业务提交");
+        f.window.domain.execute(() -> {
+            require(f.window.page.runtime().pointerRouter().pressedTarget().get() == null, "排序落定或滚轮后仍有旧capture");
+            for (String name : expected) require(f.window.page.runtime().interactive(f.page.sortHandle(name)), "排序来源没有恢复正式输入资格");
+        });
+        SceneGeometryView view = geometry(f.window);
+        for (String name : expected) {
+            int copies = 0, painted = 0;
+            for (SceneGeometryView.Entry entry : view.ordered()) if (entry.text != null && name.equals(entry.text.logicalText)) {
+                copies++; SceneLayer.Policy layer = view.layerPolicy(entry.node);
+                require(layer == null || layer.participation != SceneLayer.Participation.PASSIVE, "落定后重现旧排序ghost");
+            }
+            for (PaintCommand command : f.window.lastPlan.commands())
+                if (command.kind == PaintCommand.Kind.TEXT && name.equals(command.text.logicalText)) painted++;
+            require(copies == 1 && painted == 1, "排序落定后真实行或ghost重复/丢失：" + name);
+        }
+    }
+    private void assertSortScroll(Fixture f, String sequence, long started, SceneNode ancestor, int offset,
+            SceneNode[] observed, LayoutBox[] resting, List<String> expected) {
+        SceneGeometryView view = geometry(f.window); int current = view.get(ancestor).scrollOffset, shift = offset - current;
+        sortScroll.append(sequence).append(',').append(System.nanoTime() - started).append(',').append(ancestor.id()).append(',').append(current);
+        for (int i = 0; i < 3; i++) sortScroll.append(',').append(view.get(observed[i]) == null ? -1 : view.get(observed[i]).box.y);
+        sortScroll.append(',').append(read(f.window, f.page.sortCommits())).append('\n');
+        for (int i = 0; i < observed.length; i++) {
+            SceneGeometryView.Entry entry = view.get(observed[i]);
+            require(entry != null, "滚动替换了原排序行身份"); LayoutBox now = entry.box, base = resting[i];
+            require(now.x == base.x && now.y == base.y + shift && now.width == base.width && now.height == base.height,
+                    "历史抓取行未与其它行同步即时平移：index=" + i + " shift=" + shift + " expectedY=" + (base.y + shift) + " actualY=" + now.y);
+        }
+        assertSortRest(f, expected);
     }
     private void stateMotion() throws Exception {
         Fixture f = open("state");

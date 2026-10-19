@@ -13,7 +13,10 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import javax.imageio.ImageIO;
+import club.heiqi.uilib.ui.scene.control.SceneDragHandle;
 import club.heiqi.uilib.ui.scene.control.SceneTheme;
+import club.heiqi.uilib.ui.scene.geometry.SceneClipRegion;
+import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.control.ThemeConfiguration;
 import club.heiqi.uilib.ui.scene.control.ThemeMode;
 import club.heiqi.uilib.ui.scene.layout.SceneGeometryView;
@@ -346,12 +349,10 @@ public final class DesktopSettingsVerification extends TestApplication {
         settleReorder(w);
         List<SceneGeometryView.Entry> handles=fontHandles(w);
         require(handles.size()>=2,"字体来源没有两个可见拖动把手");
-        club.heiqi.uilib.ui.scene.layout.LayoutBox first=geometry(w,handles.get(0).node.parent()).box,
-                second=geometry(w,handles.get(1).node.parent()).box;
-        require(first.width>=44&&first.height>=44,"字体排序把手没有可操作的外围热区");
-        int x=first.x+2,y=first.y+first.height/2,target=second.y+second.height-3;
-        require(x<handles.get(0).box.x,"拖动未覆盖标记之外的把手留白");
-        SceneNode handle=handles.get(0).node.parent();
+        SceneNode handle=handles.get(0).node;
+        LayoutBox second=handles.get(1).box;
+        int[] edge=dragHandleEdge(w,handle);
+        int x=edge[0],y=edge[1],target=second.y+second.height-3;
         input.point(x,y);input.mouse.invoke(w.handle(),0,GLFW_PRESS,0);w.frame();
         requireFontDragOwner(w,handle);
         input.point(x+1,target);w.frame();
@@ -363,17 +364,53 @@ public final class DesktopSettingsVerification extends TestApplication {
         require(visible(w,"完成字体编辑"),"字体拖动错误关闭模态");
     }
     static List<SceneGeometryView.Entry> fontHandles(DesktopWindow window){
-        return geometry(window).ordered().stream().filter(e -> "::".equals(e.node.text())&&hit(e).width>0&&hit(e).height>0)
-                .collect(java.util.stream.Collectors.toList());
+        List<SceneGeometryView.Entry> handles=new ArrayList<>();
+        window.domain.execute(() -> {
+            for(SceneGeometryView.Entry entry:geometry(window).ordered())
+                if(entry.node.control() instanceof SceneDragHandle&&window.page.runtime().interactive(entry.node)
+                        &&hit(entry).width>0&&hit(entry).height>0)handles.add(entry);
+        });
+        return handles;
     }
-    static void requireFontDragOwner(DesktopWindow window,SceneNode handle){
+    /** 从正式绘制的图标包络外抓取；共同几何和真实capture共同证伪只有图标能起拖。 */
+    static int[] dragHandleEdge(DesktopWindow window,SceneNode handle){
+        require(handle.control() instanceof SceneDragHandle,"目标不是正式标准拖动把手");
+        SceneGeometryView view=geometry(window);LayoutBox box=hit(geometry(window,handle));
+        LayoutBox ink=null;int[] foreground={0};
+        window.domain.execute(() -> foreground[0]=handle.style().color);
+        for(PaintCommand command:window.lastPlan.commands()){
+            if(command.kind!=PaintCommand.Kind.RECT&&command.kind!=PaintCommand.Kind.PATH)continue;
+            if((command.color>>>24)==0)continue;
+            LayoutBox mark=command.sceneGeometry?SceneClipRegion.rectangle(command.box).transformed(command.transform).bounds():command.box;
+            if(mark==null||mark.width<=0||mark.height<=0||mark.x<box.x||mark.y<box.y
+                    ||mark.x+mark.width>box.x+box.width||mark.y+mark.height>box.y+box.height)continue;
+            // 父层圆角边框的抗锯齿小块也可能位于把手盒内；只计当前符号前景，保留同色透明边缘。
+            if((command.color&0xffffff)!=(foreground[0]&0xffffff))continue;
+            if(ink==null)ink=mark;
+            else{int left=Math.min(ink.x,mark.x),top=Math.min(ink.y,mark.y);
+                ink=new LayoutBox(left,top,Math.max(ink.x+ink.width,mark.x+mark.width)-left,
+                        Math.max(ink.y+ink.height,mark.y+mark.height)-top);}
+        }
+        require(ink!=null,"正式把手在实际PaintPlan中没有图标");
+        int x=box.x+1,y=box.y+box.height/2;
+        require(x<ink.x&&view.contains(handle,x,y),"边缘采样未落在图标外的真实把手命中留白：hit="+boxValues(box)
+                +" box="+boxValues(view.get(handle).box)+" clip="+boxValues(view.get(handle).clip)+" icon="+boxValues(ink)
+                +" point="+x+","+y+" leftOfIcon="+(x<ink.x)+" contains="+view.contains(handle,x,y));
+        System.out.println("DRAG_HANDLE_EDGE node="+handle.id()+" hit="+boxValues(box)+" icon="+boxValues(ink)+" point="+x+","+y);
+        return new int[]{x,y};
+    }
+    private static String boxValues(LayoutBox box){return box==null?"null":box.x+","+box.y+","+box.width+","+box.height;}
+    static void requireFontDragOwner(DesktopWindow window,SceneNode handle){requireDragOwner(window,handle);}
+    static void requireDragOwner(DesktopWindow window,SceneNode handle){
         window.domain.execute(() -> {
             SceneNode expected=handle;
-            // 把手是正式target身份；SceneSortableList由拥有它的排序行捕获手势。
+            require(handle.control() instanceof SceneDragHandle&&handle.runtime()==window.page.runtime(),"拖动把手不是原挂载来源");
+            // 拖中只认原逻辑把手；PASSIVE反馈可含独立标准把手，不能按绘制层或文本找替身。
             while(expected!=null&&(expected.control()==null||!expected.control().capturesPointer()
                     ||!expected.control().pointerTargetValid(expected,handle)))expected=expected.parent();
             SceneNode owner=window.page.runtime().pointerRouter().pressedTarget().get();
-            require(expected!=null&&owner==expected,"字体拖动capture owner不是拥有指定把手的排序行");
+            require(expected!=null&&owner==expected&&window.page.runtime().pointerRouter().pressed(expected),
+                    "拖动capture owner不是拥有指定原把手的排序行");
         });
     }
     static void requireNoFontDragOwner(DesktopWindow window){
@@ -388,7 +425,8 @@ public final class DesktopSettingsVerification extends TestApplication {
                 club.heiqi.uilib.ui.scene.layout.LayoutBox origin=new club.heiqi.uilib.ui.scene.layout.LayoutBox(0,0,0,0);
                 for(SceneGeometryView.Entry entry:geometry(window).ordered()){
                     club.heiqi.uilib.ui.scene.layout.LayoutBox projected=positions.place(entry.node,origin);
-                    if(projected.x!=0||projected.y!=0){moving[0]=true;break;}
+                    if(projected.x!=0||projected.y!=0||entry.node.control()!=null
+                            &&entry.node.control().nextInputNanos(entry.node)!=Long.MAX_VALUE){moving[0]=true;break;}
                 }
             });
             if(!moving[0])return;
