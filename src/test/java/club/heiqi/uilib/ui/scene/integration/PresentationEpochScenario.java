@@ -410,7 +410,4 @@ public final class PresentationEpochScenario extends TestApplication {
         }
     }
 
-    public static void main(String[] args) throws Exception {
-        new PresentationEpochScenario().run(args);
-    }
 }

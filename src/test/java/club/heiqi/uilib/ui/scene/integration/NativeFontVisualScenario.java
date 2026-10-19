@@ -22,10 +22,6 @@ import club.heiqi.uilib.ui.scene.text.font.nativefont.FontSession;
 
 /** 直接回放生产HB定位和FT像素，Java2D只承担软件合成，不负责文本整形/度量/字形生成。 */
 public final class NativeFontVisualScenario extends TestApplication {
-    public static void main(String[] args) throws Exception {
-        new NativeFontVisualScenario().run(args);
-    }
-
     private FontSession service;
 
     /** 软件出口仍为 premult RGBA，主 owned mono 不因导出变成四通道缓存。 */

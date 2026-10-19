@@ -629,7 +629,4 @@ public final class FontDeferredStateScenario extends TestApplication {
         scenario("compatibility标准字体真实coverage", () -> coverage(environment, true));
     }
 
-    public static void main(String[] args) throws Exception {
-        new FontDeferredStateScenario().run(args);
-    }
 }

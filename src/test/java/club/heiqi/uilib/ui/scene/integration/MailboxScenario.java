@@ -269,7 +269,7 @@ public final class MailboxScenario extends TestApplication {
             });view.frame();
             require(view.plan.commands().stream().anyMatch(c -> c.kind==PaintCommand.Kind.RECT&&(c.color&0xffffff)==icon[2]&&(c.color>>>24)==255
                     &&c.box.x>=bounds[0].x&&c.box.y>=bounds[0].y&&c.box.x+c.box.width<=bounds[0].x+bounds[0].width
-                    &&c.box.y+c.box.height<=bounds[0].y+bounds[0].height),"hover渐显途中聚焦同一动作仍未立即可见");
+                    &&c.box.y+c.box.height<=bounds[0].y+bounds[0].height),"hover渐显途中聚焦同一动作仍未立即可见：style=0x" + Integer.toHexString(readNode[0].style().color));
         }
     }
     /** 用正式runtime的宿主时间入口验证真实时间合同，不依赖sleep碰巧落在中点。 */
@@ -614,5 +614,4 @@ public final class MailboxScenario extends TestApplication {
             require(view.painted("1–25 / 26"),"新增后当前分页范围错误");
         }
     }
-    public static void main(String[] args) throws Exception { new MailboxScenario().run(args); }
 }

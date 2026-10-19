@@ -98,10 +98,6 @@ public final class InlineBoxScenario extends TestApplication {
         return value;
     }
 
-    public static void main(String[] args) throws Exception {
-        new InlineBoxScenario().run(args);
-    }
-
     private FontTextService fonts;
     private TextStyle style;
 

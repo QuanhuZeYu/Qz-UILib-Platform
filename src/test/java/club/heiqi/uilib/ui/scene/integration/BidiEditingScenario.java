@@ -314,5 +314,4 @@ public final class BidiEditingScenario extends TestApplication {
         scenario("真实视觉HomeEnd上下目标及RTL段落交界", this::visualNavigation);
         scenario("内部滚轮与重排后Tab显露同一方向边界", this::revealBoundary);
     }
-    public static void main(String[] args) throws Exception { new BidiEditingScenario().run(args); }
 }

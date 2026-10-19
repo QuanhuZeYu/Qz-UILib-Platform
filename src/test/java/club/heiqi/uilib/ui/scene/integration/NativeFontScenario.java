@@ -106,10 +106,6 @@ public final class NativeFontScenario extends TestApplication {
                         + actual);
     }
 
-    public static void main(String[] args) throws Exception {
-        new NativeFontScenario().run(args);
-    }
-
     private static void sameShape(List<ShapedGlyph> expected, List<ShapedGlyph> actual) {
         require(expected.size() == actual.size(), "prepared 上下文字形数量改变");
         for (int i = 0; i < expected.size(); i++) {

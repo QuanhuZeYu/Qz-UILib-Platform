@@ -22,10 +22,6 @@ public final class MathArrayScenario extends TestApplication {
     private final MathLayoutEngine engine = new MathLayoutEngine();
     private FontTextService text;
 
-    public static void main(String[] args) throws Exception {
-        new MathArrayScenario().run(args);
-    }
-
     @Override
     protected void setup() throws Exception {
         text = own(new FontTextService(new LwjglFontEngine()));

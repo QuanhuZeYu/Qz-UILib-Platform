@@ -41,10 +41,6 @@ public final class OrderedBatchScenario extends TestApplication {
         g.fill(path);
     }
 
-    public static void main(String[] args) throws Exception {
-        new OrderedBatchScenario().run(args);
-    }
-
     @Override
     protected void runTests() throws Exception {
         String[] args = arguments();

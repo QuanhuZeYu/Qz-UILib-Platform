@@ -507,7 +507,4 @@ public final class LayoutFoundationScenario extends TestApplication {
         }
     }
 
-    public static void main(String[] args) throws Exception {
-        new LayoutFoundationScenario().run(args);
-    }
 }

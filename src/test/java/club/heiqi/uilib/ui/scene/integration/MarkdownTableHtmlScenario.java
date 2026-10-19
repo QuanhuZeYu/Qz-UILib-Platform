@@ -53,10 +53,6 @@ import java.util.concurrent.TimeUnit;
 public final class MarkdownTableHtmlScenario extends TestApplication {
     private static final TextStyle BASE = new TextStyle("default", 22, 0xffabcdef);
 
-    public static void main(String[] args) throws Exception {
-        new MarkdownTableHtmlScenario().run(args);
-    }
-
     @Override
     protected void runTests() throws Exception {
         List<Throwable> failures = new ArrayList<>();

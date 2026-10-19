@@ -28,7 +28,6 @@ import java.util.List;
 /** 大列表范围复用的真实边界；行为验收不依赖缓存字段或探针。 */
 public final class LargeListScopeScenario extends TestApplication {
     private FontTextService fonts;
-    public static void main(String[] args) throws Exception { new LargeListScopeScenario().run(args); }
     @Override protected void setup() throws Exception { fonts = own(new FontTextService(new LwjglFontEngine())); }
     @Override protected void runTests() throws Exception {
         scenario("部分挂载查询与无几何动态范围立即生效", this::logicalScope);

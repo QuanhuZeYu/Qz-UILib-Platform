@@ -50,10 +50,6 @@ public final class MathFontScenario extends TestApplication {
     private static final String RESOURCE = "assets/qz_uilib/fonts/math/STIXTwoMath-Regular.otf";
     private byte[] bytes;
 
-    public static void main(String[] args) throws Exception {
-        new MathFontScenario().run(args);
-    }
-
     @Override
     protected void setup() throws Exception {
         bytes = resource(RESOURCE);

@@ -56,30 +56,78 @@ ext.platformApplication = { String name, String entry, targetOrConfigure = 8, Cl
 }
 def output = { String path -> layout.buildDirectory.dir(path).get().asFile.absolutePath }
 def fonts = { String path = '' -> new File(fixtureRoot.get().asFile, 'src/core/resources/assets/qz_uilib/fonts/' + path).absolutePath }
-def checks = [richTextScenario:'RichTextScenario', mailboxScenario:'MailboxScenario', layoutFoundationScenario:'LayoutFoundationScenario',
-    incrementalMeasurementScenario:'IncrementalMeasurementScenario', layerInputScenario:'LayerInputScenario', fontPlanSamplingScenario:'FontPlanSamplingScenario',
-    bidiEditingScenario:'BidiEditingScenario', wordEditingScenario:'WordEditingScenario', galleryScenario:'GalleryScenario', largeListScopeScenario:'LargeListScopeScenario',
-    imageServiceScenario:'ImageServiceScenario', markdownReadingScenario:'MarkdownReadingScenario', markdownTableHtmlScenario:'MarkdownTableHtmlScenario',
-    inlineBoxScenario:'InlineBoxScenario', documentSceneScenario:'DocumentSceneScenario', mathFontScenario:'MathFontScenario', mathLayoutScenario:'MathLayoutScenario',
-    mathSceneScenario:'MathSceneScenario', mathArrayScenario:'MathArrayScenario', mathDecorationScenario:'MathDecorationScenario']
-checks.each { name, entry -> platformApplication(name, entry) }
-tasks.named('fontPlanSamplingScenario') { args fonts('unifont/unifont-16.0.04.otf') }
-tasks.named('imageServiceScenario') { systemProperty 'java.awt.headless', 'true' }
-platformApplication('nativeFontScenario','NativeFontScenario') { args fonts('noto') }
-platformApplication('nativeFontVisualScenario','NativeFontVisualScenario') { systemProperty 'java.awt.headless','true'; args fonts('noto'), output('font-machine/native') }
-platformApplication('glyphRasterStyleScenario','GlyphRasterStyleScenario') { args fonts(), output('font-machine/raster-style') }
-platformApplication('orderedBatchScenario','OrderedBatchScenario') { systemProperty 'java.awt.headless','true'; args output('font-machine/batch') }
-platformApplication('mathTextFontScenario','MathTextFontScenario') { args output('math-text-fonts') }
-// 原 check 未纳入的设备出图和性能入口保持显式任务，继续使用同一实现。
-[glBatchScenario:['GlBatchScenario','font-machine/gl'], attributedGlyphGlScenario:['AttributedGlyphGlScenario','font-machine/attributed-gl'],
- clientFontServicesScenario:['ClientFontServicesScenario','font-machine/client'], documentGlScenario:['DocumentGlScenario','document-gl'],
- markdownGlScenario:['MarkdownGlScenario','markdown-gl'], mathGlScenario:['MathGlScenario','math-embed/gpu'],
- paintPrimitiveScenario:['PaintPrimitiveScenario','math-complete/paint-gpu'], mathCoverageScenario:['MathCoverageScenario','math-complete/coverage'],
- imageGlScenario:['ImageGlScenario','image-system/gpu']].each { name, declaration -> platformApplication(name,declaration[0]) { args output(declaration[1]) } }
-platformApplication('fontDeferredStateScenario','FontDeferredStateScenario')
-platformApplication('presentationEpochScenario','PresentationEpochScenario')
+// 默认验证只运行无窗口应用；设备与外网取证通过显式入口选择。
+platformApplication('galleryCoreVerify','club.heiqi.uilib.testing.gallery.verification.CoreGalleryVerification') {
+    dependsOn platformVerification
+    classpath = configurations.coreVerification + configurations.gallery + configurations.coreRuntime8
+    systemProperty 'java.awt.headless', 'true'
+    systemProperty 'uilib.verification.report', output('reports/gallery-core')
+    if (providers.gradleProperty('galleryChecks').isPresent()) args providers.gradleProperty('galleryChecks').get().split(',') as List
+}
+platformApplication('platformVerify','PlatformGalleryVerification') {
+    dependsOn platformVerification
+    classpath = sourceSets.test.runtimeClasspath + sourceSets.mediaTest.output + sourceSets.mediaAdapter.output
+    systemProperty 'java.awt.headless', 'true'
+    systemProperty 'uilib.verification.report', output('reports/gallery-platform')
+    if (providers.gradleProperty('platformChecks').isPresent()) args providers.gradleProperty('platformChecks').get().split(',') as List
+}
+[8, 21, 25].each { target ->
+    def modern = target != 8
+    def core = configurations[modern ? 'coreRuntime21' : 'coreRuntime8']
+    def font = platformArtifacts['font-adapter:' + (modern ? 21 : 8)]
+    def media = platformArtifacts['media-adapter:' + (modern ? 21 : 8)]
+    platformApplication('platformArtifactsJava' + target, 'PlatformArtifactVerification', target) {
+        dependsOn platformVerification, core, font, media
+        if (modern) dependsOn desktopJar
+        classpath = files(platformVerification.flatMap { it.archiveFile }) + configurations.coreVerification
+        doFirst {
+            args([target.toString()] + core.files.collect { it.absolutePath }
+                    + [font.get().archiveFile.get().asFile.absolutePath, media.get().archiveFile.get().asFile.absolutePath]
+                    + (modern ? [desktopJar.get().archiveFile.get().asFile.absolutePath] : []))
+        }
+    }
+}
+def deviceChecks = [batch:'GlBatchScenario', glyph:'AttributedGlyphGlScenario', font:'ClientFontServicesScenario',
+        document:'DocumentGlScenario', markdown:'MarkdownGlScenario', math:'MathGlScenario', paint:'PaintPrimitiveScenario',
+        coverage:'MathCoverageScenario', image:'ImageGlScenario']
+platformApplication('platformDeviceVerify','GlBatchScenario') {
+    doFirst {
+        def selected = providers.gradleProperty('deviceCheck').getOrElse('batch')
+        if (!deviceChecks.containsKey(selected)) throw new GradleException('deviceCheck 可选：' + deviceChecks.keySet().join(', '))
+        mainClass = 'club.heiqi.uilib.ui.scene.integration.' + deviceChecks[selected]
+        args output('reports/device-' + selected)
+    }
+}
+def legacyArtifacts = files(configurations.coreRuntime8, platformArtifacts['font-adapter:8'].flatMap { it.archiveFile }, platformArtifacts['gl-renderer:8'].flatMap { it.archiveFile }, platformArtifacts['lwjgl2-adapter:8'].flatMap { it.archiveFile }, platformArtifacts['media-adapter:8'].flatMap { it.archiveFile })
+def legacyTestClasspath = files(platformVerification.flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + legacyArtifacts + configurations.lwjgl2Bindings
+platformApplication('lwjgl2DeviceVerify','Lwjgl2HostScenario') {
+    dependsOn platformVerification, legacyArtifacts, 'extractLwjgl2TestNatives'
+    classpath = legacyTestClasspath; systemProperty 'java.library.path', output('lwjgl2-test/natives')
+    if (providers.gradleProperty('fontLegacyJava').isPresent()) executable = providers.gradleProperty('fontLegacyJava').get()
+    doFirst {
+        def checks = [host:'club.heiqi.uilib.ui.scene.integration.Lwjgl2HostScenario',
+                video:'club.heiqi.uilib.ui.scene.integration.Lwjgl2VideoVerification',
+                media:'club.heiqi.uilib.testing.media.PackagedMediaScenario']
+        def selected = providers.gradleProperty('deviceCheck').getOrElse('host')
+        if (!checks.containsKey(selected)) throw new GradleException('deviceCheck 可选：' + checks.keySet().join(', '))
+        mainClass = checks[selected]
+        if (selected == 'host') args providers.gradleProperty('fontWorldAtlasMode').getOrElse('2d')
+    }
+}
+platformApplication('mediaPlaybackVerify','club.heiqi.uilib.testing.media.MediaPlaybackScenario',21) {
+    def media = platformArtifacts['media-adapter:21']
+    dependsOn platformVerification, media
+    classpath = files(platformVerification.flatMap { it.archiveFile },media.flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + configurations.coreRuntime21
+    args providers.gradleProperty('mediaBaseUrl').getOrElse('http://127.0.0.1:59104')
+}
+platformApplication('bilibiliSourceProbe','club.heiqi.uilib.testing.media.BilibiliSourceProbe',21) {
+    def media = platformArtifacts['media-adapter:21']
+    dependsOn platformVerification, media
+    classpath = files(platformVerification.flatMap { it.archiveFile },media.flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + configurations.coreRuntime21
+    args providers.gradleProperty('bilibiliVideo').getOrElse('BV1GJ411x7h7'), providers.gradleProperty('bilibiliLive').getOrElse('https://live.bilibili.com/6')
+}
 platformApplication('mailboxPerformanceScenario','MailboxPerformanceScenario') {
-    systemProperty 'uilib.version', project.version.toString()
+    group = 'benchmark'; systemProperty 'uilib.version', project.version.toString()
     systemProperty 'mailbox.paged', providers.gradleProperty('mailboxPaged').getOrElse('true')
     systemProperty 'mailbox.loads', providers.gradleProperty('mailboxLoads').getOrElse('IDLE,SCROLL,UPDATE,RESIZE')
     systemProperty 'performance.scale', providers.gradleProperty('performanceScale').getOrElse('200')
@@ -88,66 +136,11 @@ platformApplication('mailboxPerformanceScenario','MailboxPerformanceScenario') {
     systemProperty 'performance.output', providers.gradleProperty('performanceOutput').getOrElse(output('reports/mailbox-core'))
 }
 platformApplication('performanceGalleryScenario','PerformanceGalleryScenario') {
-    systemProperty 'uilib.version', project.version.toString()
+    group = 'benchmark'; systemProperty 'uilib.version', project.version.toString()
     systemProperty 'performance.scale', providers.gradleProperty('performanceScale').getOrElse('50')
     systemProperty 'performance.warmup', providers.gradleProperty('performanceWarmup').getOrElse('30')
     systemProperty 'performance.frames', providers.gradleProperty('performanceFrames').getOrElse('120')
     systemProperty 'performance.output', providers.gradleProperty('performanceOutput').getOrElse(output('reports/performance-core'))
-}
-[8, 21, 25].each { target ->
-    platformApplication('packagedFontJava' + target, 'PackagedFontScenario', target) {
-        def artifacts = files(configurations[target == 8 ? 'coreRuntime8' : 'coreRuntime21'], platformArtifacts['font-adapter:' + (target == 8 ? 8 : 21)].flatMap { it.archiveFile })
-        dependsOn artifacts; classpath = sourceSets.test.output + configurations.coreVerification
-        doFirst { args artifacts.files.collect { it.absolutePath } }
-    }
-}
-platformApplication('desktopArtifactScenario','CoreArtifactScenario',21) {
-    dependsOn desktopArtifacts; classpath = configurations.coreVerification
-    doFirst { args(['--java21','--desktop'] + files(configurations.coreRuntime21, platformArtifacts['font-adapter:21'].flatMap { it.archiveFile }, desktopJar.flatMap { it.archiveFile }).files.collect { it.absolutePath }) }
-}
-tasks.named('desktopVerify') { dependsOn 'desktopArtifactScenario' }
-def legacyArtifacts = files(configurations.coreRuntime8, platformArtifacts['font-adapter:8'].flatMap { it.archiveFile }, platformArtifacts['gl-renderer:8'].flatMap { it.archiveFile }, platformArtifacts['lwjgl2-adapter:8'].flatMap { it.archiveFile }, platformArtifacts['media-adapter:8'].flatMap { it.archiveFile })
-def legacyTestClasspath = files(platformVerification.flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + legacyArtifacts + configurations.lwjgl2Bindings
-platformApplication('lwjgl2HostScenario','Lwjgl2HostScenario') {
-    dependsOn platformVerification, legacyArtifacts, 'extractLwjgl2TestNatives'
-    classpath = legacyTestClasspath
-    if (providers.gradleProperty('fontLegacyJava').isPresent()) executable = providers.gradleProperty('fontLegacyJava').get()
-    args providers.gradleProperty('fontWorldAtlasMode').getOrElse('2d')
-    systemProperty 'java.library.path', output('lwjgl2-test/natives')
-}
-platformApplication('lwjgl2VideoVerify','Lwjgl2VideoVerification') {
-    dependsOn platformVerification, legacyArtifacts, 'extractLwjgl2TestNatives'
-    classpath = legacyTestClasspath; systemProperty 'java.library.path', output('lwjgl2-test/natives')
-}
-[8,21].each { target ->
-    def core = configurations[target == 8 ? 'coreRuntime8' : 'coreRuntime21']
-    def media = platformArtifacts['media-adapter:' + target].flatMap { it.archiveFile }
-    platformApplication('mediaArtifactJava' + target,'CoreArtifactScenario',target) {
-        dependsOn media; classpath = configurations.coreVerification
-        doFirst { args((target == 21 ? ['--java21','--media'] : ['--media']) + [media.get().asFile.absolutePath]) }
-    }
-    platformApplication(target == 8 ? 'mediaNetworkLegacyScenario' : 'mediaNetworkScenario','club.heiqi.uilib.testing.media.MediaNetworkScenario',target) {
-        dependsOn platformVerification, media; classpath = files(platformVerification.flatMap { it.archiveFile },media) + configurations.coreVerification + configurations.gallery + core
-    }
-    platformApplication(target == 8 ? 'mediaPlaybackLegacyScenario' : 'mediaPlaybackScenario','club.heiqi.uilib.testing.media.MediaPlaybackScenario',target) {
-        dependsOn platformVerification, media; classpath = files(platformVerification.flatMap { it.archiveFile },media) + configurations.coreVerification + configurations.gallery + core
-        args providers.gradleProperty('mediaBaseUrl').getOrElse('http://127.0.0.1:59104')
-    }
-    platformApplication('packagedMediaJava' + target,'club.heiqi.uilib.testing.media.PackagedMediaScenario',target) {
-        dependsOn platformVerification
-        if (target == 8) { dependsOn legacyArtifacts,'extractLwjgl2TestNatives'; classpath = legacyTestClasspath; systemProperty 'java.library.path', output('lwjgl2-test/natives') }
-        else { dependsOn desktopArtifacts; classpath = files(platformVerification.flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + desktopArtifacts; systemProperty 'uilib.desktop.visible','false' }
-        mustRunAfter 'desktopScrollAreaVerify'
-    }
-}
-platformApplication('bilibiliResolverScenario','club.heiqi.uilib.host.media.bilibili.BilibiliResolverScenario',21) {
-    dependsOn platformVerification, platformArtifacts['media-adapter:21']
-    classpath = files(platformVerification.flatMap { it.archiveFile }, platformArtifacts['media-adapter:21'].flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + configurations.coreRuntime21
-}
-platformApplication('bilibiliSourceProbe','club.heiqi.uilib.testing.media.BilibiliSourceProbe',21) {
-    dependsOn platformVerification, platformArtifacts['media-adapter:21']
-    classpath = files(platformVerification.flatMap { it.archiveFile }, platformArtifacts['media-adapter:21'].flatMap { it.archiveFile }) + configurations.coreVerification + configurations.gallery + configurations.coreRuntime21
-    args providers.gradleProperty('bilibiliVideo').getOrElse('BV1GJ411x7h7'), providers.gradleProperty('bilibiliLive').getOrElse('https://live.bilibili.com/6')
 }
 tasks.register('verifyPlatformArtifacts') {
     group = 'verification'; dependsOn platformArtifacts.values(), desktopJar, platformVerification
@@ -191,8 +184,10 @@ gradle.buildFinished {
         }
     }
 }
-tasks.named('check') {
-    dependsOn checks.keySet(), 'nativeFontScenario','nativeFontVisualScenario','glyphRasterStyleScenario','orderedBatchScenario','mathTextFontScenario',
-            'packagedFontJava8','packagedFontJava21','packagedFontJava25','desktopArtifactScenario','mediaArtifactJava8','mediaArtifactJava21',
-            'mediaNetworkLegacyScenario','mediaNetworkScenario','packagedMediaJava8','packagedMediaJava21','bilibiliResolverScenario','verifyPlatformArtifacts'
+
+tasks.register('galleryVerify') {
+    group = 'verification'; description = '验证共享广场核心、平台无窗口链路与正式产物隔离'
+    dependsOn 'galleryCoreVerify', 'platformVerify', 'platformArtifactsJava8', 'platformArtifactsJava21', 'platformArtifactsJava25', 'verifyPlatformArtifacts'
 }
+tasks.named('test', Test) { enabled = false; group = null }
+tasks.named('check') { setDependsOn(['galleryVerify']) }

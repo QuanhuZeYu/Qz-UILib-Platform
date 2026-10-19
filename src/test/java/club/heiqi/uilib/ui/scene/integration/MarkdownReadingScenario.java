@@ -51,10 +51,6 @@ public final class MarkdownReadingScenario extends TestApplication {
     private static final TextStyle BASE = new TextStyle("default", 22, 0xffabcdef);
     private List<Map<String, Object>> cases;
 
-    public static void main(String[] args) throws Exception {
-        new MarkdownReadingScenario().run(args);
-    }
-
     @Override
     protected void setup() throws Exception {
         try (InputStream stream =

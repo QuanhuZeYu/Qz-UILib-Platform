@@ -346,10 +346,6 @@ public final class GlyphRasterStyleScenario extends TestApplication {
         }
     }
 
-    public static void main(String[] args) throws Exception {
-        new GlyphRasterStyleScenario().run(args);
-    }
-
     @Override
     protected void runTests() throws Exception {
         String[] args = arguments();

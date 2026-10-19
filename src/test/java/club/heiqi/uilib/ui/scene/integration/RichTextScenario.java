@@ -27,10 +27,6 @@ import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 public final class RichTextScenario extends TestApplication {
     private FontTextService font;
 
-    public static void main(String[] args) throws Exception {
-        new RichTextScenario().run(args);
-    }
-
     @Override
     protected void setup() throws Exception {
         font = own(new FontTextService(new LwjglFontEngine()));

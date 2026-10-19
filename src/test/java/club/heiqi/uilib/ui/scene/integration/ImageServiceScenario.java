@@ -1230,7 +1230,4 @@ public final class ImageServiceScenario extends TestApplication {
                 });
     }
 
-    public static void main(String[] args) throws Exception {
-        new ImageServiceScenario().run(args);
-    }
 }

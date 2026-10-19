@@ -46,10 +46,6 @@ import java.util.Map;
 public final class DocumentSceneScenario extends TestApplication {
     FontTextService fonts;
 
-    public static void main(String[] args) throws Exception {
-        new DocumentSceneScenario().run(args);
-    }
-
     @Override
     protected void setup() throws Exception {
         fonts = own(new FontTextService(new LwjglFontEngine()));

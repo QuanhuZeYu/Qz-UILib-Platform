@@ -20,10 +20,6 @@ public final class MathDecorationScenario extends TestApplication {
     private FontTextService text;
     private final MathLayoutEngine engine = new MathLayoutEngine();
 
-    public static void main(String[] args) throws Exception {
-        new MathDecorationScenario().run(args);
-    }
-
     @Override
     protected void setup() throws Exception {
         text = own(new FontTextService(new LwjglFontEngine()));

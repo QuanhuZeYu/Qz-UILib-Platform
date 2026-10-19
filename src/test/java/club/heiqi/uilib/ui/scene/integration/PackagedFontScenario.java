@@ -129,7 +129,4 @@ public final class PackagedFontScenario extends TestApplication {
         }
     }
 
-    public static void main(String[] args) throws Exception {
-        new PackagedFontScenario().run(args);
-    }
 }

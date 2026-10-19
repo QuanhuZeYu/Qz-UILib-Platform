@@ -55,7 +55,6 @@ import java.util.concurrent.CompletableFuture;
 
 /** 正式 PageSession、真实 FT/HB、标准编辑/按钮及同批 PaintCommand 的所属层验收。 */
 public final class LayerInputScenario extends TestApplication {
-    public static void main(String[] args) throws Exception { new LayerInputScenario().run(args); }
     private FontTextService fonts;
     protected void setup() throws Exception { fonts = own(new FontTextService(new LwjglFontEngine())); }
     protected void runTests() throws Exception {

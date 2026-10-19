@@ -47,10 +47,6 @@ public final class MathLayoutScenario extends TestApplication {
     private final Map<Integer, Float> nativeMetrics = new HashMap<Integer, Float>();
     private static final float EM = 32.3f;
 
-    public static void main(String[] args) throws Exception {
-        new MathLayoutScenario().run(args);
-    }
-
     @Override
     protected void setup() throws Exception {
         text = own(new FontTextService(new LwjglFontEngine()));

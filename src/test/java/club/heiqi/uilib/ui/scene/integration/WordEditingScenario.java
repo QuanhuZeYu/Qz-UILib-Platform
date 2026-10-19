@@ -232,5 +232,4 @@ public final class WordEditingScenario extends TestApplication {
         scenario("只读禁用IME优先及真实字体横纵显露逻辑双向移动", this::eligibilityAndGeometry);
         scenario("当次字素profile过滤词段并保持完整历史", this::currentProfile);
     }
-    public static void main(String[] args) throws Exception { new WordEditingScenario().run(args); }
 }

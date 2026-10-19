@@ -55,7 +55,6 @@ import java.util.Map;
 /** 正式页面、真实字体委托与注入输入；请求复用和共同几何分别观测。 */
 public final class IncrementalMeasurementScenario extends TestApplication {
     private FontTextService fonts;
-    public static void main(String[] args) throws Exception { new IncrementalMeasurementScenario().run(args); }
     @Override protected void setup() throws Exception { fonts = own(new FontTextService(new LwjglFontEngine())); }
     @Override protected void runTests() throws Exception {
         scenario("稳定帧与固定宽度局部文案更新复用未变请求", this::localText);

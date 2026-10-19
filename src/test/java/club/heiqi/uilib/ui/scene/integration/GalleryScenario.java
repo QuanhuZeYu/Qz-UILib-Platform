@@ -31,7 +31,6 @@ public final class GalleryScenario extends TestApplication {
         public void replay(PaintPlan plan) { paint = plan; }
     }
     protected void runTests() throws Exception {
-        scenario("广场Frame/Grid遵守子固定尺寸与硬边界", this::boundedLayouts);
         ClassLoader loader = getClass().getClassLoader();
         FontTextService fonts = own(new FontTextService(FontTextService.defaultSources(loader, 1), IsolatedFontEngine.shared()));
         SharedImageService images = own(new SharedImageService(new JavaImageLoader(id -> {
@@ -40,6 +39,7 @@ public final class GalleryScenario extends TestApplication {
             if (stream == null) throw new java.io.IOException("共享图像缺失："+id);
             return stream;
         }, JavaImageLoader.Budget.defaults()), SharedImageService.Budget.defaults()));
+        scenario("全部共享页面真实字体下从目录进入及三尺寸切换", () -> GalleryNavigationScenario.verify(fonts));
         for (int run = 0; run < 2; run++) {
             final int number = run;
             scenario("共享旅程与运行隔离#"+number, () -> {
@@ -81,50 +81,4 @@ public final class GalleryScenario extends TestApplication {
             });
         }
     }
-    private void boundedLayouts() throws Exception {
-        // 取得包内声明工厂后经正式页面挂载，动态策略不冻结为构造期快照。
-        Class<?> style = Class.forName("club.heiqi.uilib.testing.gallery.GalleryStyle");
-        java.lang.reflect.Method frame = style.getDeclaredMethod("frame", SceneNode.class, ReadableSignal.class);
-        java.lang.reflect.Method grid = style.getDeclaredMethod("grid",
-                club.heiqi.uilib.ui.scene.host.ScenePageContext.class, ReadableSignal.class);
-        frame.setAccessible(true);
-        grid.setAccessible(true);
-        Size fixed = Size.fixed(120).bounds(80, 120);
-        boundedLayout(frame, fixed, 42, 120);
-        boundedLayout(frame, fixed, 202, 120);
-        boundedLayout(grid, fixed, 40, 120);
-        boundedLayout(grid, fixed, 200, 120);
-        boundedLayout(frame, Size.natural().bounds(80, 120), 202, 80);
-        // 公共策略的最小槽宽在超窄父盒仍保留，子项自己的 max 继续生效。
-        boundedLayout(grid, Size.fill(1).bounds(80, 120), 40, 120);
-        boundedLayout(grid, Size.fill(1).bounds(80, 120), 200, 120);
-    }
-
-    private static void boundedLayout(java.lang.reflect.Method factory, Size childWidth,
-                                      int parentWidth, int expectedWidth) {
-        ReactiveDomain domain = ReactiveDomain.direct();
-        SoftwareSceneScenario.SoftwareHost host = new SoftwareSceneScenario.SoftwareHost();
-        SceneNode[] parent = {null};
-        try (ScenePageSession page = ScenePageSession.open(domain, host, host, context -> {
-            Signal<SceneTheme> theme = domain.signal(SceneTheme.light());
-            SceneNode child = new SceneNode().size(childWidth, Size.fixed(20));
-            try {
-                parent[0] = factory.getName().equals("grid")
-                        ? ((SceneNode) factory.invoke(null, context, theme)).add(child)
-                        : (SceneNode) factory.invoke(null, child, theme);
-            } catch (ReflectiveOperationException failure) {
-                throw new IllegalStateException(failure);
-            }
-            context.mountOwned(parent[0].size(Size.fixed(parentWidth), Size.natural()));
-        })) {
-            page.frame();
-            domain.execute(() -> {
-                SceneGeometryView geometry = page.pipeline().current().geometry;
-                SceneNode child = parent[0].children().get(0);
-                require(geometry.get(child).box.width == expectedWidth && geometry.get(child).box.height == 20,
-                        "真实广场容器覆盖了子尺寸或边界");
-            });
-        }
-    }
-    public static void main(String[] args) throws Exception { new GalleryScenario().run(); }
 }

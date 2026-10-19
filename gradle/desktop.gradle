@@ -34,7 +34,6 @@ tasks.register('desktopDist', Zip) {
     destinationDirectory = layout.buildDirectory.dir('distributions')
     from(layout.buildDirectory.dir('install/desktop')) { into('qz-uilib-desktop'); filePermissions { unix('rwxr-xr-x') } }
 }
-tasks.register('desktopTestJar') { group = 'verification'; dependsOn platformVerification }
 ext.desktopApplication = { String name, String entry, Closure configure = {} ->
     tasks.register(name, JavaExec) {
         group = 'verification'; dependsOn 'installDesktop', platformVerification
@@ -49,34 +48,31 @@ ext.desktopApplication = { String name, String entry, Closure configure = {} ->
     }
 }
 def report = { String name -> layout.buildDirectory.dir('reports/' + name).get().asFile.absolutePath }
-desktopApplication('desktopVerify','DesktopVerification')
 desktopApplication('runDesktopSettings','DesktopSettingsMain') { group = 'application'; classpath = desktopArtifacts }
 desktopApplication('desktopGallery','DesktopGallery') { group = 'application' }
-desktopApplication('desktopGalleryVerify','DesktopGallery') { args '--verify', report('gallery-desktop'); mustRunAfter 'desktopVerify' }
-desktopApplication('desktopGalleryResultScenario','DesktopGalleryResultScenario') { args report('gallery-result') }
-desktopApplication('desktopSettingsVerify','DesktopSettingsVerification') { args report('settings-desktop'); mustRunAfter 'desktopGalleryVerify' }
-desktopApplication('desktopCommandVerify','DesktopCommandVerification') { args report('commands-desktop'); mustRunAfter 'desktopSettingsVerify' }
-desktopApplication('desktopDraggableVerify','DesktopDraggableVerification') { args report('draggable-desktop'); mustRunAfter 'desktopSettingsVerify' }
-desktopApplication('desktopDraggableDeepVerify','DesktopDraggableDeepVerification') { args report('desktop-draggable-deep'); mustRunAfter 'desktopDraggableVerify' }
-desktopApplication('desktopDropSortVerify','DesktopDropSortVerification') { args report('drop-sort-desktop'); mustRunAfter 'desktopDraggableDeepVerify' }
-desktopApplication('desktopScrollAreaVerify','DesktopScrollAreaVerification') { args report('scroll-area-desktop'); mustRunAfter 'desktopDropSortVerify' }
-desktopApplication('desktopDirectionVerify','DesktopDirectionVerification') { args report('direction-desktop'); mustRunAfter 'desktopScrollAreaVerify' }
-desktopApplication('desktopDataTableVerify','DesktopDataTableVerification') { args report('data-table-desktop'); mustRunAfter 'desktopDirectionVerify' }
-desktopApplication('desktopTreeVerify','DesktopTreeVerification') { args report('tree-desktop'); mustRunAfter 'desktopDataTableVerify' }
-desktopApplication('desktopStateControlsVerify','DesktopStateControlsVerification') { args report('state-controls-desktop'); mustRunAfter 'desktopTreeVerify' }
-desktopApplication('desktopTabsVerify','DesktopTabsVerification') { args report('tabs-desktop'); mustRunAfter 'desktopStateControlsVerify' }
-desktopApplication('desktopPopupVerify','DesktopPopupVerification') { args report('popup-desktop'); mustRunAfter 'desktopTabsVerify' }
-desktopApplication('desktopMotionVerify','DesktopMotionVerification') { args providers.gradleProperty('motionOutput').getOrElse(report('motion-desktop')); mustRunAfter 'desktopScrollAreaVerify' }
-desktopApplication('desktopGalleryMediaVerify','DesktopGalleryMediaVerification') { args report('gallery-media') }
-desktopApplication('desktopTooltipVerify','DesktopTooltipVerification') { args report('tooltip-desktop') }
-desktopApplication('desktopLiveMediaVerify','DesktopMediaUxVerification') { args report('media-ux') }
-desktopApplication('desktopNetworkMediaVerify','DesktopNetworkMediaVerification') { args report('network-media-desktop') }
-desktopApplication('desktopBilibiliVerify','DesktopBilibiliVerification') {
-    args report('bilibili-desktop'), providers.gradleProperty('bilibiliVideo').getOrElse('BV1GJ411x7h7'), providers.gradleProperty('bilibiliLive').getOrElse('https://live.bilibili.com/6')
-}
-desktopApplication('desktopMediaVerify','DesktopMediaVerification') {
-    args providers.gradleProperty('mediaUrl').getOrElse('http://127.0.0.1:59104/vod.m3u8'), report('media-desktop')
-    systemProperty 'uilib.media.evidence', report('media-desktop')
+// 保留真实设备取证，只有明确选择此入口才创建窗口；人工入口仍是 desktopGallery。
+desktopApplication('desktopDeviceVerify','DesktopGallery') {
+    doFirst {
+        def checks = [host:'DesktopVerification', gallery:'DesktopGallery', settings:'DesktopSettingsVerification',
+                command:'DesktopCommandVerification', draggable:'DesktopDraggableVerification', 'draggable-deep':'DesktopDraggableDeepVerification',
+                'drop-sort':'DesktopDropSortVerification', scroll:'DesktopScrollAreaVerification', direction:'DesktopDirectionVerification',
+                table:'DesktopDataTableVerification', tree:'DesktopTreeVerification', state:'DesktopStateControlsVerification',
+                tabs:'DesktopTabsVerification', popup:'DesktopPopupVerification', motion:'DesktopMotionVerification',
+                'gallery-media':'DesktopGalleryMediaVerification', tooltip:'DesktopTooltipVerification', 'media-ux':'DesktopMediaUxVerification',
+                network:'DesktopNetworkMediaVerification', bilibili:'DesktopBilibiliVerification', media:'DesktopMediaVerification',
+                'packaged-media':'club.heiqi.uilib.testing.media.PackagedMediaScenario']
+        def selected = providers.gradleProperty('deviceCheck').getOrElse('gallery')
+        if (!checks.containsKey(selected)) throw new GradleException('deviceCheck 可选：' + checks.keySet().join(', '))
+        def entry = checks[selected]
+        mainClass = entry.contains('.') ? entry : 'club.heiqi.uilib.host.desktop.' + entry
+        if (selected == 'gallery') args '--verify', report('gallery-desktop')
+        else if (selected == 'media') args providers.gradleProperty('mediaUrl').getOrElse('http://127.0.0.1:59104/vod.m3u8'), report('media-desktop')
+        else if (selected == 'bilibili') args report('bilibili-desktop'), providers.gradleProperty('bilibiliVideo').getOrElse('BV1GJ411x7h7'), providers.gradleProperty('bilibiliLive').getOrElse('https://live.bilibili.com/6')
+        else if (selected == 'motion') args providers.gradleProperty('motionOutput').getOrElse(report('motion-desktop'))
+        else if (selected != 'packaged-media') args report(selected + '-desktop')
+        if (selected == 'media') systemProperty 'uilib.media.evidence', report('media-desktop')
+        if (selected == 'packaged-media') systemProperty 'uilib.desktop.visible', 'false'
+    }
 }
 desktopApplication('desktopMailboxPerformance','DesktopMailboxPerformance') {
     group = 'benchmark'; systemProperty 'uilib.version', project.version.toString()
@@ -101,10 +97,5 @@ desktopApplication('desktopDraggableBenchmark','DesktopDraggablePerformance') {
             providers.gradleProperty('dragScale').getOrElse('50,200,1000'), providers.gradleProperty('dragWarmup').getOrElse('30'), providers.gradleProperty('dragFrames').getOrElse('120'),
             providers.gradleProperty('dragLoads').getOrElse('plain,sort'), providers.gradleProperty('dragEdgeFrames').getOrElse('0')
 }
-tasks.register('galleryVerify') {
-    group = 'verification'; description = '完整验收真实桌面广场、输入、媒体与生命周期'
-    dependsOn 'desktopGalleryVerify','desktopGalleryResultScenario','desktopSettingsVerify','desktopCommandVerify','desktopDraggableVerify','desktopDraggableDeepVerify','desktopDropSortVerify','desktopScrollAreaVerify','desktopDirectionVerify','desktopDataTableVerify','desktopTreeVerify','desktopStateControlsVerify','desktopTabsVerify','desktopPopupVerify','desktopMotionVerify','desktopGalleryMediaVerify','desktopTooltipVerify','desktopLiveMediaVerify','desktopNetworkMediaVerify'
-}
 tasks.register('galleryBuild') { group = 'build'; dependsOn 'installDesktop', platformVerification }
-tasks.named('check') { dependsOn 'desktopVerify', 'galleryVerify' }
 tasks.named('assemble') { dependsOn desktopJar, 'desktopDist' }

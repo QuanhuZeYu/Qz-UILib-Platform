@@ -46,10 +46,6 @@ public final class MathTextFontScenario extends TestApplication {
         new FontStyle(700, FontStyle.Posture.ITALIC)
     };
 
-    public static void main(String[] args) throws Exception {
-        new MathTextFontScenario().run(args);
-    }
-
     @Override
     protected void runTests() throws Exception {
         scenario("固定上游SHA完整OFL及真实四成员元数据", this::resources);

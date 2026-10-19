@@ -79,10 +79,6 @@ public final class FontPlanSamplingScenario extends TestApplication {
         return s.pixelsPerLayoutUnit * 12.0;
     }
 
-    public static void main(String[] args) throws Exception {
-        new FontPlanSamplingScenario().run(args);
-    }
-
     private PaintCommand known;
     private int id;
 

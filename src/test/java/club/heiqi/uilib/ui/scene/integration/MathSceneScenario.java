@@ -53,10 +53,6 @@ public final class MathSceneScenario extends TestApplication {
         return source.replace('@', (char) 92);
     }
 
-    public static void main(String[] args) throws Exception {
-        new MathSceneScenario().run(args);
-    }
-
     @Override
     protected void setup() throws Exception {
         fonts = own(new FontTextService(new LwjglFontEngine()));
