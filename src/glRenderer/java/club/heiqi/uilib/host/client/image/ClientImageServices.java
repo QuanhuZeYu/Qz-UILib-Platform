@@ -76,14 +76,17 @@ public final class ClientImageServices implements AutoCloseable {
     public void close() {
         if (closed) return;
         check();
-        try {
-            images.close();
-        } finally {
-            try {
-                if (textures != null) textures.close();
-            } finally {
-                closed = true;
-            }
+        closed = true;
+        Throwable failure = null;
+        // 桌面规格第5节：子owner自行完成所属清理，后续GPU错误不能替换CPU首错。
+        try { images.close(); }
+        catch (RuntimeException | Error next) { failure = next; }
+        try { if (textures != null) textures.close(); }
+        catch (RuntimeException | Error next) {
+            if (failure == null) failure = next;
+            else if (failure != next) failure.addSuppressed(next);
         }
+        if (failure instanceof Error) throw (Error) failure;
+        if (failure != null) throw (RuntimeException) failure;
     }
 }

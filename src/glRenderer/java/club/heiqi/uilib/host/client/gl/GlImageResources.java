@@ -354,10 +354,19 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
         if (closed) return;
         check();
         if (active != null) throw new IllegalStateException("先结束图像Frame");
-        hostCapture.close();
-        for (Resident resident : cache.values()) gl.glDeleteTextures(resident.texture);
+        closed = true;
+        Throwable failure = null;
+        // 合成面与每张缓存纹理各自尝试释放，不能由一个删除错误跳过其他所属资源。
+        try { hostCapture.close(); }
+        catch (RuntimeException | Error next) { failure = next; }
+        for (Resident resident : cache.values()) try { gl.glDeleteTextures(resident.texture); }
+        catch (RuntimeException | Error next) {
+            if (failure == null) failure = next;
+            else if (failure != next) failure.addSuppressed(next);
+        }
         cache.clear();
         bytes = 0;
-        closed = true;
+        if (failure instanceof Error) throw (Error) failure;
+        if (failure != null) throw (RuntimeException) failure;
     }
 }

@@ -22,6 +22,7 @@ public final class PlatformGalleryVerification extends TestApplication {
         application("单词编辑", WordEditingScenario.class);
         application("有限列表", LargeListScopeScenario.class);
         application("图像服务", ImageServiceScenario.class);
+        application("图像owner关闭故障", club.heiqi.uilib.host.client.gl.ImageCloseScenario.class);
         application("富文本", RichTextScenario.class);
         application("Markdown阅读", MarkdownReadingScenario.class);
         application("Markdown表格与HTML", MarkdownTableHtmlScenario.class);

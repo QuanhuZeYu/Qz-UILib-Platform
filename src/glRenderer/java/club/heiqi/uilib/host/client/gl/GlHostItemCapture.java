@@ -161,15 +161,23 @@ final class GlHostItemCapture implements AutoCloseable {
     }
 
     @Override public void close() {
-        try { if (framebuffer != 0) gl.glDeleteFramebuffers(framebuffer); }
-        finally {
-            framebuffer = 0;
-            try { if (depthStencil != 0) gl.glDeleteRenderbuffers(depthStencil); }
-            finally {
-                depthStencil = 0;
-                try { if (texture != 0) gl.glDeleteTextures(texture); }
-                finally { texture = width = height = 0; }
-            }
+        int ownedFramebuffer = framebuffer, ownedDepthStencil = depthStencil, ownedTexture = texture;
+        framebuffer = depthStencil = texture = width = height = 0;
+        // close也用于尺寸变化时释放旧分配；每个句柄仅尝试一次，首错保留全部后续错误。
+        Throwable failure = null;
+        try { if (ownedFramebuffer != 0) gl.glDeleteFramebuffers(ownedFramebuffer); }
+        catch (RuntimeException | Error next) { failure = next; }
+        try { if (ownedDepthStencil != 0) gl.glDeleteRenderbuffers(ownedDepthStencil); }
+        catch (RuntimeException | Error next) {
+            if (failure == null) failure = next;
+            else if (failure != next) failure.addSuppressed(next);
         }
+        try { if (ownedTexture != 0) gl.glDeleteTextures(ownedTexture); }
+        catch (RuntimeException | Error next) {
+            if (failure == null) failure = next;
+            else if (failure != next) failure.addSuppressed(next);
+        }
+        if (failure instanceof Error) throw (Error) failure;
+        if (failure != null) throw (RuntimeException) failure;
     }
 }
