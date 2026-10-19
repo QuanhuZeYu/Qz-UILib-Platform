@@ -50,28 +50,7 @@ public final class MediaNetworkScenario extends TestApplication {
             boolean failed=false;try{source.headers.clear();}catch(UnsupportedOperationException expected){failed=true;}require(failed,"请求头可被外部修改");
             headers.put("Referer","value\r\nInjected: yes");failed=false;try{MediaSource.http(source.uri,headers);}catch(IllegalArgumentException expected){failed=true;}require(failed,"HTTP换行未被拒绝");
         });
-        scenario("新来源尚未打开时不能提前结算定位",()->{
-            try(MediaNetworkFixture fixture=new MediaNetworkFixture()){
-                java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
-                java.util.concurrent.atomic.AtomicInteger opens=new java.util.concurrent.atomic.AtomicInteger();
-                club.heiqi.uilib.ui.media.spi.MediaDecoderFactory nativeFactory=IsolatedMediaAdapters.decoderFactory();
-                club.heiqi.uilib.ui.media.spi.MediaDecoderFactory gated=(source,token)->{
-                    if(opens.incrementAndGet()>1){entered.countDown();while(!release.await(10,java.util.concurrent.TimeUnit.MILLISECONDS))token.check();}
-                    return nativeFactory.open(source,token);
-                };
-                try(club.heiqi.uilib.ui.media.MediaService service=new club.heiqi.uilib.ui.media.MediaService(gated,IsolatedMediaAdapters.audioSinkFactory(),club.heiqi.uilib.ui.media.MediaBudget.DEFAULT)){
-                    club.heiqi.uilib.ui.media.MediaSession session=service.open(fixture.split(false),false);
-                    MediaTestSupport.await(session,s->s.info.ready&&s.outputReady,5000);
-                    session.source(fixture.split(false),500_000_000L);
-                    try{
-                        require(entered.await(2,java.util.concurrent.TimeUnit.SECONDS),"新来源读取没有进入门控");
-                        long until=System.nanoTime()+200_000_000L;
-                        while(session.snapshot().state==club.heiqi.uilib.ui.media.MediaState.SEEKING&&System.nanoTime()<until)Thread.sleep(2);
-                        require(session.snapshot().state==club.heiqi.uilib.ui.media.MediaState.SEEKING,"新来源事实未知时提前完成定位："+session.snapshot().state);
-                    }finally{release.countDown();}
-                }
-            }
-        });
+        // 真实 OpenAL 会话的换源检查在 MediaSourceTransitionScenario；此处保留真实解码。
         scenario("同字节数的真实动态视频尺寸刷新行跨度",()->{
             java.nio.file.Path file=java.nio.file.Files.createTempFile("uilib-equal-area-",".mjpg");
             try{

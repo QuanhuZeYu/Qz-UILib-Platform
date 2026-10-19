@@ -359,6 +359,8 @@ public final class PresentationEpochScenario extends TestApplication {
         }
     }
 
+    public static void main(String[] args) throws Exception { new PresentationEpochScenario().run(args); }
+
     @Override
     protected void runTests() throws Exception {
         String[] args = arguments();

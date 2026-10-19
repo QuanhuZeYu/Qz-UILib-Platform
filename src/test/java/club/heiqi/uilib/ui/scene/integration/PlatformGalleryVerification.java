@@ -38,8 +38,8 @@ public final class PlatformGalleryVerification extends TestApplication {
         application("字形样式与缓存", GlyphRasterStyleScenario.class, fonts, "reports/glyph-style");
         application("有序批次", OrderedBatchScenario.class, "reports/ordered-batch");
         application("数学文本字体", MathTextFontScenario.class, "reports/math-fonts");
-        application("字体延迟状态", FontDeferredStateScenario.class);
-        application("呈现代际", PresentationEpochScenario.class);
+        // GPU 延迟状态和呈现代际由 platformDeviceVerify 显式运行。
+        application("字体历史状态值对象", FontRenderContextValueScenario.class);
         application("媒体真实本地HTTP解码", "club.heiqi.uilib.testing.media.MediaNetworkScenario");
         application("媒体地址解析", "club.heiqi.uilib.host.media.bilibili.BilibiliResolverScenario");
         if (failure != null) rethrow(failure);

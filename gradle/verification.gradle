@@ -91,13 +91,18 @@ platformApplication('embeddedFontSourcesScenario', 'EmbeddedFontSourcesScenario'
 
 def deviceChecks = [batch:'GlBatchScenario', glyph:'AttributedGlyphGlScenario', font:'ClientFontServicesScenario',
         document:'DocumentGlScenario', markdown:'MarkdownGlScenario', math:'MathGlScenario', paint:'PaintPrimitiveScenario',
-        coverage:'MathCoverageScenario', image:'ImageGlScenario']
+        coverage:'MathCoverageScenario', image:'ImageGlScenario',
+        deferred:'FontDeferredStateScenario', epoch:'PresentationEpochScenario',
+        mediaTransition:'club.heiqi.uilib.testing.media.MediaSourceTransitionScenario']
 platformApplication('platformDeviceVerify','GlBatchScenario') {
+    classpath = sourceSets.test.runtimeClasspath + sourceSets.mediaTest.output + sourceSets.mediaAdapter.output
     doFirst {
         def selected = providers.gradleProperty('deviceCheck').getOrElse('batch')
         if (!deviceChecks.containsKey(selected)) throw new GradleException('deviceCheck 可选：' + deviceChecks.keySet().join(', '))
-        mainClass = 'club.heiqi.uilib.ui.scene.integration.' + deviceChecks[selected]
-        args output('reports/device-' + selected)
+        def entry = deviceChecks[selected]
+        mainClass = entry.contains('.') ? entry : 'club.heiqi.uilib.ui.scene.integration.' + entry
+        // deferred 的首参是可选字体文件，零参数使用随包字体。
+        if (selected != 'deferred') args output('reports/device-' + selected)
     }
 }
 def legacyArtifacts = files(configurations.coreRuntime8, platformArtifacts['font-adapter:8'].flatMap { it.archiveFile }, platformArtifacts['gl-renderer:8'].flatMap { it.archiveFile }, platformArtifacts['lwjgl2-adapter:8'].flatMap { it.archiveFile }, platformArtifacts['media-adapter:8'].flatMap { it.archiveFile })
