@@ -76,7 +76,7 @@ jobs:
             echo "需要先发布 Core $CORE_TAG 的同版本 Maven ZIP（发布顺序 Core → Platform）" >&2
             exit 1
           fi
-          tar -xf ".release/core/qz-uilib-core-$VERSION-maven.zip" -C .release/maven
+          python -m zipfile -e ".release/core/qz-uilib-core-$VERSION-maven.zip" .release/maven
       - name: 无凭据完整构建
         shell: bash
         env:
@@ -117,7 +117,7 @@ jobs:
             echo "需要先发布 Core $CORE_TAG 的同版本 Maven ZIP（发布顺序 Core → Platform）" >&2
             exit 1
           fi
-          tar -xf ".release/core/qz-uilib-core-$VERSION-maven.zip" -C .release/maven
+          python -m zipfile -e ".release/core/qz-uilib-core-$VERSION-maven.zip" .release/maven
       - name: 签名并上传 Central Portal
         shell: bash
         env:
