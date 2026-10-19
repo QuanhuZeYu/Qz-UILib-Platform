@@ -92,6 +92,10 @@ desktopApplication('desktopMailboxPerformance','DesktopMailboxPerformance') {
                 providers.gradleProperty('performanceScale').getOrElse('200'), providers.gradleProperty('performanceWarmup').getOrElse('30'), providers.gradleProperty('performanceFrames').getOrElse('120')
     }
 }
+desktopApplication('desktopSettingsBenchmark','DesktopSettingsPerformance') {
+    group = 'benchmark'; description = '真实设置页纯UI一毫秒预算、输入与窗口帧率基准'
+    args file(providers.gradleProperty('settingsOutput').getOrElse(report('settings-performance'))).absolutePath
+}
 desktopApplication('desktopDraggableBenchmark','DesktopDraggablePerformance') {
     group = 'benchmark'; systemProperty 'uilib.version', project.version.toString()
     systemProperty 'drag.revision', providers.gradleProperty('dragRevision').getOrElse('unknown')
