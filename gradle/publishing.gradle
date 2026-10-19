@@ -60,7 +60,7 @@ publishing {
     repositories {
         maven {
             name = 'Workspace'
-            url = uri(providers.gradleProperty('uilibRepository').getOrElse(layout.buildDirectory.dir('repository').get().asFile.absolutePath))
+            url = uri(findProperty('uilibRepository') ?: layout.buildDirectory.dir('repository').get().asFile.absolutePath)
         }
     }
 }
