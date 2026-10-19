@@ -150,13 +150,27 @@ platformApplication('performanceGalleryScenario','PerformanceGalleryScenario') {
     systemProperty 'performance.output', providers.gradleProperty('performanceOutput').getOrElse(output('reports/performance-core'))
 }
 tasks.register('verifyPlatformArtifacts') {
-    group = 'verification'; dependsOn platformArtifacts.values(), desktopJar, platformVerification
+    group = 'verification'; dependsOn platformArtifacts.values(), desktopJar, platformVerification, 'desktopDist', 'fontAdapterSourcesJar', 'mediaAdapterSourcesJar', 'desktopSourcesJar'
     doLast {
         def artifacts = platformArtifacts.collect { key, task -> [key: key, file: task.get().archiveFile.get().asFile, target: key.endsWith(':8') ? 52 : 65] }
         artifacts += [key:'desktop', file:desktopJar.get().archiveFile.get().asFile, target:65]
         artifacts += [key:'platform-verification', file:platformVerification.get().archiveFile.get().asFile, target:52]
+        def mediaLicenses = ['LWJGL-LICENSE.md', 'FreeType-FTL.txt', 'SOURCE.md']
+        def nativeLicenses = mediaLicenses + ['HarfBuzz-COPYING.txt', 'HarfBuzz-ADDITIONAL-NOTICES.txt']
+        def requireResource = { ZipFile zip, String path ->
+            def entry = zip.getEntry(path)
+            assert entry != null && !entry.directory && entry.size > 0 : zip.name + ' 缺少随附许可材料：' + path
+        }
         artifacts.each { artifact ->
             new ZipFile(artifact.file).withCloseable { zip ->
+                if (artifact.key.startsWith('font-adapter:') || artifact.key == 'desktop') {
+                    ['LICENSE', 'META-INF/THIRD-PARTY-NOTICES.md'].each { requireResource(zip, it) }
+                    nativeLicenses.each { requireResource(zip, 'assets/qz_uilib/licenses/native/' + it) }
+                }
+                if (artifact.key.startsWith('media-adapter:')) {
+                    mediaLicenses.each { requireResource(zip, 'assets/qz_uilib/licenses/media/' + it) }
+                    requireResource(zip, 'assets/qz_uilib/licenses/media/license-manifest.json')
+                }
                 zip.entries().each { entry ->
                     def name = entry.name
                     if (name.endsWith('.class')) {
@@ -178,6 +192,18 @@ tasks.register('verifyPlatformArtifacts') {
                 }
             }
             logger.lifecycle('PLATFORM_ARTIFACT ' + artifact.key + ' major=' + artifact.target + ' ' + artifact.file)
+        }
+        ['fontAdapter', 'mediaAdapter', 'desktop'].each { module ->
+            new ZipFile(tasks.named(module + 'SourcesJar').get().archiveFile.get().asFile).withCloseable { zip ->
+                def kind = module == 'mediaAdapter' ? 'media' : 'native'
+                def licenses = module == 'mediaAdapter' ? mediaLicenses : nativeLicenses
+                licenses.each { requireResource(zip, 'assets/qz_uilib/licenses/' + kind + '/' + it) }
+            }
+        }
+        new ZipFile(tasks.named('desktopDist').get().archiveFile.get().asFile).withCloseable { zip ->
+            ['LICENSE', 'THIRD-PARTY-NOTICES.md'].each { requireResource(zip, 'qz-uilib-desktop/' + it) }
+            nativeLicenses.each { requireResource(zip, 'qz-uilib-desktop/licenses/native/' + it) }
+            (mediaLicenses + ['license-manifest.json', 'sources/ffmpeg-cppbuild.sh']).each { requireResource(zip, 'qz-uilib-desktop/licenses/media/' + it) }
         }
     }
 }

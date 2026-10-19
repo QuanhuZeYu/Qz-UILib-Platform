@@ -48,6 +48,8 @@ apply from: 'gradle/native-runtime.gradle'
 
 // 同一 Java 目标的消费者共享输出；两种目标始终编译同一份生产源。
 ext.platformModules = [fontAdapter:'font-adapter', glRenderer:'gl-renderer', lwjgl2:'lwjgl2-adapter', lwjgl3:'lwjgl3-adapter', mediaAdapter:'media-adapter']
+ext.nativeLicenseResources = file('src/nativeLicenses/resources')
+ext.nativeLicenseDirectory = new File(nativeLicenseResources, 'assets/qz_uilib/licenses/native')
 sourceSets.main { java.setSrcDirs([]); resources.setSrcDirs([]) }
 platformModules.each { module, artifactName ->
     [8, 21].each { target ->
@@ -63,15 +65,20 @@ platformModules.each { module, artifactName ->
 [8, 21].each { target ->
     def suffix = target == 21 ? '21' : ''
     sourceSets['fontAdapter' + suffix].compileClasspath += configurations.fontBindings
-    sourceSets['fontAdapter' + suffix].resources.srcDir(layout.buildDirectory.dir('generated/isolated-font'))
+    sourceSets['fontAdapter' + suffix].resources.srcDirs(nativeLicenseResources, layout.buildDirectory.dir('generated/isolated-font'))
     tasks.named(sourceSets['fontAdapter' + suffix].processResourcesTaskName) { dependsOn 'packageFontBindings' }
     sourceSets['lwjgl2' + suffix].compileClasspath += sourceSets['glRenderer' + suffix].output + configurations.lwjgl2Bindings
     sourceSets['lwjgl3' + suffix].compileClasspath += sourceSets['glRenderer' + suffix].output + configurations.fontBindings
     sourceSets['mediaAdapter' + suffix].compileClasspath += configurations.mediaBindings
     sourceSets['mediaAdapter' + suffix].resources.srcDir(layout.buildDirectory.dir('generated/isolated-media'))
-    tasks.named(sourceSets['mediaAdapter' + suffix].processResourcesTaskName) { dependsOn 'packageMediaBindings' }
+    tasks.named(sourceSets['mediaAdapter' + suffix].processResourcesTaskName) {
+        dependsOn 'packageMediaBindings'
+        // 共享全文保留媒体既有资源路径及清单字节。
+        from(nativeLicenseDirectory) { include 'LWJGL-LICENSE.md', 'FreeType-FTL.txt'; into 'assets/qz_uilib/licenses/media' }
+    }
 }
 sourceSets.create('desktop') {
+    resources.srcDir(nativeLicenseResources)
     compileClasspath = configurations.coreDevelopment21 + configurations.coreContent + configurations.fontBindings + sourceSets.fontAdapter21.output + sourceSets.glRenderer21.output + sourceSets.lwjgl321.output + sourceSets.mediaAdapter21.output
 }
 sourceSets.test {

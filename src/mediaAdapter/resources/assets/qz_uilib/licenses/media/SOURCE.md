@@ -1,6 +1,8 @@
 # 媒体适配的许可、来源与可替换动态库
 
-本目录随独立 media-adapter 正式产物及其 java8 classifier 分发。UILib 自有 Java 实现按根许可证；下列第三方按其各自许可。核心不携带媒体绑定或native。版本由 -PuilibVersion 选择，坐标归属 club.heiqi.uilib。
+本目录随独立 media-adapter 正式产物及其 java8 classifier 分发。UILib 自有 Java 实现按根许可证；下列第三方按其各自许可。核心不携带媒体绑定或native。版本由 -PuilibVersion 选择，坐标归属以本次 POM 为准。
+
+仓库共享的 LWJGL-LICENSE.md 与 FreeType-FTL.txt 由 src/nativeLicenses/resources/assets/qz_uilib/licenses/native/ 维护；media-adapter 的二进制与 sources JAR 仍在本目录原路径提供相同全文，license-manifest.json 及媒体替换入口保持原契约。
 
 ## 实际固定组成
 

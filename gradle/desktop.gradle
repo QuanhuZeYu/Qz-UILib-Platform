@@ -27,6 +27,9 @@ tasks.register('installDesktop', Sync) {
     group = 'distribution'; dependsOn 'generateDesktopLaunchers'
     into(layout.buildDirectory.dir('install/desktop'))
     from(desktopArtifacts) { into('lib') }
+    from('LICENSE', 'THIRD-PARTY-NOTICES.md')
+    from(nativeLicenseDirectory) { into('licenses/native') }
+    from(sourceSets.mediaAdapter21.output) { include 'assets/qz_uilib/licenses/media/**'; eachFile { path = path.replace('assets/qz_uilib/licenses/', 'licenses/') }; includeEmptyDirs = false }
     from(scripts) { into('bin'); filePermissions { unix('rwxr-xr-x') } }
 }
 tasks.register('desktopDist', Zip) {

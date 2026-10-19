@@ -50,7 +50,10 @@ platformModules.each { module, name ->
         exclude 'assets/qz_uilib/runtime/**'; from('LICENSE', 'THIRD-PARTY-NOTICES.md', 'build.gradle', 'settings.gradle', 'gradle.properties')
         from('gradle') { into('gradle'); exclude 'wrapper/gradle-wrapper.jar' }
         if (module == 'fontAdapter') dependsOn 'packageFontBindings'
-        if (module == 'mediaAdapter') dependsOn 'packageMediaBindings'
+        if (module == 'mediaAdapter') {
+            dependsOn 'packageMediaBindings'
+            from(nativeLicenseDirectory) { include 'LWJGL-LICENSE.md', 'FreeType-FTL.txt'; into 'assets/qz_uilib/licenses/media' }
+        }
     }
     publishing.publications.create(module, MavenPublication) {
         artifactId = name
