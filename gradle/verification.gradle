@@ -87,6 +87,8 @@ platformApplication('platformVerify','PlatformGalleryVerification') {
         }
     }
 }
+platformApplication('embeddedFontSourcesScenario', 'EmbeddedFontSourcesScenario')
+
 def deviceChecks = [batch:'GlBatchScenario', glyph:'AttributedGlyphGlScenario', font:'ClientFontServicesScenario',
         document:'DocumentGlScenario', markdown:'MarkdownGlScenario', math:'MathGlScenario', paint:'PaintPrimitiveScenario',
         coverage:'MathCoverageScenario', image:'ImageGlScenario']
@@ -187,7 +189,7 @@ gradle.buildFinished {
 
 tasks.register('galleryVerify') {
     group = 'verification'; description = '验证共享广场核心、平台无窗口链路与正式产物隔离'
-    dependsOn 'galleryCoreVerify', 'platformVerify', 'platformArtifactsJava8', 'platformArtifactsJava21', 'platformArtifactsJava25', 'verifyPlatformArtifacts'
+    dependsOn 'galleryCoreVerify', 'platformVerify', 'embeddedFontSourcesScenario', 'platformArtifactsJava8', 'platformArtifactsJava21', 'platformArtifactsJava25', 'verifyPlatformArtifacts'
 }
 tasks.named('test', Test) { enabled = false; group = null }
 tasks.named('check') { setDependsOn(['galleryVerify']) }

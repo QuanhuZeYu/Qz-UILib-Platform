@@ -36,7 +36,12 @@ import club.heiqi.uilib.ui.settings.SettingsConfiguration;
 public final class EmbeddedSceneServices implements AutoCloseable {
     private final ReactiveDomain domain = ReactiveDomain.direct();
     private final Deque<AutoCloseable> resources = new ArrayDeque<>();
-    private final ClassLoader loader;
+    /** 来源按代提供不可变字节或明确退休的旧代读取边界；候选顺序由字体模块声明。 */
+    public interface FontSources {
+        List<FontSource> forGeneration(long generation) throws IOException;
+    }
+
+    private final FontSources fontSources;
     private ClientFontServices fonts;
     private ClientImageServices images;
     private ConfigSession configuration;
@@ -46,24 +51,34 @@ public final class EmbeddedSceneServices implements AutoCloseable {
     private long revision = 1;
     private boolean closed;
 
-    private EmbeddedSceneServices(ClassLoader loader) { this.loader = java.util.Objects.requireNonNull(loader, "loader"); }
+    private EmbeddedSceneServices(FontSources fontSources) {
+        this.fontSources = java.util.Objects.requireNonNull(fontSources, "fontSources");
+    }
 
     public static EmbeddedSceneServices open(Path path, ClassLoader loader, FontEngine engine, GlApi gl,
             JavaImageLoader.Resources imageResources) throws IOException {
-        EmbeddedSceneServices result = new EmbeddedSceneServices(loader);
-        try { result.initialize(path.toAbsolutePath().normalize(), engine, gl, imageResources); return result; }
+        java.util.Objects.requireNonNull(loader, "loader");
+        return open(path, loader, engine, gl, imageResources, generation -> FontTextService.defaultSources(loader, generation));
+    }
+
+    /** 显式资源宿主按代提供默认字体；旧open继续使用原classpath来源及使用条件。 */
+    public static EmbeddedSceneServices open(Path path, ClassLoader loader, FontEngine engine, GlApi gl,
+            JavaImageLoader.Resources imageResources, FontSources fontSources) throws IOException {
+        EmbeddedSceneServices result = new EmbeddedSceneServices(fontSources);
+        try { result.initialize(path.toAbsolutePath().normalize(), loader, engine, gl, imageResources); return result; }
         catch (IOException | RuntimeException | Error failure) {
             try { result.close(); } catch (Throwable cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
             throw failure;
         }
     }
 
-    private void initialize(Path path, FontEngine engine, GlApi gl, JavaImageLoader.Resources imageResources) throws IOException {
+    private void initialize(Path path, ClassLoader loader, FontEngine engine, GlApi gl,
+            JavaImageLoader.Resources imageResources) throws IOException {
         fonts = new ClientFontServices(loader, revision, ClientFontServices.Settings.defaults(), engine, gl, GlProgramProvider.NONE);
         resources.push(this::closeFonts);
         images = new ClientImageServices(gl, new JavaImageLoader(imageResources, JavaImageLoader.Budget.defaults()), SharedImageService.Budget.defaults());
         resources.push(this::closeImages);
-        List<FontSource> defaults = FontTextService.defaultSources(loader, revision);
+        List<FontSource> defaults = fontSources.forGeneration(revision);
         candidates = FontCandidateConfiguration.key(defaults);
         try {
             domain.execute(() -> {
@@ -95,7 +110,7 @@ public final class EmbeddedSceneServices implements AutoCloseable {
     private List<FontSource> resolveFonts(List<String> declarations, long generation) throws IOException {
         List<Path> files = new ArrayList<>();
         for (String file : FontCandidateConfiguration.files(declarations)) files.add(Paths.get(file));
-        List<FontSource> builtins = FontTextService.defaultSources(loader, generation);
+        List<FontSource> builtins = fontSources.forGeneration(generation);
         FontFamilyResolver resolver = new FontFamilyResolver(files, Collections.emptyList(), generation, System.err::println);
         return FontCandidateConfiguration.resolve(declarations, builtins,
                 (file, position) -> resolver.family(Paths.get(file), "embedded-file-" + position));
