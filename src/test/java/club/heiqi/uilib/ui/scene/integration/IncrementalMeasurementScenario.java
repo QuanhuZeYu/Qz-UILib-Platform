@@ -222,27 +222,22 @@ public final class IncrementalMeasurementScenario extends TestApplication {
             p.domain.execute(()->require(field[0].padding()==theme[0].get().padding&&area[0].padding()==theme[0].get().padding,"内边距变化未进入正式声明"));
         }
     }
-    private void settingsSurfaceStages() throws Exception {
-        // 使用内部装饰的实际工厂，不为此组合边界增加生产公开接缝。
-        Class<?> style=Class.forName("club.heiqi.uilib.ui.settings.SettingsStyle"),palette=Class.forName("club.heiqi.uilib.ui.settings.SettingsStyle$Palette");
-        java.lang.reflect.Constructor<?> constructor=palette.getDeclaredConstructor(boolean.class);constructor.setAccessible(true);
-        Object light=constructor.newInstance(false),dark=constructor.newInstance(true);
-        java.lang.reflect.Method surface=style.getDeclaredMethod("surface",SceneNode.class,ReadableSignal.class,boolean.class);surface.setAccessible(true);
-        Signal<Object>[] colors=new Signal[1];SceneNode[] content={null},wrapper={null};
+    private void settingsSurfaceStages() {
+        // 设置页已统一使用公开的现代卡片；验证真实布局/配色分层，不反射私有实现。
+        Signal<SceneTheme>[] colors=new Signal[1];SceneNode[] content={null},wrapper={null};
         try(Page p=new Page((page,ctx)->{
-            colors[0]=page.domain.signal(light);
+            colors[0]=page.domain.signal(SceneTheme.light());
             content[0]=new SceneNode().size(Size.fill(1).bounds(0,80),Size.fill(1).bounds(0,80)).text("有界填充正文");
-            try{wrapper[0]=((SceneNode)surface.invoke(null,content[0],colors[0],false)).size(Size.fixed(102),Size.natural());}
-            catch(ReflectiveOperationException failure){throw new AssertionError(failure);}
+            wrapper[0]=new club.heiqi.uilib.ui.scene.control.SceneAppearance(ctx,colors[0]).card(content[0]).size(Size.fixed(102),Size.natural());
             page.branch.set(Collections.singletonList(wrapper[0]));
         })) {
             p.domain.execute(()->{
-                require(p.entry(content[0]).box.width==80,"设置装饰绕过填充max边界");
-                require(p.entry(wrapper[0]).box.height==p.entry(content[0]).text.height+2,"自然装饰把尚未分配的FILL高度当成自然高");
+                require(p.entry(content[0]).box.width==80,"现代卡片绕过填充max边界");
+                require(p.entry(wrapper[0]).box.height==p.entry(content[0]).text.height,"自然卡片把尚未分配的FILL高度当成自然高");
             });
             int measured=p.extension.measures,requests=p.requests.count("有界填充正文");PaintPlan before=p.host.paint;
-            p.update(()->colors[0].set(dark));
-            require(p.host.paint!=before&&p.extension.measures==measured&&p.requests.count("有界填充正文")==requests,"装饰换色未呈现或扩大为祖先测量");
+            p.update(()->colors[0].set(SceneTheme.dark()));
+            require(p.host.paint!=before&&p.extension.measures==measured&&p.requests.count("有界填充正文")==requests,"卡片换色未呈现或扩大为祖先测量");
         }
     }
     private void naturalHeight() {

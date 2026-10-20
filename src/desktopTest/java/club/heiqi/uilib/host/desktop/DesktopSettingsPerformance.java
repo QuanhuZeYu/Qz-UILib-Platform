@@ -113,7 +113,7 @@ public final class DesktopSettingsPerformance {
                 sample(window, input, cursor, mode, "font-reorder-motion", 0, 450, false, null);
                 run.put("sourcesAfterRelease", DesktopSettingsVerification.current(window));
                 require(DesktopSettingsVerification.current(window).equals(original), "字体排序草稿提前应用");
-                require(DesktopSettingsVerification.hasText(window, "有待应用修改"), "release没有产生设置排序草稿");
+                require(DesktopSettingsVerification.hasText(window, "有未应用的更改"), "release没有产生设置排序草稿");
                 require(Arrays.equals(saved, Files.readAllBytes(configuration)), "排序草稿隐式保存了文件");
                 run.put("storageAfterRelease", storage(configuration));
                 input.click("完成字体编辑");

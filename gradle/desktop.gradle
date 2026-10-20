@@ -56,7 +56,7 @@ desktopApplication('desktopGallery','DesktopGallery') { group = 'application' }
 // 保留真实设备取证，只有明确选择此入口才创建窗口；人工入口仍是 desktopGallery。
 desktopApplication('desktopDeviceVerify','DesktopGallery') {
     doFirst {
-        def checks = [host:'DesktopVerification', gallery:'DesktopGallery', settings:'DesktopSettingsVerification',
+        def checks = [host:'DesktopVerification', gallery:'DesktopGallery', settings:'DesktopSettingsVerification', 'settings-workspace':'DesktopSettingsWorkspaceVerification',
                 command:'DesktopCommandVerification', draggable:'DesktopDraggableVerification', 'draggable-deep':'DesktopDraggableDeepVerification',
                 'drop-sort':'DesktopDropSortVerification', scroll:'DesktopScrollAreaVerification', direction:'DesktopDirectionVerification',
                 table:'DesktopDataTableVerification', tree:'DesktopTreeVerification', state:'DesktopStateControlsVerification',

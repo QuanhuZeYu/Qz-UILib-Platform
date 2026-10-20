@@ -83,7 +83,7 @@ public final class DesktopSettingsVerification extends TestApplication {
                 keys.click(font.getFileName().toString());keys.click("选择文件");until=System.nanoTime()+5_000_000_000L;while(hasText(window,"选择文件")&&System.nanoTime()<until){window.frame();Thread.sleep(5);}
                 require(!hasText(window,"选择文件")&&hasText(window,"添加字体来源")&&current(window).equals(initial)&&java.util.Arrays.equals(saved,Files.readAllBytes(config)),"回填自动追加、应用或保存");
                 window.domain.execute(()->require(((club.heiqi.uilib.ui.scene.edit.SceneCompositionTarget)field.control()).compositionState().snapshot().get().text.equals(font.toString()),"选择结果未回填路径草稿"));
-                keys.click("添加到末尾");require(current(window).equals(initial)&&hasText(window,"有待应用修改"),"显式追加提前应用");keys.click("完成字体编辑");keys.click("应用全部更改");settle(window);
+                keys.click("添加到末尾");require(current(window).equals(initial)&&hasText(window,"有未应用的更改"),"显式追加提前应用");keys.click("完成字体编辑");keys.click("应用全部更改");settle(window);
                 require(current(window).contains("file:"+font)&&java.util.Arrays.equals(saved,Files.readAllBytes(config)),"应用未发布字体或自动保存");keys.click("保存到文件");settle(window);require(!java.util.Arrays.equals(saved,Files.readAllBytes(config)),"显式保存未写真实文件");
                 screenshot(window,output.resolve("font-picker-applied.png"));
             }
@@ -113,7 +113,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         screenshot(w,output.resolve("settings-appearance-light.png"));
         input.click("深色外观");settle(w);
         screenshot(w,output.resolve("settings-appearance-dark.png"));
-        require(currentTheme(w)==ThemeMode.LIGHT&&hasText(w,"有待应用修改"),"主题切换没有保留草稿阶段");
+        require(currentTheme(w)==ThemeMode.LIGHT&&hasText(w,"有未应用的更改"),"主题切换没有保留草稿阶段");
         require(titleInk(w)!=lightInk,"主题草稿没有可见预览");
         require(java.util.Arrays.equals(before,Files.readAllBytes(path)),"主题草稿误写文件");
         input.click("放弃编辑");settle(w);
@@ -126,10 +126,10 @@ public final class DesktopSettingsVerification extends TestApplication {
         input.click("管理字体来源");screenshot(w,output.resolve("settings-font-manager.png"));
         fontDrag(w,input,true);require(current(w).equals(original),"取消拖动提前发布字体");
         require(java.util.Arrays.equals(before,Files.readAllBytes(path)),"取消拖动误写文件");
-        fontDrag(w,input,false);require(current(w).equals(original),"排序草稿提前发布");require(hasText(w,"有待应用修改"),"排序未标记草稿");
+        fontDrag(w,input,false);require(current(w).equals(original),"排序草稿提前发布");require(hasText(w,"有未应用的更改"),"排序未标记草稿");
         require(java.util.Arrays.equals(before,Files.readAllBytes(path)),"排序草稿误写文件");
         screenshot(w,output.resolve("settings-font-dragged.png"));
-        input.click("完成字体编辑");input.click("配置文件");require(hasText(w,"有待应用修改"),"切分类丢草稿");input.click("外观");
+        input.click("完成字体编辑");input.click("配置文件");require(hasText(w,"有未应用的更改"),"切分类丢草稿");input.click("外观");
         input.click("应用全部更改");settle(w);applied=current(w);
         List<String> expected=new ArrayList<>(original);java.util.Collections.swap(expected,0,1);
         require(!expected.equals(original)&&applied.equals(expected),"正式应用没有发布拖动后的完整顺序");
@@ -143,8 +143,8 @@ public final class DesktopSettingsVerification extends TestApplication {
         String yaml=new String(Files.readAllBytes(path),StandardCharsets.UTF_8);require(yaml.contains(applied.get(0))&&yaml.contains("windowProfile"),"保存丢字体或其他字段");
     }
     private void reloadAndErrors() throws Exception {
-        input.click("管理字体来源");input.click("下移");input.click("完成字体编辑");input.click("配置文件");input.click("从文件重新加载");require(hasText(w,"从文件重新加载？"),"脏加载没有确认");
-        input.click("继续编辑");require(hasText(w,"有待应用修改"),"加载取消丢草稿");
+        input.click("管理字体来源");input.click("↓");input.click("完成字体编辑");input.click("配置文件");input.click("从文件重新加载");require(hasText(w,"从文件重新加载？"),"脏加载没有确认");
+        input.click("继续编辑");require(hasText(w,"有未应用的更改"),"加载取消丢草稿");
         input.click("从文件重新加载");input.click("放弃更改并加载");settle(w);require(current(w).equals(applied)&&hasText(w,"已保存"),"显式load未恢复保存值");
         long generation=w.fonts.fonts().generation();input.click("从文件重新加载");settle(w);require(w.fonts.fonts().generation()>generation,"同候选显式加载未刷新资源");
         screenshot(w,output.resolve("settings-file.png"));
@@ -155,7 +155,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         require(current(w).get(0).equals("file:C:/nonexistent/uilib-resource-test.ttf"),"资源错误回滚已读值");
         screenshot(w,output.resolve("settings-resource-error.png"));
         input.click("外观");input.click("管理字体来源");input.click("移除");input.click("+ 添加来源");input.click("添加到末尾");
-        require(!hasText(w,"添加字体来源")&&hasText(w,"有待应用修改"),"旧资源错误阻断合法来源添加或未关闭模态");
+        require(!hasText(w,"添加字体来源")&&hasText(w,"有未应用的更改"),"旧资源错误阻断合法来源添加或未关闭模态");
         input.click("完成字体编辑");input.click("应用全部更改");settle(w);require(!hasTextContaining(w,"字体资源更新失败："),"修正并应用未清资源错误");
         input.click("配置文件");input.click("从文件重新加载");input.click("放弃更改并加载");settle(w);
         input.click("从文件重新加载");settle(w);require(hasTextContaining(w,"字体资源更新失败：")&&!hasText(w,"已从 "+path+" 重新加载"),"重复同文案资源失败伪成功");
@@ -163,7 +163,9 @@ public final class DesktopSettingsVerification extends TestApplication {
     }
     private void fieldsAndEmpty() throws Exception {
         input.click("外观");input.click("管理字体来源");
-        input.click("+ 添加来源");input.click("本地字体文件");input.click("添加到末尾");require(hasText(w,"请输入字体文件路径。"),"空路径误关闭或未定位错误");
+        input.click("+ 添加来源");input.click("本地字体文件");clickField(w,input);
+        input.key.invoke(w.handle(),GLFW_KEY_ENTER,0,GLFW_PRESS,0);input.key.invoke(w.handle(),GLFW_KEY_ENTER,0,GLFW_RELEASE,0);w.frame();
+        require(hasText(w,"请输入字体文件路径。"),"空路径字段提交误关闭或未定位错误");
         clickField(w,input);"C:/nonexistent/uilib-settings-test.ttf".codePoints().forEach(cp -> input.character.invoke(w.handle(),cp));w.frame();input.click("添加到末尾");require(hasText(w,"添加字体来源"),"读取来源失败丢失模态");
         input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_PRESS,0);input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_RELEASE,0);w.frame();require(!hasText(w,"添加字体来源")&&visible(w,"完成字体编辑"),"ESC未返回字体管理");
         input.click("完成字体编辑");
@@ -189,19 +191,19 @@ public final class DesktopSettingsVerification extends TestApplication {
     private void viewportAndNavigation() throws Exception {
         glfwSetWindowSize(w.handle(),1024,768);settle(w);screenshot(w,output.resolve("settings-medium.png"));require(visible(w,"应用全部更改"),"中窗口footer不可达");
         glfwSetWindowSize(w.handle(),480,900);settle(w);screenshot(w,output.resolve("settings-narrow.png"));
-        require(visible(w,"应用全部更改")&&visible(w,"外观 · 切换分类"),"窄窗口操作或分类入口不可达");
-        input.click("外观 · 切换分类");settle(w);screenshot(w,output.resolve("settings-narrow-navigation.png"));
+        require(visible(w,"应用全部更改")&&visible(w,"外观"),"窄窗口操作或分类入口不可达");
+        input.click("外观");settle(w);screenshot(w,output.resolve("settings-narrow-navigation.png"));
         input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_PRESS,0);input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_RELEASE,0);w.frame();
         require(!visible(w,"关闭分类"),"ESC没有关闭窄窗分类层");
         w.domain.execute(() -> require(w.page.runtime().focusRouter().focused().get()!=null
-                && w.page.runtime().focusRouter().focused().get().text().equals("外观 · 切换分类"),"分类关闭没有恢复触发点焦点"));
-        input.click("外观 · 切换分类");input.click("配置文件");settle(w);
-        require(visible(w,"配置文件 · 切换分类")&&hasText(w,"文件路径"),"窄窗分类选择未切换正文");
-        input.click("配置文件 · 切换分类");input.click("外观");settle(w);
+                && w.page.runtime().focusRouter().focused().get().text().equals("外观"),"分类关闭没有恢复触发点焦点"));
+        input.click("外观");input.click("配置文件");settle(w);
+        require(visible(w,"配置文件")&&hasText(w,"文件路径"),"窄窗分类选择未切换正文");
+        input.click("配置文件");input.click("外观");settle(w);
     }
     private void closeConfirmation() throws Exception {
         glfwSetWindowSize(w.handle(),1440,1000);settle(w);input.enqueueClick("浅色模式");input.close.invoke(w.handle());w.frame();
-        require(!w.shouldClose()&&hasText(w,"离开配置工作区？"),"原生关闭绕过草稿确认");input.click("继续编辑");require(hasText(w,"有待应用修改"),"关闭取消丢草稿");
+        require(!w.shouldClose()&&hasText(w,"离开配置工作区？"),"原生关闭绕过草稿确认");input.click("继续编辑");require(hasText(w,"有未应用的更改"),"关闭取消丢草稿");
         input.click("浅色外观");input.click("应用全部更改");settle(w);
         require(currentTheme(w)==ThemeMode.LIGHT,"未保存主题应用没有生效");
         byte[] saved=Files.readAllBytes(path);input.close.invoke(w.handle());w.frame();require(!w.shouldClose(),"未保存原生关闭未确认");
@@ -425,28 +427,39 @@ public final class DesktopSettingsVerification extends TestApplication {
     }
     static List<String> current(DesktopWindow w){final List<String>[] result=new List[1];w.domain.execute(() -> result[0]=new ArrayList<>(w.configuration.get(w.fontCandidates)));return result[0];}
     private static ThemeMode currentTheme(DesktopWindow w){final ThemeMode[] result={null};w.domain.execute(() -> result[0]=w.configuration.get(ThemeConfiguration.KEY));return result[0];}
-    private static int titleInk(DesktopWindow w){return w.lastPlan.commands().stream().filter(c -> c.kind==PaintCommand.Kind.TEXT&&"QZ  /  UILib 设置".equals(c.text.logicalText)).findFirst().orElseThrow(() -> new AssertionError("正式设置标题缺失")).color;}
+    private static int titleInk(DesktopWindow w){return w.lastPlan.commands().stream().filter(c -> c.kind==PaintCommand.Kind.TEXT&&"QZ UILib / 工作区设置".equals(c.text.logicalText)).findFirst().orElseThrow(() -> new AssertionError("正式设置标题缺失")).color;}
     // 断言呈现的逻辑内容；TextInput 入口允许 originalText 为空，不能把可选原串当显示文字。
     static boolean hasText(DesktopWindow w,String text){return geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&text.equals(e.text.logicalText));}
     private static boolean hasTextContaining(DesktopWindow w,String text){return geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&e.text.logicalText.contains(text)&&hit(e).width>0&&hit(e).height>0);}
     private static boolean visible(DesktopWindow w,String text){return geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&text.equals(e.text.logicalText)&&hit(e).width>0&&hit(e).height>0);}
-    private static void screenshot(DesktopWindow w,Path path) throws Exception {
+    static void screenshot(DesktopWindow w,Path path) throws Exception {
         // 新内容挂载后字形按正式异步管线到达，取证等待连续稳定，不能把首帧缺字当最终画面。
         settle(w);
         w.fonts.beginPresentation(1000000);try{w.replay(w.lastPlan);}finally{w.fonts.endPresentation();}
         BufferedImage image=DesktopTestReadback.readBack(w);
-        PaintCommand title=w.lastPlan.commands().stream().filter(c -> c.kind==PaintCommand.Kind.TEXT&&"QZ  /  UILib 设置".equals(c.text.logicalText)).findFirst().orElseThrow(() -> new AssertionError("正式设置标题缺失"));
-        int ink=0,background=image.getRGB(Math.min(w.width()-1,title.box.x),Math.min(w.height()-1,title.box.y));
-        for(int y=Math.max(0,title.box.y);y<Math.min(w.height(),title.box.y+title.box.height);y++)for(int x=Math.max(0,title.box.x);x<Math.min(w.width(),title.box.x+title.box.width);x++)if(image.getRGB(x,y)!=background)ink++;
-        require(ink>0&&glGetError()==GL_NO_ERROR,"设置标题无真实GL字形像素");ImageIO.write(image,"png",path.toFile());
+        ImageIO.write(image,"png",path.toFile());
+        // 从正式当前模态范围选最大字号的可见文字；标题、确认、下拉选项都不依赖语义名与画面文案相同。
+        SceneGeometryView.Entry[] chosen={null};w.domain.execute(()->{
+            SceneGeometryView view=geometry(w);boolean modal=view.activeModal()!=null;
+            for(SceneGeometryView.Entry e:view.ordered())if(e.text!=null&&!e.text.logicalText.isEmpty()
+                    &&w.page.runtime().interactive(e.node)&&hit(e).width>0&&hit(e).height>0
+                    &&(modal||"QZ UILib / 工作区设置".equals(e.text.logicalText))
+                    &&(chosen[0]==null||e.text.style.logicalEm>chosen[0].text.style.logicalEm))chosen[0]=e;
+        });
+        require(chosen[0]!=null,"当前设置窗口缺少可见正式文字");LayoutBox area=hit(chosen[0]);
+        int ink=0,background=image.getRGB(area.x,area.y);
+        for(int y=area.y;y<area.y+area.height;y++)for(int x=area.x;x<area.x+area.width;x++)if(image.getRGB(x,y)!=background)ink++;
+        require(ink>0&&glGetError()==GL_NO_ERROR,"设置窗口文字无真实GL字形像素："+chosen[0].text.logicalText+" ink="+ink+" area="+area.width+"x"+area.height);
     }
     private static void clickField(DesktopWindow w, DesktopTestInput input) {
-        SceneGeometryView.Entry entry = geometry(w).ordered().stream()
-                .filter(g -> g.node.control() != null && g.node.control().capturesPointer()
-                        && hit(g).width > 0 && hit(g).height > 0)
-                .reduce((previous, next) -> next)
-                .orElseThrow(() -> new AssertionError("找不到模态文件路径编辑器"));
-        input.click(entry);
+        club.heiqi.uilib.ui.scene.semantics.SceneSemanticSnapshot.Entry[] field={null};
+        w.domain.execute(()->field[0]=w.page.runtime().semanticSnapshot(geometry(w)).entries.stream()
+                .filter(e->e.values.role==club.heiqi.uilib.ui.scene.semantics.SceneSemantics.Role.TEXT_FIELD
+                        &&"字体文件路径".equals(e.values.name)&&e.rangeInteractive&&!e.offscreen)
+                .findFirst().orElseThrow(()->new AssertionError("找不到模态文件路径编辑器")));
+        LayoutBox box=field[0].clip==null?field[0].box:field[0].box.intersect(field[0].clip);
+        require(box.width>0&&box.height>0,"模态文件路径编辑器缺少可见命中区域");
+        input.enqueueAt(box.x+box.width/2.0,box.y+box.height/2.0);w.frame();
     }
 
 }
