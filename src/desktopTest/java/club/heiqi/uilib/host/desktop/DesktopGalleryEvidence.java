@@ -199,7 +199,8 @@ final class DesktopGalleryEvidence {
                                         c.kind == PaintCommand.Kind.TEXT
                                                 && (c.text.logicalText.equals("QZ Mail")
                                                         || c.text.logicalText.equals("QZ / 场景工作台")
-                                                        || c.text.logicalText.equals("设置")))
+                                                        || c.text.logicalText.equals("设置")
+                                                        || c.text.logicalText.equals("浮动通知")))
                         .findFirst()
                         .orElseThrow(() -> new AssertionError("广场标题缺失"));
         int ink = 0;
