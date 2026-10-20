@@ -16,6 +16,8 @@ import club.heiqi.uilib.ui.scene.layout.Size;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.runtime.NodeBinding;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticSnapshot;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemantics;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -42,7 +44,8 @@ public final class DesktopFilePickerVerification extends TestApplication {
     }
     @Override protected void runTests() throws Exception {
         scenario("后页定位显露、根范围清目标、明确搜索和宽窄动态布局", this::picker);
-        System.out.println("FILE_PICKER_DESKTOP realDirectory=true installedCallbacks=true locatedReveal=true rootTargetCleared=true virtualRows=true responsive=true geometryMetrics=true metadataTooltip=true editorFocusPreserved=true");
+        scenario("未选择条目时手输确认的旧成功与失败可见反馈", this::typedStaleConfirm);
+        System.out.println("FILE_PICKER_DESKTOP realDirectory=true installedCallbacks=true locatedReveal=true rootTargetCleared=true virtualRows=true responsive=true geometryMetrics=true metadataTooltip=true editorFocusPreserved=true typedStaleSuccess=true typedStaleFailure=true visibleFeedback=true");
     }
     private void picker() throws Exception {
         Fixture page = new Fixture();
@@ -54,13 +57,11 @@ public final class DesktopFilePickerVerification extends TestApplication {
                 input.click("打开文件选择器");
                 await(window, () -> text(window, "条目 000.ViDeO"), "目录首批没有到达");
                 DesktopTestFrames.finitePresentations(window);
-                SceneNode list = geometry(window).ordered().stream().map(e -> e.node)
-                        .filter(n -> n.control() != null && n.control().inspectionLogicalItemCount(n) == 64).findFirst()
-                        .orElseThrow(() -> new AssertionError("文件列表没有复用共享有限集合"));
+                SceneNode list = pickerList(window);
+                require(list.control().inspectionLogicalItemCount(list) == 64, "文件列表没有使用当前目录页预算");
                 require(list.control().inspectionInstantiatedItemCount(list) < 64, "目录页仍一次挂载所有行");
-                SceneNode pathField = fields(window).stream()
-                        .filter(node -> directory.toString().equals(editText(window, node))).findFirst()
-                        .orElseThrow(() -> new AssertionError("路径字段没有当前目录"));
+                SceneNode pathField = field(window, "输入目录或文件路径");
+                require(directory.toString().equals(editText(window, pathField)), "路径字段没有当前目录");
                 Path target = directory.resolve("条目 149.ViDeO");
                 type(window, input, pathField, target.toString()); key(window, input, GLFW_KEY_ENTER, 0);
                 await(window, () -> text(window, "第 3 页") && text(window, target.getFileName().toString()), "直接定位没有落在自然第三页");
@@ -105,7 +106,7 @@ public final class DesktopFilePickerVerification extends TestApplication {
                 type(window, input, pathField, directory.toString()); key(window, input, GLFW_KEY_ENTER, 0);
                 await(window, () -> visible(window, "名称 ↑") && text(window, "条目 000.ViDeO"), "路径导航未恢复默认排序");
                 input.click("刷新"); await(window, () -> text(window, "条目 000.ViDeO"), "刷新未恢复当前范围");
-                SceneNode search = fields(window).stream().filter(node -> node != pathField).findFirst().get();
+                SceneNode search = field(window, "按名称搜索");
                 type(window, input, search, "149"); key(window, input, GLFW_KEY_ENTER, 0);
                 await(window, () -> text(window, "条目 149.ViDeO") && !text(window, "条目 000.ViDeO"), "明确搜索动作没有覆盖后页");
                 require(focused(window) == search, "搜索结果抢走名称字段焦点");
@@ -141,6 +142,57 @@ public final class DesktopFilePickerVerification extends TestApplication {
             }
         }
     }
+    private void typedStaleConfirm() throws Exception {
+        Fixture page = new Fixture();
+        try (DesktopWindow window = DesktopWindow.openWithServices(output.resolve("typed-stale.yaml"), true, services -> page)) {
+            glfwSetWindowSize(window.handle(), 1100, 820); DesktopTestFrames.settle(window);
+            DesktopTestInput input = new DesktopTestInput(window);
+            input.focus.invoke(window.handle(), true); window.frame();
+            try (DesktopTestInput.ScriptedCursor ignored = input.scriptedCursor()) {
+                for (boolean existing : new boolean[] {true, false}) {
+                    input.click("打开文件选择器");
+                    await(window, () -> text(window, "条目 000.ViDeO"), "全新选择器未读到非空目录");
+                    DesktopTestFrames.finitePresentations(window);
+                    SceneNode modal = pickerModal(window);
+                    SceneNode pathField = field(window, "输入目录或文件路径");
+                    Path first = directory.resolve(existing ? "条目 000.ViDeO" : "不存在的待核验文件.ViDeO");
+                    String laterDraft = directory.resolve("尚未确认的新路径.ViDeO").toString();
+                    // 每例重新打开，未点击任何列表条目；只手输 A，避免旧选择的通用反馈掩盖请求反馈。
+                    type(window, input, pathField, first.toString());
+                    require(first.toString().equals(editText(window, pathField)), "手输 A 未成为当前草稿");
+                    int cancelledBefore = page.cancelledCalls;
+                    // 同一真实输入批次先确认 A 再编辑 B，worker 结果只能在输入结算后领取。
+                    input.enqueueClick("选择文件");
+                    input.enqueue(geometry(window, pathField));
+                    input.key.invoke(window.handle(), GLFW_KEY_A, 0, GLFW_PRESS, GLFW_MOD_CONTROL);
+                    input.key.invoke(window.handle(), GLFW_KEY_A, 0, GLFW_RELEASE, GLFW_MOD_CONTROL);
+                    laterDraft.codePoints().forEach(c -> input.character.invoke(window.handle(), c));
+                    window.frame();
+                    await(window, () -> page.selectedCalls != 0 || geometry(window).activeModal() != modal
+                            || action(geometry(window), modal, "选择文件").enabled()
+                            && feedbackVisible(window, "路径已更改，请重新确认。"),
+                            "未选择条目的旧核验没有可见重新确认反馈：" + existing);
+                    require(page.selectedCalls == 0 && page.selected == null && page.cancelledCalls == cancelledBefore,
+                            "旧核验触发了选择或取消回调：" + existing);
+                    require(pickerModal(window) == modal && laterDraft.equals(editText(window, pathField)),
+                            "旧核验关闭选择器或覆盖 B 草稿：" + existing);
+                    DesktopTestFrames.settle(window);
+                    require(feedbackVisible(window, "路径已更改，请重新确认。"), "请求反馈没有完整可见地绘制");
+                    String name = "typed-stale-" + (existing ? "success" : "failure");
+                    DesktopGalleryEvidence.saveGeometry(window, output.resolve(name + ".geometry.json"));
+                    javax.imageio.ImageIO.write(DesktopTestReadback.readFront(window), "png", output.resolve(name + ".png").toFile());
+                    System.out.println("FILE_PICKER_TYPED_STALE result=" + (existing ? "success" : "failure")
+                            + " freshPicker=true noListSelection=true sameInputBatch=true callbacks=0"
+                            + " modalRetained=true laterDraftPreserved=true completeVisibleFeedback=true");
+                    input.click("取消");
+                    require(geometry(window).activeModal() == null && page.cancelledCalls == cancelledBefore + 1,
+                            "旧核验后取消没有正常结束选择器");
+                    DesktopTestFrames.finitePresentations(window);
+                }
+            }
+        }
+    }
+
     private void verifyLayout(DesktopWindow window, DesktopTestInput input, SceneNode list,
             SceneNode pathField, SceneNode search, String name, int width, int height,
             double minimumRatio, int minimumRows) throws Exception {
@@ -167,7 +219,7 @@ public final class DesktopFilePickerVerification extends TestApplication {
         require(tooltipText(window, selectedName + "\n" + metadata.node.text()),
                 "文件行提示未完整绘制名称、类型、大小与修改时间：" + name);
         input.point(window.width() - 2, window.height() - 2); DesktopTestFrames.finitePresentations(window);
-        evidence(window, list, name, minimumRatio, minimumRows);
+        evidence(window, list, pathField, search, name, minimumRatio, minimumRows);
         // 同一搜索框跨宽度变化保留真实焦点与草稿，查询完成也不能把焦点送去列表。
         type(window, input, search, "149"); key(window, input, GLFW_KEY_ENTER, 0);
         await(window, () -> text(window, "条目 149.ViDeO") && !text(window, "条目 000.ViDeO"), "边界搜索失败：" + name);
@@ -175,17 +227,33 @@ public final class DesktopFilePickerVerification extends TestApplication {
         input.click("清空搜索"); await(window, () -> text(window, "条目 000.ViDeO"), "边界清空搜索失败：" + name);
     }
 
-    private void evidence(DesktopWindow window, SceneNode list, String name,
+    private void evidence(DesktopWindow window, SceneNode list, SceneNode pathField, SceneNode search, String name,
             double minimumRatio, int minimumRows) throws Exception {
         SceneGeometryView view = geometry(window);
-        SceneNode frame = list;
-        while (frame != null && (frame.control() == null || !"Frame".equals(frame.control().getClass().getSimpleName())))
-            frame = frame.parent();
-        require(frame != null && frame.children().size() == 3, "没有找到文件选择器正文框架");
-        LayoutBox panel = view.get(frame.parent()).box;
-        LayoutBox header = view.get(frame.children().get(0)).box;
-        LayoutBox footer = view.get(frame.children().get(2)).box;
+        SceneNode modal = pickerModal(window);
+        require(list == pickerList(window), "尺寸变化替换了正式列表：" + name);
+        java.util.List<SceneNode> headerControls = new java.util.ArrayList<>();
+        headerControls.add(pathField); headerControls.add(search);
+        for (String action : new String[] {"后退", "前进", "上一级", "根目录", "刷新", "前往", "搜索", "名称 ↑", "所有文件"})
+            headerControls.add(action(view, modal, action));
+        headerControls.add(view.ordered().stream().map(e -> e.node)
+                .filter(node -> within(node, modal) && node.clickAction() != null && node.text().startsWith("选择文件 · "))
+                .findFirst().orElseThrow(() -> new AssertionError("没有当前目录层级动作")));
+        java.util.List<SceneNode> footerControls = new java.util.ArrayList<>();
+        for (String action : new String[] {"上一页", "下一页", "取消", "选择文件"})
+            footerControls.add(action(view, modal, action));
+        java.util.List<SceneNode> controls = new java.util.ArrayList<>(headerControls);
+        controls.addAll(footerControls);
+        // 面板由列表及真实操作的共同几何归属决定，内部布局类与组合层数不构成验证合同。
+        SceneNode panelNode = list;
+        for (SceneNode control : controls)
+            while (panelNode != null && !within(control, panelNode)) panelNode = panelNode.parent();
+        require(panelNode != null && panelNode != modal && within(panelNode, modal), "操作没有同属当前弹窗面板");
+        LayoutBox panel = view.get(panelNode).box;
+        LayoutBox header = controlBounds(view, headerControls, name);
+        LayoutBox footer = controlBounds(view, footerControls, name);
         LayoutBox viewport = view.get(list).box;
+        require(complete(view.get(panelNode)) && complete(view.get(list)), "面板或列表被裁剪：" + name);
         long completeRows = view.ordered().stream()
                 .filter(e -> within(e.node, list) && e.node.clickAction() != null
                         && e.node.text().startsWith("条目 ") && e.node.text().endsWith(".ViDeO") && complete(e)).count();
@@ -202,8 +270,76 @@ public final class DesktopFilePickerVerification extends TestApplication {
         require(completeRows >= minimumRows, "列表完整可见行不足：" + name + " " + completeRows + " < " + minimumRows);
         require(header.y + header.height <= viewport.y && viewport.y + viewport.height <= footer.y,
                 "头部或页脚侵入列表：" + name);
-        require(complete(view.get(frame.children().get(0))) && complete(view.get(frame.children().get(2))),
-                "头部或页脚被裁剪：" + name);
+        require(contains(panel, header) && contains(panel, viewport) && contains(panel, footer),
+                "关键区域溢出弹窗面板：" + name);
+    }
+
+    private static SceneNode pickerModal(DesktopWindow window) {
+        SceneSemanticSnapshot snapshot = window.semantics();
+        SceneSemanticSnapshot.Entry dialog = snapshot.get(snapshot.currentModal);
+        require(dialog != null && dialog.values.role == SceneSemantics.Role.GROUP
+                && "选择本地文件".equals(dialog.values.name), "当前模态不是正式文件选择弹窗");
+        SceneNode modal = geometry(window).activeModal();
+        require(modal != null, "正式弹窗缺少当前模态几何");
+        return modal;
+    }
+    private static SceneNode pickerList(DesktopWindow window) {
+        SceneNode modal = pickerModal(window);
+        SceneNode[] result = {null};
+        window.domain.execute(() -> result[0] = geometry(window).ordered().stream().map(e -> e.node)
+                .filter(node -> within(node, modal) && node.control() != null)
+                .filter(node -> {
+                    SceneSemantics semantics = node.control().semantics(node);
+                    return semantics != null && semantics.values.role == SceneSemantics.Role.LIST;
+                }).findFirst().orElseThrow(() -> new AssertionError("当前弹窗缺少正式 LIST")));
+        return result[0];
+    }
+    private static SceneNode field(DesktopWindow window, String description) {
+        SceneNode modal = pickerModal(window);
+        SceneNode[] result = {null};
+        window.domain.execute(() -> result[0] = fields(window).stream().filter(node -> within(node, modal))
+                .filter(node -> description.equals(node.control().semantics(node).values.description))
+                .findFirst().orElseThrow(() -> new AssertionError("当前弹窗缺少正式字段：" + description)));
+        return result[0];
+    }
+    private static SceneNode action(SceneGeometryView view, SceneNode modal, String name) {
+        return view.ordered().stream().map(e -> e.node)
+                .filter(node -> within(node, modal) && node.clickAction() != null && name.equals(node.text()))
+                .findFirst().orElseThrow(() -> new AssertionError("当前弹窗缺少动作：" + name));
+    }
+    private static LayoutBox controlBounds(SceneGeometryView view, java.util.List<SceneNode> controls, String name) {
+        LayoutBox bounds = null;
+        for (int i = 0; i < controls.size(); i++) {
+            SceneGeometryView.Entry entry = view.get(controls.get(i));
+            require(entry != null && complete(entry), "关键操作被裁剪：" + controls.get(i).text() + " " + name);
+            LayoutBox box = entry.box;
+            for (int j = 0; j < i; j++) {
+                LayoutBox overlap = box.intersect(view.get(controls.get(j)).box);
+                require(overlap.width == 0 || overlap.height == 0, "关键操作重叠：" + controls.get(i).text() + " " + name);
+            }
+            if (bounds == null) bounds = box;
+            else {
+                int left = Math.min(bounds.x, box.x), top = Math.min(bounds.y, box.y);
+                bounds = new LayoutBox(left, top, Math.max(bounds.x + bounds.width, box.x + box.width) - left,
+                        Math.max(bounds.y + bounds.height, box.y + box.height) - top);
+            }
+        }
+        return bounds;
+    }
+    private static boolean contains(LayoutBox outer, LayoutBox inner) {
+        return inner.x >= outer.x && inner.y >= outer.y
+                && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+    }
+    private static boolean feedbackVisible(DesktopWindow window, String message) {
+        SceneNode modal = geometry(window).activeModal();
+        if (modal == null || geometry(window).ordered().stream()
+                .noneMatch(e -> within(e.node, modal) && message.equals(e.node.text()) && complete(e))) return false;
+        LayoutBox viewport = new LayoutBox(0, 0, window.width(), window.height());
+        return window.lastPlan.commands().stream().anyMatch(command -> command.kind == PaintCommand.Kind.TEXT
+                && message.equals(command.text.logicalText)
+                && message.equals(command.text.lines().stream().map(line -> line.text)
+                        .collect(java.util.stream.Collectors.joining()))
+                && contains(viewport, command.box) && (command.clip == null || contains(command.clip, command.box)));
     }
 
     private static boolean tooltipText(DesktopWindow window, String text) {
@@ -262,6 +398,7 @@ public final class DesktopFilePickerVerification extends TestApplication {
     private final class Fixture implements ScenePage {
         Signal<SceneTheme> theme;
         Path selected;
+        int selectedCalls, cancelledCalls;
         @Override public void build(ScenePageContext context) {
             theme = context.domain().signal(SceneTheme.light());
             Signal<Boolean> open = context.domain().signal(false);
@@ -269,7 +406,8 @@ public final class DesktopFilePickerVerification extends TestApplication {
             SceneNode layer = SceneLayouts.overlay().bind(NodeBinding.repeat(
                     () -> open.get() ? Collections.singletonList(Boolean.TRUE) : Collections.emptyList(), value -> value,
                     value -> SceneFilePicker.create(context, directory, theme, new SceneFilePicker.Options().filter("VIDEO 文件", "video"),
-                            path -> { selected = path; open.set(false); }, () -> open.set(false))));
+                            path -> { selectedCalls++; selected = path; open.set(false); },
+                            () -> { cancelledCalls++; open.set(false); })));
             context.mountOwned(SceneLayouts.overlay()
                     .bind(NodeBinding.value(() -> style.colors.get().canvas, SceneNode::background))
                     .add(style.action("打开文件选择器", null, () -> open.set(true), SceneAppearance.Role.PRIMARY)

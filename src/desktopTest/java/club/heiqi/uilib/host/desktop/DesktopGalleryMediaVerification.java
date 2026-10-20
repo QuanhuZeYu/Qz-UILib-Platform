@@ -20,6 +20,10 @@ import club.heiqi.uilib.ui.media.MediaSnapshot;
 import club.heiqi.uilib.ui.media.MediaState;
 import club.heiqi.uilib.ui.scene.control.SceneVideo;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
+import club.heiqi.uilib.ui.scene.layout.LayoutBox;
+import club.heiqi.uilib.ui.scene.layout.SceneGeometryView;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemanticSnapshot;
+import club.heiqi.uilib.ui.scene.semantics.SceneSemantics;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 
 import java.nio.file.Files;
@@ -51,7 +55,6 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
         long deadline = System.nanoTime() + 5_000_000_000L;
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             frames(1);
-            Thread.sleep(5);
         }
         if (!condition.getAsBoolean()) {
             DesktopGalleryEvidence.saveGeometry(
@@ -167,8 +170,10 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
                     "路径输入未生效：期望=" + value + " 实际=" + editText(field));
     }
 
-    private static boolean inPicker(SceneNode node) {
-        for (SceneNode at = node; at != null; at = at.parent()) if (at.modal()) return true;
+    private boolean inPicker(SceneNode node) {
+        if (!pickerOpen()) return false;
+        SceneNode modal = DesktopTestInput.geometry(window).activeModal();
+        for (SceneNode at = node; at != null; at = at.parent()) if (at == modal) return true;
         return false;
     }
 
@@ -205,7 +210,10 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
     }
 
     private boolean pickerOpen() {
-        return DesktopTestInput.geometry(window).ordered().stream().anyMatch(e -> e.node.modal());
+        SceneSemanticSnapshot snapshot = window.semantics();
+        for (SceneSemanticSnapshot.Entry at = snapshot.get(snapshot.currentModal); at != null; at = snapshot.get(at.parent))
+            if (at.values.role == SceneSemantics.Role.GROUP && "选择本地文件".equals(at.values.name)) return true;
+        return false;
     }
 
     private boolean pickerButtonEnabled(String label) {
@@ -215,7 +223,30 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
                                 inPicker(e.node)
                                         && e.node.clickAction() != null
                                         && e.node.text().equals(label)
-                                        && e.node.enabled());
+                                        && e.node.enabled()
+                                        && complete(e));
+    }
+
+    private boolean pickerFeedbackVisible(String message) {
+        if (!pickerOpen()) return false;
+        SceneGeometryView view = DesktopTestInput.geometry(window);
+        if (view.ordered().stream().noneMatch(e -> inPicker(e.node) && message.equals(e.node.text()) && complete(e))) return false;
+        LayoutBox viewport = new LayoutBox(0, 0, window.width(), window.height());
+        return window.lastPlan.commands().stream().anyMatch(command -> command.kind == PaintCommand.Kind.TEXT
+                && message.equals(command.text.logicalText)
+                && message.equals(command.text.lines().stream().map(line -> line.text).collect(Collectors.joining()))
+                && contains(viewport, command.box) && (command.clip == null || contains(command.clip, command.box)));
+    }
+
+    private static boolean complete(SceneGeometryView.Entry entry) {
+        LayoutBox hit = DesktopTestInput.hit(entry);
+        return entry.box.width > 0 && entry.box.height > 0
+                && hit.width == entry.box.width && hit.height == entry.box.height;
+    }
+
+    private static boolean contains(LayoutBox outer, LayoutBox inner) {
+        return inner.x >= outer.x && inner.y >= outer.y
+                && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
     }
 
     private SceneNode pickerField() {
@@ -226,7 +257,7 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
         SceneNode[] target = {null};
         // 路径与搜索的布局顺序可变；沿正式输入提示语义找到目标，再调用真实输入回调。
         window.domain.execute(() -> target[0] = fields().stream()
-                .filter(DesktopGalleryMediaVerification::inPicker)
+                .filter(this::inPicker)
                 .filter(node -> description.equals(node.control().semantics(node).values.description))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("选择器没有正式字段：" + description)));
@@ -1131,17 +1162,22 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
                                     .forEach(c -> input.character.invoke(window.handle(), c));
                             frames(1);
                             await(
-                                    () -> text("路径已更改") && pickerButtonEnabled("选择文件"),
+                                    () -> pickerFeedbackVisible("路径已更改，请重新确认。")
+                                            && pickerButtonEnabled("选择文件"),
                                     "旧确认没有撤销当前草稿的完成权");
                             require(
                                     pickerOpen()
                                             && sessionId() == duringPicker
                                             && editText(pendingField).equals(laterDraft),
                                     "旧A核验关闭或覆盖了当前B草稿");
+                            DesktopTestFrames.settle(window);
+                            require(pickerFeedbackVisible("路径已更改，请重新确认。"), "选中 A 后的重新确认反馈没有完整绘制");
+                            DesktopGalleryEvidence.saveGeometry(window, output.resolve("file-picker-stale-selected.geometry.json"));
+                            javax.imageio.ImageIO.write(capture(), "png", output.resolve("file-picker-stale-selected.png").toFile());
                             System.out.println(
                                     "FILE_PICKER_STALE_CONFIRM actualCallbacks=true"
                                             + " sameInputBatch=true laterDraftPreserved=true"
-                                            + " noSourceChange=true");
+                                            + " noSourceChange=true completeVisibleFeedback=true");
                             pickerEntry(localFile[0].getFileName().toString());
                             frames(1);
                             input.click("选择文件");

@@ -185,8 +185,8 @@ public final class DesktopInputFocusVerification {
 
     private void coverage(DesktopWindow w, DesktopTestInput input, Fixture f) throws Exception {
         SceneTheme base = f.custom(true);
-        SceneTheme transparent = new SceneTheme(base.textStyle, 0, base.button, base.hover, base.pressed,
-                base.focus, base.disabled, base.disabledText, base.tooltip, base.tooltipText, base.padding, base.gap);
+        SceneTheme transparent = base.withColors(0, base.button, base.hover, base.pressed,
+                base.focus, base.disabled, base.disabledText, base.tooltip, base.tooltipText);
         w.domain.execute(() -> f.theme.set(transparent));
         SceneNode editor = f.editors.get(0);
         input.click(geometry(w, editor)); finitePresentations(w);
@@ -202,6 +202,79 @@ public final class DesktopInputFocusVerification {
         check("custom", "rounded-stroke-coverage", intermediate, "透明底角区实际 GPU 像素包含介于背景和边色之间的 coverage 色");
         check("custom", "transparent-panel-stays-empty", distance(image.getRGB(b.x + b.width * 3 / 4, b.y + b.height / 2), outside) <= 2,
                 "真实空心描边不把透明 panel 填成边色");
+        String[] names = {"transparent-panel", "opaque-panel", "half-panel", "half-edge", "half-both", "transparent-edge", "transparent-both"};
+        int[][] colors = {{0, 0xff000000}, {0xffff0000, 0xff000000}, {0x80ff0000, 0xff000000},
+                {0xffff0000, 0x800000ff}, {0x80ff0000, 0x800000ff}, {0xffff0000, 0}, {0, 0}};
+        for (int i = 0; i < colors.length; i++) {
+            int panel = colors[i][0], edge = colors[i][1];
+            SceneTheme contrast = base.withColors(panel, edge, edge, edge, edge,
+                    base.disabled, base.disabledText, base.tooltip, base.tooltipText);
+            w.domain.execute(() -> f.theme.set(contrast));
+            for (int index : new int[] {0, 1}) {
+                SceneNode current = f.editors.get(index), surface = f.surfaces.get(index);
+                input.click(geometry(w, current)); finitePresentations(w);
+                Target sample = new Target("coverage-" + names[i] + (index == 0 ? "-direct" : "-composite"), current, surface);
+                BufferedImage pixels = capture(w, sample, "gpu");
+                surfacePixels(sample, geometry(w, surface).box, pixels, contrast);
+            }
+        }
+        w.domain.execute(() -> f.theme.set(base)); finitePresentations(w);
+    }
+
+    private void surfacePixels(Target target, LayoutBox b, BufferedImage image, SceneTheme theme) {
+        int radius = Math.max(0, Math.min(theme.metrics(SceneControlMetrics.Kind.FIELD).radius, Math.min(b.width, b.height) / 2));
+        int background = image.getRGB(b.x - 1, b.y - 1), maximum = 0, worstX = 0, worstY = 0;
+        // 与生产命令分区独立：逐个几何子样本计算 edge-over-fill，再对真实背景求像素均值。
+        for (int y = 0; y < radius; y++) for (int x = 0; x < radius; x++) {
+            for (int[] point : new int[][] {{x, y}, {b.width - x - 1, y},
+                    {x, b.height - y - 1}, {b.width - x - 1, b.height - y - 1}}) {
+                int expected = surfacePixel(b, point[0], point[1], radius, theme.panel, theme.focus, background);
+                int difference = distance(image.getRGB(b.x + point[0], b.y + point[1]), expected);
+                if (difference > maximum) { maximum = difference; worstX = point[0]; worstY = point[1]; }
+            }
+        }
+        check(target.name, "rounded-premultiplied-source-over", maximum <= 2,
+                "四角逐样本期望与实际 GPU 像素 max RGB distance=" + maximum + " at=" + worstX + "," + worstY);
+        if (radius == 8) {
+            int actual = image.getRGB(b.x + 3, b.y + 1);
+            int expected = surfacePixel(b, 3, 1, radius, theme.panel, theme.focus, background);
+            check(target.name, "outer-nine-inner-zero", distance(actual, expected) <= 2,
+                    "r8 local=3,1 outer=9/16 inner=0 actual=" + Integer.toHexString(actual) + " expected=" + Integer.toHexString(expected));
+        }
+        int x = b.width * 3 / 4, y = b.height / 2;
+        int expected = surfacePixel(b, x, y, radius, theme.panel, theme.focus, background);
+        check(target.name, "panel-alpha-over-background", distance(image.getRGB(b.x + x, b.y + y), expected) <= 2,
+                "正文空白区保留 panel 的透明度，不被描边填实");
+    }
+
+    private static int surfacePixel(LayoutBox box, int x, int y, int radius, int fill, int edge, int background) {
+        int result = 0xff000000;
+        double fillAlpha = (fill >>> 24) / 255.0, edgeAlpha = (edge >>> 24) / 255.0;
+        for (int shift = 0; shift < 24; shift += 8) {
+            double sum = 0;
+            for (int sy = 0; sy < 4; sy++) for (int sx = 0; sx < 4; sx++) {
+                double px = x + (sx + .5) / 4, py = y + (sy + .5) / 4;
+                double source = 0, alpha = 0;
+                if (insideRounded(px, py, box.width, box.height, radius)) {
+                    source = (fill >>> shift & 255) * fillAlpha;
+                    alpha = fillAlpha;
+                    if (!insideRounded(px - 1, py - 1, box.width - 2, box.height - 2, Math.max(0, radius - 1))) {
+                        source = (edge >>> shift & 255) * edgeAlpha + source * (1 - edgeAlpha);
+                        alpha = edgeAlpha + alpha * (1 - edgeAlpha);
+                    }
+                }
+                sum += source + (background >>> shift & 255) * (1 - alpha);
+            }
+            result |= (int) Math.round(sum / 16) << shift;
+        }
+        return result;
+    }
+
+    private static boolean insideRounded(double x, double y, int width, int height, int radius) {
+        if (x < 0 || y < 0 || x >= width || y >= height) return false;
+        double dx = Math.max(0, Math.max(radius - x, x - (width - radius)));
+        double dy = Math.max(0, Math.max(radius - y, y - (height - radius)));
+        return dx * dx + dy * dy <= (double) radius * radius;
     }
 
     private void overflow(DesktopWindow w, DesktopTestInput input, Fixture f) throws Exception {
