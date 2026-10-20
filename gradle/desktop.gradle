@@ -60,7 +60,7 @@ desktopApplication('desktopDeviceVerify','DesktopGallery') {
                 command:'DesktopCommandVerification', draggable:'DesktopDraggableVerification', 'draggable-deep':'DesktopDraggableDeepVerification',
                 'drop-sort':'DesktopDropSortVerification', scroll:'DesktopScrollAreaVerification', direction:'DesktopDirectionVerification',
                 table:'DesktopDataTableVerification', tree:'DesktopTreeVerification', state:'DesktopStateControlsVerification',
-                tabs:'DesktopTabsVerification', popup:'DesktopPopupVerification', dialog:'DesktopDialogVerification', 'text-selection':'DesktopTextSelectionVerification', 'file-picker':'DesktopFilePickerVerification', motion:'DesktopMotionVerification',
+                tabs:'DesktopTabsVerification', popup:'DesktopPopupVerification', dialog:'DesktopDialogVerification', 'text-selection':'DesktopTextSelectionVerification', 'input-focus':'DesktopInputFocusVerification', 'file-picker':'DesktopFilePickerVerification', motion:'DesktopMotionVerification',
                 'gallery-media':'DesktopGalleryMediaVerification', tooltip:'DesktopTooltipVerification', 'media-ux':'DesktopMediaUxVerification',
                 network:'DesktopNetworkMediaVerification', bilibili:'DesktopBilibiliVerification', media:'DesktopMediaVerification',
                 'packaged-media':'club.heiqi.uilib.testing.media.PackagedMediaScenario']
