@@ -219,10 +219,18 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
     }
 
     private SceneNode pickerField() {
-        return fields().stream()
+        return pickerField("输入目录或文件路径");
+    }
+
+    private SceneNode pickerField(String description) {
+        SceneNode[] target = {null};
+        // 路径与搜索的布局顺序可变；沿正式输入提示语义找到目标，再调用真实输入回调。
+        window.domain.execute(() -> target[0] = fields().stream()
                 .filter(DesktopGalleryMediaVerification::inPicker)
+                .filter(node -> description.equals(node.control().semantics(node).values.description))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("选择器没有正式路径字段"));
+                .orElseThrow(() -> new AssertionError("选择器没有正式字段：" + description)));
+        return target[0];
     }
 
     private void pickerEntry(String name) {
@@ -255,12 +263,12 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
         PaintCommand last = commands.get(commands.size() - 1);
         require(
                 last.kind == PaintCommand.Kind.TEXT
-                        && name.equals(last.text.logicalText)
+                        && last.text.logicalText.startsWith(name + "\n")
                         && last.text.lines().stream()
                                 .map(line -> line.text)
                                 .collect(Collectors.joining())
-                                .equals(name),
-                "长名称没有完整提示：" + name);
+                                .equals(last.text.logicalText.replace("\r", "").replace("\n", "")),
+                "长名称与元数据没有完整提示：" + name);
     }
 
     private void directControls() throws Exception {
@@ -384,11 +392,24 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
         input.mouse.invoke(window.handle(), 0, GLFW_PRESS, 0);
         input.mouse.invoke(window.handle(), 0, GLFW_RELEASE, 0);
         frames(1);
-        SceneNode bar =
-                field.parent().children().stream()
-                        .filter(n -> n != field)
-                        .findFirst()
-                        .orElseThrow(() -> new AssertionError("路径框缺少横向条"));
+        SceneNode[] scrollbar = {null};
+        // 圆角留白可增加组合层级；沿正式语义与几何锁定原字段的滚动条，不拖动其容器。
+        window.domain.execute(() -> scrollbar[0] = DesktopTestInput.geometry(window).ordered().stream()
+                .map(e -> e.node)
+                .filter(node -> {
+                    for (SceneNode at = node.parent(); at != null; at = at.parent())
+                        if (at == field.parent()) return true;
+                    return false;
+                })
+                .filter(node -> node.control() != null)
+                .filter(node -> {
+                    club.heiqi.uilib.ui.scene.semantics.SceneSemantics semantics = node.control().semantics(node);
+                    return semantics != null
+                            && semantics.values.role == club.heiqi.uilib.ui.scene.semantics.SceneSemantics.Role.SCROLLBAR
+                            && semantics.values.maximum != null && semantics.values.maximum > 0;
+                })
+                .findFirst().orElseThrow(() -> new AssertionError("路径框缺少有效横向条")));
+        SceneNode bar = scrollbar[0];
         club.heiqi.uilib.ui.scene.layout.LayoutBox box =
                 DesktopTestInput.hit(DesktopTestInput.geometry(window, bar));
         require(box.width > 0 && box.height > 0, "路径条没有可交互区域");
@@ -877,7 +898,7 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
                                             .map(e -> e.node)
                                             .collect(Collectors.toList());
                             require(pickerFields.size() == 2, "路径与当前目录查询字段未分开");
-                            type(pickerFields.get(1), "149", true);
+                            type(pickerField("按名称搜索"), "149", true);
                             await(
                                     () ->
                                             listedPage()
@@ -962,15 +983,7 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
                             await(() -> text(longName.getFileName().toString()), "长文件名没有进入实际列表");
                             pickerEntry(localFile[0].getFileName().toString());
                             frames(1);
-                            input.click(
-                                    DesktopTestInput.geometry(window).ordered().stream()
-                                            .filter(
-                                                    e ->
-                                                            inPicker(e.node)
-                                                                    && e.node.text()
-                                                                            .equals("选择本地文件"))
-                                            .findFirst()
-                                            .orElseThrow(() -> new AssertionError("缺少选择器标题")));
+                            // 标题已合并到目录导航菜单；截图直接保留当前选中行，不打开菜单。
                             input.point(0, 0);
                             frames(2);
                             javax.imageio.ImageIO.write(
