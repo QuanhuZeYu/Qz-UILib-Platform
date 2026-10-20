@@ -1,12 +1,15 @@
 package club.heiqi.uilib.host.desktop;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.Consumer;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.function.Function;
+import club.heiqi.uilib.ui.config.ConfigDocument;
 import club.heiqi.uilib.ui.config.ConfigKey;
 import club.heiqi.uilib.ui.config.ConfigSchema;
 import club.heiqi.uilib.ui.config.ConfigSession;
@@ -20,8 +23,10 @@ import club.heiqi.uilib.ui.settings.SettingsConfiguration;
 
 /** 单窗口桌面应用的配置归属；窗口和页面借用同一会话，资源执行仍归窗口。 */
 final class DesktopApplicationConfiguration implements AutoCloseable {
-    final ReactiveDomain domain = ReactiveDomain.direct();
+    final ReactiveDomain domain;
     final Path path;
+    private ConfigSchema schema;
+    private boolean closed;
     Owner owner;
     ConfigSession session;
     ConfigKey<List<String>> fontCandidates;
@@ -29,39 +34,69 @@ final class DesktopApplicationConfiguration implements AutoCloseable {
     SettingsConfiguration settings;
     Computed<String> title;
 
-    DesktopApplicationConfiguration(Path path) {
+    DesktopApplicationConfiguration(Path path, Executor ownerExecutor) {
         this.path = Objects.requireNonNull(path, "configPath").toAbsolutePath().normalize();
+        domain = new ReactiveDomain(Objects.requireNonNull(ownerExecutor, "ownerExecutor"));
     }
 
-    /** 字体和图像服务就绪后装配；调用者先登记close，初始化失败也能释放已取得的Owner。 */
-    void initialize(List<FontSource> defaults, Consumer<List<String>> validate, Runnable resourcesReloaded) {
-        fontCandidates = FontCandidateConfiguration.key(defaults);
+    /** owner 在线程提交后台任务前只建立声明；读取和发布必须共享同一组键身份。 */
+    void declare(List<FontSource> defaults) {
         domain.execute(() -> {
+            if (closed || schema != null) throw new IllegalStateException("桌面配置声明已安装或关闭");
+            fontCandidates = FontCandidateConfiguration.key(defaults);
+            schema = ConfigSchema.of(DesktopWindowConfiguration.PROFILE, fontCandidates, ThemeConfiguration.KEY);
+        });
+    }
+
+    /** worker 只处理不可变声明与文档；不创建状态域、Signal、主题或资源。 */
+    ConfigDocument prepare(List<FontSource> defaults) throws IOException {
+        checkDeclaration(defaults);
+        if (Files.exists(path)) return ConfigDocument.read(schema, path);
+        ConfigDocument document = ConfigDocument.defaults(schema);
+        Path parent = path.getParent();
+        if (parent != null) Files.createDirectories(parent);
+        document.write(path);
+        return document;
+    }
+
+    private void checkDeclaration(List<FontSource> defaults) {
+        if (schema == null) throw new IllegalStateException("桌面配置尚未声明");
+        if (!fontCandidates.defaultValue().equals(FontCandidateConfiguration.defaults(defaults)))
+            throw new IllegalArgumentException("桌面配置默认字体声明不一致");
+    }
+
+    /** 字体和文档准备完成后由 owner 装配；这里不执行文件或字体 I/O。 */
+    void initialize(List<FontSource> defaults, ConfigDocument document,
+            Function<List<String>, CompletableFuture<Void>> validate, Runnable resourcesReloaded) {
+        Objects.requireNonNull(resourcesReloaded, "resourcesReloaded");
+        domain.execute(() -> {
+            if (closed || session != null) throw new IllegalStateException("桌面配置已安装或关闭");
+            checkDeclaration(defaults);
             owner = domain.owner();
-            session = new ConfigSession(domain, ConfigSchema.of(
-                    DesktopWindowConfiguration.PROFILE, fontCandidates, ThemeConfiguration.KEY));
-            try {
-                if (Files.exists(path)) session.load(path);
-                else {
-                    Path parent = path.getParent();
-                    if (parent != null) Files.createDirectories(parent);
-                    session.save(path);
-                }
-            } catch (IOException failure) { throw new UncheckedIOException(failure); }
-            // load后才创建应用投影与保存基线，页面关闭不结束这些对象。
+            session = new ConfigSession(domain, schema);
+            session.publish(document);
+            // 文档发布后才建立应用投影与真实文件基线，页面关闭不结束这些对象。
             theme = new ThemeConfiguration(domain, session, owner);
-            settings = new SettingsConfiguration(domain, session, fontCandidates, null, path,
-                    FontCandidateConfiguration.defaults(defaults), validate, resourcesReloaded);
+            settings = SettingsConfiguration.withAsyncValidation(domain, session, fontCandidates, null, path,
+                    FontCandidateConfiguration.defaults(defaults), validate, () -> {
+                        if (closed) throw new CancellationException("桌面配置所属窗口已关闭");
+                        resourcesReloaded.run();
+                    });
             title = domain.computed(owner, () -> session.get(DesktopWindowConfiguration.PROFILE).title);
         });
     }
 
-    void reload() throws IOException {
+    CompletableFuture<Void> reload() {
         domain.checkWrite();
-        settings.reload();
+        return settings.reload();
     }
 
     @Override public void close() {
-        domain.execute(() -> { if (owner != null) owner.close(); });
+        domain.execute(() -> {
+            closed = true;
+            try (Owner closing = owner) {
+                if (settings != null) settings.close();
+            }
+        });
     }
 }

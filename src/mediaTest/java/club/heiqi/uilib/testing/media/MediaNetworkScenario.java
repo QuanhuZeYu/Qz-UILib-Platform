@@ -20,7 +20,7 @@ public final class MediaNetworkScenario extends TestApplication {
             try(MediaNetworkFixture fixture=new MediaNetworkFixture()){
                 try(MediaDecoderSource source=IsolatedMediaAdapters.decoderFactory().openSource(fixture.source("/entry"),()->false);
                         MediaDecoder decoder=source.open(0,false,()->false)){
-                    require(video(decoder)!=null,"固定Master未读取真实首视频帧");
+                    require(video(decoder)!=null&&decoder.info().hasAudio&&decoder.info().durationNanos==4_000_000_000L,"固定Master未读取真实VOD音视频事实");
                     require(fixture.requests("/entry")==1&&fixture.requests("/vod.m3u8")==1&&fixture.heads.get()==0,"Master或Media首列表出现重复预请求");
                     require(fixture.rejected.get()==0,"Master子列表或片段丢失请求头");
                     System.out.println("MASTER_INPUT_REQUESTS "+fixture.requestLog);
@@ -28,6 +28,10 @@ public final class MediaNetworkScenario extends TestApplication {
             }
             require(IsolatedMediaAdapters.resources().activeHandles()==before,"Master链关闭后native资源未归还");
         });
+        for(boolean reversed:new boolean[]{false,true})scenario("Master实际video program的滑动窗口、定位与刷新 reversed="+reversed,()->masterInput(reversed));
+        scenario("B帧Master按真实DTS定位窗口右边界并保留首包",this::reorderedMaster);
+        scenario("错开一段的Master按实际起播片段建立锚点",this::offsetMaster);
+        scenario("同URI的BYTERANGE片段保持真实起点、定位与刷新",this::rangedMaster);
         Throwable inputFailure=null;
         for(String path:new String[]{"/live","/live-no-mime"})try{
             scenario("HLS同流内容识别与窗口定位 "+path,()->liveInput(path));
@@ -136,6 +140,131 @@ public final class MediaNetworkScenario extends TestApplication {
         });
         require(IsolatedMediaAdapters.resources().activeHandles()==resourcesBefore,"网络回归后native资源未回到起点");
         System.out.println("NETWORK_RESOURCES "+IsolatedMediaAdapters.resources());
+    }
+    private void reorderedMaster()throws Exception{
+        long before=IsolatedMediaAdapters.resources().activeHandles();
+        try(MediaLiveFixture fixture=new MediaLiveFixture(true,MediaLiveFixture.sample("bframe-segment.ts"));
+                MediaDecoderSource source=IsolatedMediaAdapters.decoderFactory().openSource(fixture.masterSource(true),()->false)){
+            try(MediaDecoder decoder=source.open(0,false,()->false)){
+                MediaDecoded first=video(decoder);
+                require(first.presentationNanos>=4_000_000_000L&&first.presentationNanos<4_100_000_000L,"普通起播丢失或重排B帧真实首帧");
+            }
+            fixture.advanceWindow();fixture.end();long target=19_950_000_000L;
+            try(MediaDecoder decoder=source.open(target,true,()->false)){
+                boolean covered=false;int videos=0;
+                for(int i=0;i<3000;i++){
+                    MediaDecoded frame=decoder.read();if(frame==null)break;
+                    if(frame!=MediaDecoded.YIELD&&frame.video){videos++;covered|=frame.presentationNanos<=target&&frame.presentationNanos+frame.durationNanos>target;}
+                }
+                require(covered&&videos>0&&decoder.inputState().inputEnded,"B帧Master在窗口右侧没有真实目标帧/EOF");
+                require(fixture.manifests.get()==2&&fixture.masters.get()==1&&fixture.rejected.get()==0,"B帧定位重复抓取列表或丢失来源上下文");
+                System.out.println("BFRAME_RIGHT_EDGE target="+target+" covered="+covered+" videos="+videos+" requests="+fixture.requests);
+            }
+        }
+        require(IsolatedMediaAdapters.resources().activeHandles()==before,"B帧定位观测未释放native packet");
+    }
+    private void offsetMaster()throws Exception{
+        long before=IsolatedMediaAdapters.resources().activeHandles();
+        try(MediaLiveFixture fixture=new MediaLiveFixture(true,null,MediaLiveFixture.sample("ahead-audio.ts"));
+                MediaDecoderSource source=IsolatedMediaAdapters.decoderFactory().openSource(fixture.masterSource(false),()->false)){
+            try(MediaDecoder decoder=source.open(0,false,()->false)){
+                String firstSegment=null;
+                for(String request:fixture.requests)if(request.startsWith("GET /segment-")){firstSegment=request;break;}
+                require("GET /segment-2.ts?token=segment".equals(firstSegment),"真实FFmpeg没有命中一段错开的native同步分支");
+                MediaDecoded first=video(decoder);
+                require(source.initialPositionNanos()==8_000_000_000L&&Math.abs(first.presentationNanos-8_000_000_000L)<50_000_000L,"Master按列表长度猜起点，未使用实际片段2的独立8秒锚点");
+                require(decoder.info().seekable.startNanos==0&&decoder.info().seekable.endNanos==15_999_999_999L,"错开variant改变了selected media的窗口");
+                System.out.println("OFFSET_MASTER actualFirst="+firstSegment+" opening="+source.initialPositionNanos()+" videoPTS="+first.presentationNanos+" requests="+fixture.requests);
+            }
+            fixture.advanceWindow();fixture.end();
+            try(MediaDecoder decoder=source.open(9_000_000_000L,true,()->false)){
+                boolean covered=false;
+                for(int i=0;i<3000;i++){
+                    MediaDecoded frame=decoder.read();if(frame==null)break;
+                    if(frame!=MediaDecoded.YIELD&&frame.video)covered|=frame.presentationNanos<=9_000_000_000L&&frame.presentationNanos+frame.durationNanos>9_000_000_000L;
+                }
+                require(covered&&decoder.inputState().inputEnded,"错开variant的持久origin破坏后续真实定位");
+                require(fixture.rejected.get()==0&&fixture.masters.get()==1,"错开variant定位丢失来源上下文或重复请求Master");
+            }
+        }
+        require(IsolatedMediaAdapters.resources().activeHandles()==before,"错开variant关闭后native句柄未归还");
+    }
+    private void rangedMaster()throws Exception{
+        long before=IsolatedMediaAdapters.resources().activeHandles();
+        try(MediaLiveFixture fixture=new MediaLiveFixture(true,null,null,true);
+                MediaDecoderSource source=IsolatedMediaAdapters.decoderFactory().openSource(fixture.masterSource(true),()->false)){
+            try(MediaDecoder decoder=source.open(0,false,()->false)){
+                MediaDecoded first=video(decoder);long bytes=fixture.segmentBytes();
+                require(("bytes="+bytes+"-"+(2*bytes-1)).equals(fixture.ranges.get(0)),"native未请求同URI中实际片段1的HTTP Range");
+                require(source.initialPositionNanos()==4_000_000_000L&&Math.abs(first.presentationNanos-4_000_000_000L)<50_000_000L,"BYTERANGE实际片段1被误映射到同URI片段0");
+            }
+            try(MediaDecoder decoder=source.open(9_000_000_000L,true,()->false)){
+                require(source.initialPositionNanos()==8_000_000_000L&&Math.abs(video(decoder).presentationNanos-8_000_000_000L)<50_000_000L,"BYTERANGE隐式offset定位未使用实际片段2");
+            }
+            fixture.advanceWindow();fixture.end();
+            try(MediaDecoder decoder=source.open(6_000_000_000L,true,()->false)){
+                boolean covered=false;
+                for(int i=0;i<3000;i++){
+                    MediaDecoded frame=decoder.read();if(frame==null)break;
+                    if(frame!=MediaDecoded.YIELD&&frame.video)covered|=frame.presentationNanos<=6_000_000_000L&&frame.presentationNanos+frame.durationNanos>6_000_000_000L;
+                }
+                require(covered&&decoder.inputState().inputEnded,"BYTERANGE滑动ENDLIST定位没有真实目标帧/EOF");
+                require(decoder.info().seekable.startNanos==4_000_000_000L&&decoder.info().durationNanos==20_000_000_000L,"BYTERANGE刷新丢失窗口时间线");
+                require(fixture.masters.get()==1&&fixture.manifests.get()==3&&fixture.rejected.get()==0,"BYTERANGE来源上下文丢失或重复请求Master");
+                System.out.println("BYTERANGE_MASTER segmentBytes="+fixture.segmentBytes()+" firstRange="+fixture.ranges.get(0)+" ranges="+fixture.ranges+" covered="+covered);
+            }
+        }
+        require(IsolatedMediaAdapters.resources().activeHandles()==before,"BYTERANGE关闭后native句柄未归还");
+    }
+    private void masterInput(boolean reversed)throws Exception{
+        long before=IsolatedMediaAdapters.resources().activeHandles();AtomicBoolean cancelled=new AtomicBoolean();
+        try(MediaLiveFixture fixture=new MediaLiveFixture(true);
+                MediaDecoderSource source=IsolatedMediaAdapters.decoderFactory().openSource(fixture.masterSource(reversed),cancelled::get)){
+            try(MediaDecoder decoder=source.open(reversed?9_000_000_000L:0,reversed,()->false)){
+                club.heiqi.uilib.ui.media.MediaInfo live=decoder.info();
+                require(live.hasVideo&&live.hasAudio&&live.durationNanos==-1&&live.seekable!=null,"Master没有发布实际video media的live事实");
+                require(live.seekable.startNanos==0&&live.seekable.endNanos==15_999_999_999L,"Master误用了纯音频变体的窗口");
+                long opening=reversed?8_000_000_000L:4_000_000_000L;
+                require(source.initialPositionNanos()==opening&&Math.abs(video(decoder).presentationNanos-opening)<50_000_000L,"Master首帧、所选片段和同源PTS锚点不一致");
+                require(fixture.masters.get()==1&&fixture.manifests.get()==1&&fixture.heads.get()==0,"Master或实际media首列表出现额外预请求");
+            }
+            try(MediaDecoder decoder=source.open(9_000_000_000L,true,()->false)){
+                require(source.initialPositionNanos()==8_000_000_000L,"Master窗口内定位未选择真实片段");
+                MediaDecoded first=video(decoder);require(Math.abs(first.presentationNanos-8_000_000_000L)<50_000_000L,"Master定位后混入其他variant的PTS原点");
+                boolean covered=false;
+                for(int i=0;i<100&& !covered;i++){
+                    MediaDecoded frame=decoder.read();if(frame==null)break;
+                    if(frame!=MediaDecoded.YIELD&&frame.video)covered=frame.presentationNanos<=9_000_000_000L&&frame.presentationNanos+frame.durationNanos>9_000_000_000L;
+                }
+                require(covered&&fixture.manifests.get()==2,"Master定位没有实际目标帧或重复抓取media快照");
+                fixture.advanceWindow();fixture.end();
+                if(reversed){
+                    // 同一decoder读到尾部，验证FFmpeg自身reload也向同一来源owner交回选中media快照。
+                    for(int i=0;i<3000;i++){if(decoder.read()==null)break;}
+                    require(decoder.inputState().inputEnded,"Master native reload未正常到达ENDLIST");
+                }else{
+                    long remaining=source.refreshDeadlineNanos()-System.nanoTime();
+                    if(remaining>0)java.util.concurrent.TimeUnit.NANOSECONDS.sleep(remaining+1_000_000L);
+                }
+                club.heiqi.uilib.ui.media.MediaInfo end=source.refresh(decoder.info(),()->false);
+                require(end.seekable.startNanos==4_000_000_000L&&end.seekable.endNanos==19_999_999_999L&&end.durationNanos==20_000_000_000L,"Master实际media滑动/ENDLIST没有延续原时间线");
+                require(source.refreshDeadlineNanos()==Long.MAX_VALUE&&fixture.manifests.get()==3&&fixture.masters.get()==1,"刷新没有使用实际media URI或没有结束deadline");
+                require(fixture.rejected.get()==0,"Master子列表/片段/刷新丢失来源headers/query");
+                System.out.println("MASTER_LIVE reversed="+reversed+" refresh="+(reversed?"native":"source")+" window="+end.seekable.startNanos+".."+end.seekable.endNanos+" first="+first.presentationNanos+" seekTarget=9000000000 mediaGET="+fixture.manifests+" rootGET="+fixture.masters+" requests="+fixture.requests);
+            }
+            try(MediaDecoder decoder=source.open(6_000_000_000L,true,()->false)){
+                boolean covered=false;int videos=0,audios=0;
+                for(int i=0;i<3000;i++){
+                    MediaDecoded frame=decoder.read();if(frame==null)break;if(frame==MediaDecoded.YIELD)continue;
+                    if(frame.video){videos++;covered|=frame.presentationNanos<=6_000_000_000L&&frame.presentationNanos+frame.durationNanos>6_000_000_000L;}else audios++;
+                }
+                require(covered&&videos>0&&audios>0&&decoder.inputState().inputEnded,"Master ENDLIST重开定位或真实EOF丢失");
+                require(fixture.manifests.get()==3&&fixture.masters.get()==1,"Master ENDLIST重开重新请求已有列表");
+                cancelled.set(true);boolean failed=false;try{decoder.read();}catch(java.util.concurrent.CancellationException expected){failed=true;}
+                require(failed&&fixture.rejected.get()==0,"Master取消失效或ENDLIST重开丢失headers/query");
+            }
+        }
+        require(IsolatedMediaAdapters.resources().activeHandles()==before,"Master滑动/定位/取消后native资源未归还");
     }
     private void liveInput(String path)throws Exception{
         long before=IsolatedMediaAdapters.resources().activeHandles();

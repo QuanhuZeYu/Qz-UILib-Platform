@@ -481,7 +481,7 @@ public final class FontDeferredStateScenario extends TestApplication {
                                 Paths.get(args[0]),
                                 0,
                                 false,
-                                Collections.<String>emptySet())
+                                Collections.<String>emptySet()).prepare()
                         : null;
         TextStyle style =
                 new TextStyle(

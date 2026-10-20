@@ -23,6 +23,11 @@ final class GlFontVisibility {
 
     static boolean visible(
             PaintCommand command, TextLayout.Glyph glyph, FontRenderContext context) {
+        return visible(command, glyph, context, command.effectiveClip());
+    }
+
+    static boolean visible(PaintCommand command, TextLayout.Glyph glyph, FontRenderContext context,
+            club.heiqi.uilib.ui.scene.geometry.SceneClipRegion clip) {
         if (!glyph.inkBounds.known) return true;
         double x = (double) command.box.x + glyph.x, y = (double) command.box.y + glyph.y;
         double l = x + glyph.inkBounds.left,
@@ -31,7 +36,7 @@ final class GlFontVisibility {
                 b = y + glyph.inkBounds.bottom;
         if (r <= l || b <= t) return false;
         if (command.sceneGeometry || !command.transform.identity() || !command.shapeClip.unbounded()) {
-            SceneMesh mesh = command.effectiveClip().clip(SceneMesh.rectangle(l, t, r - l, b - t).transformed(command.transform));
+            SceneMesh mesh = clip.clip(SceneMesh.rectangle(l, t, r - l, b - t).transformed(command.transform));
             for (int i = 0; i < mesh.vertexCount(); i += 3) {
                 List<double[]> triangle = new ArrayList<double[]>(3);
                 for (int j = 0; j < 3; j++) triangle.add(context.projection.clipAt(mesh.x(i + j), mesh.y(i + j), 0));

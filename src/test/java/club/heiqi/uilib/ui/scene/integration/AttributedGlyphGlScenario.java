@@ -421,6 +421,7 @@ public final class AttributedGlyphGlScenario extends TestApplication {
         for (float scale : new float[] {1, 1.5f, 2, 3})
             scenario("富文本采样与像素参考 scale=" + scale, () -> sampling(scale));
         scenario("单像素装饰线裁剪", () -> decorationClip(owner, renderer));
+        scenario("本次Prepared复用可见事实且原生状态变化失效", () -> club.heiqi.uilib.host.client.gl.PreparedVisibilityScenario.verify(owner, renderer, logical, W, H));
         require(glGetError() == GL_NO_ERROR, "GLerror");
         System.out.println(
                 "ATTRIBUTED_GLYPH_GL_SCENARIO_PASS logicalEm18.5 sampling1_1.5_2_3 layoutStable resolvedColors boldItalic decorations nativePremultBilinearReference");

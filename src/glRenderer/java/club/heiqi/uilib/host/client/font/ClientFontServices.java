@@ -22,6 +22,7 @@ import club.heiqi.uilib.ui.scene.text.TextLayout;
 import club.heiqi.uilib.ui.scene.text.TextPolicy;
 import club.heiqi.uilib.ui.scene.text.TextStyle;
 import club.heiqi.uilib.ui.scene.text.font.FontTextService;
+import club.heiqi.uilib.ui.scene.text.font.FontResources;
 import club.heiqi.uilib.ui.scene.text.font.glyph.AsyncGlyphRasterizer;
 
 /** 客户端主线程的共享字体生命周期；不要求 scene，构造/度量不创建任何 GL 对象。
@@ -262,6 +263,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         }
     }
 
+    /** 显式同步批处理入口；交互宿主使用 FontResources 构造，不在UI上准备资源。 */
     public ClientFontServices(
             ClassLoader sources,
             long revision,
@@ -276,6 +278,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     /** 具有真实present通知的宿主选择保留整个呈现范围；首次消费懒启动，
      * 所有短Prepared仍须逐次关闭，宿主在交换窗口缓冲之前调用endPresentation。
      * 无present边界的独立consumer沿用默认自动单次范围。 */
+    /** 显式同步批处理入口；交互宿主使用 FontResources 构造，不在UI上准备资源。 */
     public ClientFontServices(
             ClassLoader sources,
             long revision,
@@ -285,13 +288,20 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
             GlApi gl,
             GlProgramProvider programs)
             throws IOException {
+        this(FontResources.prepare(sources, revision, FontTextService.defaultSources(sources, revision)),
+                settings, presentationBoundaryRequired, engine, gl, programs);
+    }
+
+    /** UI 宿主必须传入 worker 完成的整代资源；native 测量会话仍在本创建线程。 */
+    public ClientFontServices(FontResources resources, Settings settings,
+            boolean presentationBoundaryRequired, FontEngine engine, GlApi gl, GlProgramProvider programs) {
         this.presentationBoundaryRequired = presentationBoundaryRequired;
         this.gl = Objects.requireNonNull(gl, "gl");
         this.programs = Objects.requireNonNull(programs, "programs");
         this.settings = Objects.requireNonNull(settings, "settings");
         fonts =
                 new FontTextService(
-                        FontTextService.defaultSources(sources, revision),
+                        resources,
                         Objects.requireNonNull(engine, "engine"),
                         32,
                         256,
@@ -377,13 +387,20 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
 
     public void reload(ClassLoader loader, long revision) throws IOException {
         check();
-        reload(FontTextService.defaultSources(loader, revision));
+        List<club.heiqi.uilib.ui.scene.text.font.FontSource> defaults = FontTextService.defaultSources(loader, revision);
+        reload(FontResources.prepare(loader, revision, defaults, defaults));
     }
 
-    /** 宿主组合有序候选后经owner换代；复用字体失效通知，不新建第二套缓存。 */
+    /** 显式同步批处理换代；交互宿主只发布 worker 已准备的 FontResources。 */
     public void reload(List<club.heiqi.uilib.ui.scene.text.font.FontSource> sources) {
         check();
-        fonts.reload(sources);
+        fonts.reload(FontResources.prepare(ClientFontServices.class.getClassLoader(), fonts.generation() + 1, sources));
+    }
+
+    /** 只在宿主prepare/apply边界原子发布完整资源代，不访问字体文件。 */
+    public void reload(FontResources resources) {
+        check();
+        fonts.reload(resources);
     }
 
     public GlGlyphAtlas atlas() {

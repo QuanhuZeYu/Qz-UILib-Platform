@@ -16,6 +16,12 @@ import java.util.EnumSet;
 import java.util.Set;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CompletionException;
+import org.lwjgl.system.Platform;
+import club.heiqi.uilib.host.client.font.FontResourcePreparation;
+import club.heiqi.uilib.ui.config.ConfigDocument;
+import club.heiqi.uilib.ui.scene.text.font.FontResources;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import org.lwjgl.glfw.Callbacks;
@@ -66,11 +72,20 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     final ReactiveDomain domain;
     final Path configPath;
     private final Thread thread = Thread.currentThread();
+    private final ConcurrentLinkedQueue<Runnable> ownerActions = new ConcurrentLinkedQueue<>();
+    private final CompletableFuture<Void> ready = new CompletableFuture<>();
+    private final boolean mac = Platform.get() == Platform.MACOSX;
+    private FontResourcePreparation fontPreparation;
+    private FontResourcePreparation.Sources fontSources;
+    private FontResources publishedFonts;
+    private long fontRequest;
+    private final Set<CompletableFuture<Void>> fontUpdates = new java.util.LinkedHashSet<>();
     private final Deque<AutoCloseable> resources = new ArrayDeque<>();
-    private long window, revision;
+    private long window, revision, resourceRevision = 1;
     private int framebufferWidth, framebufferHeight, windowWidth, windowHeight;
     private double cursorX, cursorY, scrollRemainder;
-    private boolean closed;
+    private volatile boolean closed;
+    private boolean closing;
     private String title;
     private SettingsConfiguration settingsConfiguration;
     private ThemeConfiguration themeConfiguration;
@@ -100,7 +115,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     private DesktopWindow(Path path) { this(path, null); }
     private DesktopWindow(Path path, club.heiqi.uilib.ui.media.MediaService mediaService) {
         this.mediaService = mediaService;
-        applicationConfiguration = new DesktopApplicationConfiguration(path);
+        applicationConfiguration = new DesktopApplicationConfiguration(path, this::executeOwner);
         domain = applicationConfiguration.domain;
         configPath = applicationConfiguration.path;
     }
@@ -176,9 +191,37 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         glfwSwapInterval(1);
         updateDimensions();
         ClassLoader loader = DesktopWindow.class.getClassLoader();
-        fonts = new ClientFontServices(loader, 1, ClientFontServices.Settings.defaults(),
+        fontPreparation = new FontResourcePreparation();
+        own(fontPreparation);
+        List<FontSource> defaults = FontTextService.defaultSources(loader, 1);
+        fontSources = new FontResourcePreparation.Sources(loader, 1, defaults);
+        own(applicationConfiguration);
+        applicationConfiguration.declare(defaults);
+        installCallbacks();
+        if (visible) glfwShowWindow(window);
+        CompletableFuture.supplyAsync(() -> {
+            try { return applicationConfiguration.prepare(defaults); }
+            catch (IOException failure) { throw new UncheckedIOException(failure); }
+        }, fontPreparation.executor()).whenComplete((document, failure) -> postOwner(() -> {
+            if (closed || closing) return;
+            if (failure != null) { ready.completeExceptionally(failure); throw resourceFailure(failure); }
+            fontPreparation.prepare(fontSources, document.get(applicationConfiguration.fontCandidates), Collections.emptyList())
+                    .whenComplete((prepared, error) -> postOwner(() -> {
+                        if (closed || closing) return;
+                        if (error != null) { ready.completeExceptionally(error); throw resourceFailure(error); }
+                        domain.enqueue(() -> {
+                            if (closed || closing) { ready.cancel(false); return; }
+                            finishInitialization(supplied, factory, settings, loader, defaults, document, prepared);
+                        }, ready::completeExceptionally);
+                    }));
+        }));
+    }
+
+    private void finishInitialization(ScenePage supplied, Function<DesktopPageServices, ScenePage> factory,
+            boolean settings, ClassLoader loader, List<FontSource> defaults, ConfigDocument document, FontResources prepared) {
+        fonts = new ClientFontServices(prepared, ClientFontServices.Settings.defaults(),
                 true, new LwjglFontEngine(), new Lwjgl3GlApi(), GlProgramProvider.NONE);
-        // worker与其native会话在销毁窗口前完成结束；只在关闭等待，不在帧里等待字形。
+        // owner原线程释放native会话；已移交的纯资源任务由worker读完并关闭streams。
         own(this::closeFonts);
         images = new ClientImageServices(fonts.gl(), new JavaImageLoader(id -> {
             // 桌面资源显式按domain:path映射，不依赖游戏ResourceManager或游戏类路径。
@@ -193,9 +236,11 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         own(this::closeImages);
         if (mediaService != null) mediaViews = own(new club.heiqi.uilib.ui.scene.video.MediaViewPump());
         renderer = own(new FramebufferSceneRenderer(fonts, images, mediaService, true));
-        List<FontSource> defaults = FontTextService.defaultSources(loader, 1);
+        publishedFonts = prepared;
+        revision++;
+        resources.remove(applicationConfiguration);
         own(applicationConfiguration);
-        applicationConfiguration.initialize(defaults, this::validateFontCandidates, this::resourcesReloaded);
+        applicationConfiguration.initialize(defaults, document, this::validateFontCandidates, this::resourcesReloaded);
         configuration = applicationConfiguration.session;
         fontCandidates = applicationConfiguration.fontCandidates;
         themeConfiguration = applicationConfiguration.theme;
@@ -210,12 +255,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
             domain.effect(applicationConfiguration.owner, () -> {
                 reload.get();
                 List<String> declarations = configuration.get(fontCandidates);
-                Runnable update = () -> {
-                    try { applyFonts(declarations); }
-                    catch (IOException failure) { throw new UncheckedIOException(failure); }
-                };
-                // 资源错误属于应用配置事实，与当前打开的页面类型无关。
-                settingsConfiguration.updateResources(update);
+                applyFonts(declarations);
             });
         });
         pageServices=new DesktopPageServices(images.images(),settingsConfiguration,configuration,this::reloadImmediatelyUnchecked);
@@ -227,71 +267,81 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
             content = settingsPage;
         }
         page = own(ScenePageSession.open(domain, this, fonts, content));
-        installCallbacks();
-        keyAvailability(true);
-        if (visible) glfwShowWindow(window);
+        // ScenePageSession在独立原域操作装配页面；就绪与初始原生快照必须排在它之后。
+        domain.enqueue(() -> {
+            if (closed || closing) { ready.cancel(false); return; }
+            if (page.ended()) throw new IllegalStateException("桌面页面初始化失败");
+            updateDimensions(); snapshotCursor();
+            keyAvailability(true);
+            domain.deferCleanup(() -> ready.complete(null));
+        }, ready::completeExceptionally);
     }
     /** 最新已发布纯值；读取不进入状态域，不触发绘制或改变焦点。 */
     public SceneSemanticSnapshot semantics() { return semanticSnapshot; }
     @Override public void semanticsChanged(SceneSemanticSnapshot snapshot) { semanticSnapshot = snapshot; }
     /** 任意宿主线程可递交；完成表示原handler和Effect已结算，入队本身不表示业务接受。 */
     public CompletableFuture<SceneSemanticRequest.Result> semantic(SceneSemanticRequest request) {
-        return page.semantic(request);
+        return page == null ? CompletableFuture.completedFuture(SceneSemanticRequest.Result.CLOSED) : page.semantic(request);
     }
     public CompletableFuture<SceneSemanticRequest.Result> semantic(SceneSemanticRequest request,
             BiConsumer<SceneSemanticRequest.Result, Throwable> completion) {
-        return page.semantic(request, completion);
+        return semantic(request).whenComplete(completion);
+    }
+    /** 完成只表示真实资源与页面已在owner线程发布；调用者继续驱动frame，不能在UI等待future。 */
+    public CompletableFuture<Void> ready() { return ready; }
+    private void postOwner(Runnable action) {
+        if (closed) return;
+        ownerActions.add(action);
+        if (closed) ownerActions.remove(action);
+    }
+    private void executeOwner(Runnable action) {
+        if (closed) return;
+        if (Thread.currentThread() == thread) action.run();
+        else { ownerActions.add(action); if (closed) ownerActions.remove(action); }
+    }
+    private void pumpOwner() { for (Runnable action; (action = ownerActions.poll()) != null;) action.run(); }
+    private static RuntimeException resourceFailure(Throwable failure) {
+        while (failure instanceof CompletionException && failure.getCause() != null) failure = failure.getCause();
+        if (failure instanceof Error) throw (Error) failure;
+        return failure instanceof RuntimeException ? (RuntimeException) failure : new IllegalStateException("字体资源准备失败", failure);
     }
     private Signal<Long> reloadRevision;
     private void resourcesReloaded() {
         domain.checkWrite();
+        try {
+            long generation = ++resourceRevision;
+            ClassLoader loader = DesktopWindow.class.getClassLoader();
+            fontSources = new FontResourcePreparation.Sources(loader, generation, FontTextService.defaultSources(loader, generation));
+        } catch (IOException failure) { throw new UncheckedIOException(failure); }
         reloadRevision.set(reloadRevision.get() + 1);
         images.resourcesReloaded();
     }
-    private void closeImages() throws Exception {
-        // close后owner不可再访问，先取得共享服务；仅关闭阶段等待worker，不阻塞正常帧。
-        SharedImageService shared = images.shared();
-        Throwable failure = null;
-        try { images.close(); } catch (Throwable next) { failure = next; }
-        try {
-            if (!shared.awaitClose(5000)) throw new IllegalStateException("图像worker未结束");
-        } catch (Throwable next) {
-            if (next instanceof InterruptedException) Thread.currentThread().interrupt();
-            if (failure == null) failure = next;
-            else if (failure != next) failure.addSuppressed(next);
-        }
-        if (failure instanceof Error) throw (Error) failure;
-        if (failure instanceof Exception) throw (Exception) failure;
-        if (failure != null) throw new IllegalStateException(failure);
+    private void closeImages() { images.close(); }
+    private void closeFonts() { fonts.close(); }
+    private CompletableFuture<Void> validateFontCandidates(List<String> declarations) {
+        return fontPreparation.validate(fontSources, declarations, Collections.emptyList()).thenApply(prepared -> null);
     }
-    private void closeFonts() throws Exception {
-        Throwable failure = null;
-        try { fonts.close(); } catch (Throwable next) { failure = next; }
-        try {
-            if (!fonts.awaitRasterizerClose(5000)) throw new IllegalStateException("字体worker未结束");
-        } catch (Throwable next) {
-            if (next instanceof InterruptedException) Thread.currentThread().interrupt();
-            if (failure == null) failure = next;
-            else if (failure != next) failure.addSuppressed(next);
-        }
-        if (failure instanceof Error) throw (Error) failure;
-        if (failure instanceof Exception) throw (Exception) failure;
-        if (failure != null) throw new IllegalStateException(failure);
-    }
-    private void validateFontCandidates(List<String> declarations) {
-        try { resolveFonts(declarations, revision + 1); }
-        catch (IOException failure) { throw new UncheckedIOException(failure); }
-    }
-    private void applyFonts(List<String> declarations) throws IOException {
-        fonts.reload(resolveFonts(declarations, ++revision));
-    }
-    private List<FontSource> resolveFonts(List<String> declarations, long generation) throws IOException {
-        List<Path> files = new ArrayList<>();
-        for (String path : FontCandidateConfiguration.files(declarations)) files.add(Paths.get(path));
-        List<FontSource> builtins = FontTextService.defaultSources(DesktopWindow.class.getClassLoader(), generation);
-        FontFamilyResolver resolver = new FontFamilyResolver(files, Collections.emptyList(), generation, System.err::println);
-        return FontCandidateConfiguration.resolve(declarations, builtins,
-                (path, position) -> resolver.family(Paths.get(path), "desktop-file-" + position));
+    private CompletableFuture<Void> applyFonts(List<String> declarations) {
+        long request = ++fontRequest;
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        fontUpdates.add(completion);
+        completion.whenComplete((ignored, failure) -> fontUpdates.remove(completion));
+        FontResourcePreparation.Sources requestedSources = fontSources;
+        fontPreparation.prepare(requestedSources, declarations, Collections.emptyList()).whenComplete((prepared, failure) -> postOwner(() -> {
+            if (closed || closing || request != fontRequest) { completion.cancel(false); return; }
+            try {
+                domain.enqueue(() -> {
+                    if (closed || closing || request != fontRequest) { completion.cancel(false); return; }
+                    settingsConfiguration.updateResourcesOrThrow(() -> {
+                        if (failure != null) throw resourceFailure(failure);
+                        if (publishedFonts != prepared) { fonts.reload(prepared); publishedFonts = prepared; revision++; }
+                    });
+                    fontPreparation.applied(requestedSources, declarations);
+                    domain.deferCleanup(() -> completion.complete(null));
+                }, completion::completeExceptionally);
+            } catch (RuntimeException | Error error) { completion.completeExceptionally(error); }
+        }));
+        return completion;
     }
     public void reloadConfiguration() throws IOException {
         check();
@@ -299,12 +349,9 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         reloadImmediately();
     }
     private void reloadImmediately() throws IOException {
-        try {
-            domain.execute(() -> {
-                try { applicationConfiguration.reload(); }
-                catch (IOException failure) { throw new UncheckedIOException(failure); }
-            });
-        } catch (UncheckedIOException failure) { throw failure.getCause(); }
+        domain.execute(() -> applicationConfiguration.reload().whenComplete((ignored, failure) -> {
+            if (failure != null) postOwner(() -> { if (!closed) throw resourceFailure(failure); });
+        }));
     }
     private void reloadImmediatelyUnchecked(){
         try{reloadImmediately();}catch(IOException failure){throw new UncheckedIOException(failure);}
@@ -325,9 +372,12 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         glfwSetWindowContentScaleCallback(window, (w, x, y) -> { revision++; updateDimensions(); });
         glfwSetWindowCloseCallback(window, w -> {
             // GLFW已置关闭标记；确认期间必须继续帧循环，只有leave才真正置true。
-            if(pageServices.handlesClose())glfwSetWindowShouldClose(w,false);
+            if(pageServices != null && pageServices.handlesClose())glfwSetWindowShouldClose(w,false);
             requestClose();
         });
+        snapshotCursor();
+    }
+    private void snapshotCursor() {
         double[] x = new double[1], y = new double[1];
         glfwGetCursorPos(window, x, y);
         cursorX = x[0]; cursorY = y[0];
@@ -341,23 +391,25 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     }
     void cursor(double x, double y) {
         check(); cursorX = x; cursorY = y;
+        if (page == null) return;
         page.pointer(ScenePointerEvent.move(sceneX(), sceneY()));
     }
     private int sceneX() { return windowWidth <= 0 ? 0 : (int)Math.floor(cursorX * framebufferWidth / windowWidth); }
     private int sceneY() { return windowHeight <= 0 ? 0 : (int)Math.floor(cursorY * framebufferHeight / windowHeight); }
     void mouse(int button, int action) {
         check();
+        if (page == null) return;
         page.pointer(action == GLFW_PRESS ? ScenePointerEvent.down(button, sceneX(), sceneY())
                 : ScenePointerEvent.up(button, sceneX(), sceneY()));
     }
     void scroll(double delta) {
-        check(); scrollRemainder += delta;
+        check(); if (page == null) return; scrollRemainder += delta;
         int whole = (int)scrollRemainder;
         if (whole != 0) { scrollRemainder -= whole; page.pointer(ScenePointerEvent.scroll(sceneX(), sceneY(), whole)); }
     }
     void character(int codepoint) {
         check();
-        page.edit(SceneEditEvent.text(new String(Character.toChars(codepoint))));
+        if (page != null) page.edit(SceneEditEvent.text(new String(Character.toChars(codepoint))));
     }
     private final SceneEditEvent.Clipboard clipboard = new SceneEditEvent.Clipboard() {
         public String read() {
@@ -383,12 +435,13 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     }
     void key(int key, int action, int mods) {
         check();
+        if (page == null) return;
         SceneKey named = namedKey(key);
         if (named == null) return;
         boolean down = action != GLFW_RELEASE;
-        SceneKeyEvent event = new SceneKeyEvent(named, (mods & GLFW_MOD_CONTROL) != 0,
+        SceneKeyEvent event = new SceneKeyEvent(named, (mods & (mac ? GLFW_MOD_SUPER : GLFW_MOD_CONTROL)) != 0,
                 (mods & GLFW_MOD_SHIFT) != 0, (mods & GLFW_MOD_ALT) != 0,
-                (mods & GLFW_MOD_SUPER) != 0, action == GLFW_REPEAT, clipboard,
+                (mods & (mac ? GLFW_MOD_CONTROL : GLFW_MOD_SUPER)) != 0, action == GLFW_REPEAT, clipboard,
                 down ? SceneKeyEvent.Phase.DOWN : SceneKeyEvent.Phase.UP);
         specialKey = event;
         switch (key) {
@@ -466,7 +519,8 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     }
     void focus(boolean focused) {
         check();
-        keyAvailability(focused);
+        keyAvailability(focused && page != null);
+        if (page == null) return;
         if (!focused) {
             page.focusLost();
         } else {
@@ -495,24 +549,41 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     }
     @Override public void replay(PaintPlan plan) { lastPlan = plan; renderer.replay(plan, width(), height()); }
     public void frame() {
-        check(); glfwPollEvents();
-        keyHistoryDrained();
-        if (shouldClose() || width() <= 0 || height() <= 0) return;
+        check();
         glfwMakeContextCurrent(window);
-        glViewport(0, 0, width(), height());
-        glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST);
-        glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
-        mediaPresentations = Collections.emptyList();
+        ClientFontServices frameFonts = fonts;
+        boolean presenting = false;
+        Throwable firstFailure = null;
         try {
-        fonts.beginPresentation(++presentation);
-        try { page.frame(); } finally { fonts.endPresentation(); }
-        if (closed || window == 0) return;
-        dispatchPageRequests();
-        glfwSwapBuffers(window);
-        mediaPresentations = renderer.completePresentation(System.nanoTime());
+            // 原域资源发布和原生输入也可能使现有scene立即回放，必须同属真实呈现范围。
+            if (frameFonts != null) { frameFonts.beginPresentation(++presentation); presenting = true; }
+            pumpOwner(); glfwPollEvents();
+            keyHistoryDrained();
+            if (shouldClose() || page == null || width() <= 0 || height() <= 0) return;
+            if (!presenting) { frameFonts = fonts; frameFonts.beginPresentation(++presentation); presenting = true; }
+            glViewport(0, 0, width(), height());
+            glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST);
+            glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+            mediaPresentations = Collections.emptyList();
+            page.frame();
+            if (closed || window == 0) return;
+            dispatchPageRequests();
+            presenting = false; frameFonts.endPresentation();
+            glfwSwapBuffers(window);
+            mediaPresentations = renderer.completePresentation(System.nanoTime());
         } catch (RuntimeException | Error failure) {
-            try { renderer.discardPresentation(); } catch (Throwable next) { if (next != failure) failure.addSuppressed(next); }
+            // 页面初始化在独立域操作失败时可能阻断后排ready检查；当前frame持有真实首错。
+            if (!ready.isDone()) ready.completeExceptionally(failure);
+            firstFailure = failure;
+            if (renderer != null) try { renderer.discardPresentation(); }
+            catch (Throwable next) { if (next != failure) failure.addSuppressed(next); }
             throw failure;
+        } finally {
+            if (presenting) try { frameFonts.endPresentation(); }
+            catch (RuntimeException | Error failure) {
+                if (firstFailure == null) throw failure;
+                if (firstFailure != failure) firstFailure.addSuppressed(failure);
+            }
         }
     }
     /** 本批输入结算后一次性转交页面；关闭与重载同时到达时优先离开确认。 */
@@ -528,6 +599,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     public boolean shouldClose() { return closed || glfwWindowShouldClose(window); }
     public void requestClose() {
         check();
+        if (page == null) { glfwSetWindowShouldClose(window, true); return; }
         page.pointer(ScenePointerEvent.cancel());
         if(pageServices.handlesClose())pendingClose=true;
         else glfwSetWindowShouldClose(window, true);
@@ -540,17 +612,24 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     long handle() { return window; }
     String title() { return title; }
     @Override public void close() {
-        if (closed) return;
+        if (closed || closing) return;
         if (Thread.currentThread() != thread) throw new IllegalStateException("桌面窗口必须在创建线程关闭");
+        closing = true;
         keyAvailability(false);
-        closed = true;
+        if (!ready.isDone()) ready.cancel(false);
+        for (CompletableFuture<Void> update : new java.util.ArrayList<>(fontUpdates)) update.cancel(false);
         lastPlan = null; mediaPresentations = Collections.emptyList();
         if(pageServices!=null)pageServices.releaseRequests();
         Throwable failure = null;
+        // 先让唯一scheduled域drain结算，再原域关闭配置；不能clear掉其executor入口。
+        try { pumpOwner(); applicationConfiguration.close(); pumpOwner(); }
+        catch (Throwable next) { failure = next; }
         while (!resources.isEmpty()) {
-            try { resources.pop().close(); }
+            try { resources.pop().close(); pumpOwner(); }
             catch (Throwable next) { if (failure == null) failure = next; else if (failure != next) failure.addSuppressed(next); }
         }
+        closed = true;
+        ownerActions.clear();
         semanticSnapshot = SceneSemanticSnapshot.EMPTY;
         if (failure instanceof Error) throw (Error)failure;
         if (failure instanceof RuntimeException) throw (RuntimeException)failure;

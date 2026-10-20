@@ -13,32 +13,90 @@ import java.util.concurrent.Executors;
 
 /** 同一合成TS沿真实90kHz PTS/DTS/PCR平移，动态有限窗口无ENDLIST；不依赖外部ffmpeg进程。 */
 public final class MediaLiveFixture implements AutoCloseable {
-    private final HttpServer server;private final ExecutorService executor;private final byte[] original;private final long started=System.nanoTime();
+    private final HttpServer server;private final ExecutorService executor;private final byte[] original,aheadAudio;private final boolean byteRanges;private final long started=System.nanoTime();
     public final java.util.concurrent.atomic.AtomicInteger manifests=new java.util.concurrent.atomic.AtomicInteger(),heads=new java.util.concurrent.atomic.AtomicInteger();
+    public final java.util.concurrent.atomic.AtomicInteger masters=new java.util.concurrent.atomic.AtomicInteger(),alternates=new java.util.concurrent.atomic.AtomicInteger(),rejected=new java.util.concurrent.atomic.AtomicInteger();
+    public final java.util.List<String> ranges=java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+    public final java.util.List<String> requests=java.util.Collections.synchronizedList(new java.util.ArrayList<>());
     private volatile long manualSequence;private volatile boolean ended;
     public MediaLiveFixture()throws IOException{this(false);}
-    public MediaLiveFixture(boolean controlled)throws IOException{
-        manualSequence=controlled?0:-1;
+    public MediaLiveFixture(boolean controlled)throws IOException{this(controlled,null);}
+    public MediaLiveFixture(boolean controlled,byte[] segment)throws IOException{this(controlled,segment,null);}
+    public MediaLiveFixture(boolean controlled,byte[] segment,byte[] audioSegment)throws IOException{this(controlled,segment,audioSegment,false);}
+    public MediaLiveFixture(boolean controlled,byte[] segment,byte[] audioSegment,boolean byteRanges)throws IOException{
+        manualSequence=controlled?0:-1;aheadAudio=audioSegment;this.byteRanges=byteRanges;
+        if(segment!=null)original=segment;else
         try(InputStream input=getClass().getResourceAsStream("/uilib-media/segment.ts");ByteArrayOutputStream output=new ByteArrayOutputStream()){
             if(input==null)throw new IOException("缺少正式合成TS样片");byte[] buffer=new byte[8192];for(int count;(count=input.read(buffer))!=-1;)output.write(buffer,0,count);original=output.toByteArray();
         }
         server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);executor=Executors.newFixedThreadPool(2,r->{Thread t=new Thread(r,"uilib-live-fixture");t.setDaemon(true);return t;});server.setExecutor(executor);
         server.createContext("/",exchange->{
-            String path=exchange.getRequestURI().getPath();byte[] body;
-            if(path.equals("/live.m3u8")||path.equals("/live")||path.equals("/live-no-mime")){
+            String path=exchange.getRequestURI().getPath(),query=exchange.getRequestURI().getRawQuery();byte[] body;int status=200;
+            requests.add(exchange.getRequestMethod()+" "+exchange.getRequestURI());
+            if(query!=null){
+                String token=path.startsWith("/master")?"root":(path.equals("/audio.m3u8")||path.equals("/ahead.m3u8"))?"audio":path.equals("/audio.wav")?"audio-segment":path.equals("/selected/live.m3u8")?"media":"segment";
+                if(!("token="+token).equals(query)||!"https://fixture.example/watch".equals(exchange.getRequestHeaders().getFirst("Referer"))
+                        ||!"UILib-Network-Verification".equals(exchange.getRequestHeaders().getFirst("User-Agent"))){rejected.incrementAndGet();exchange.sendResponseHeaders(403,-1);exchange.close();return;}
+            }
+            if(path.startsWith("/master")){
+                masters.incrementAndGet();
+                String audio="#EXT-X-STREAM-INF:BANDWIDTH=64000\n"+(aheadAudio==null?"audio.m3u8":"ahead.m3u8")+"?token=audio\n",video="#EXT-X-STREAM-INF:BANDWIDTH=1000000\nselected/live.m3u8?token=media\n";
+                // FFmpeg 6.1.1忽略I-FRAME声明；它不能挤占实际program的索引。
+                body=("#EXTM3U\n#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=32000,URI=\"ignored.m3u8?token=ignored\"\n"+(path.equals("/master-reversed")?video+audio:audio+video)).getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type","application/vnd.apple.mpegurl");
+            }else if(path.equals("/ahead.m3u8")){
+                alternates.incrementAndGet();long sequence=manualSequence+1;StringBuilder playlist=new StringBuilder("#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:").append(sequence).append('\n');
+                for(int i=0;i<4;i++)playlist.append("#EXTINF:4,\nahead-").append(sequence+i).append(".ts?token=segment\n");
+                if(ended)playlist.append("#EXT-X-ENDLIST\n");body=playlist.toString().getBytes(StandardCharsets.UTF_8);
+            }else if(path.startsWith("/ahead-")&&aheadAudio!=null){
+                long sequence=Long.parseLong(path.substring(7,path.length()-3));body=shift(aheadAudio,sequence*360_000L);exchange.getResponseHeaders().set("Content-Type","video/mp2t");
+            }else if(path.equals("/audio.m3u8")){
+                alternates.incrementAndGet();body="#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:3,\naudio.wav?token=audio-segment\n#EXT-X-ENDLIST\n".getBytes(StandardCharsets.UTF_8);
+            }else if(path.equals("/audio.wav")){body=audio();exchange.getResponseHeaders().set("Content-Type","audio/wav");
+            }else if(path.equals("/live.m3u8")||path.equals("/live")||path.equals("/live-no-mime")||path.equals("/selected/live.m3u8")){
                 manifests.incrementAndGet();if("HEAD".equals(exchange.getRequestMethod()))heads.incrementAndGet();
                 long sequence=manualSequence<0?(System.nanoTime()-started)/4_000_000_000L:manualSequence;StringBuilder playlist=new StringBuilder("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:").append(sequence).append('\n');
-                for(int i=0;i<(manualSequence<0?3:4);i++)playlist.append("#EXTINF:4.000000,\nsegment-").append(sequence+i).append(".ts\n");
+                for(int i=0;i<(manualSequence<0?3:4);i++){
+                    playlist.append("#EXTINF:4.000000,\n");
+                    if(byteRanges){playlist.append("#EXT-X-BYTERANGE:").append(original.length);if(i==0)playlist.append('@').append((sequence+i)*original.length);playlist.append("\n../shared.ts?token=segment\n");}
+                    else playlist.append(path.startsWith("/selected/")?"../":"").append("segment-").append(sequence+i).append(query==null?".ts\n":".ts?token=segment\n");
+                }
                 if(ended)playlist.append("#EXT-X-ENDLIST\n");
                 body=playlist.toString().getBytes(StandardCharsets.UTF_8);if(!path.equals("/live-no-mime"))exchange.getResponseHeaders().set("Content-Type","application/vnd.apple.mpegurl");
+            }else if(path.equals("/shared.ts")&&byteRanges){
+                ByteArrayOutputStream joined=new ByteArrayOutputStream();for(int i=0;i<6;i++)joined.write(shift(original,i*360_000L));body=joined.toByteArray();
+                String range=exchange.getRequestHeaders().getFirst("Range");ranges.add(range);
+                exchange.getResponseHeaders().set("Accept-Ranges","bytes");
+                if(range!=null){
+                    String[] bounds=range.substring(6).split("-",-1);int start=Integer.parseInt(bounds[0]),end=bounds[1].isEmpty()?body.length-1:Integer.parseInt(bounds[1]);
+                    exchange.getResponseHeaders().set("Content-Range","bytes "+start+"-"+end+"/"+body.length);body=java.util.Arrays.copyOfRange(body,start,end+1);status=206;
+                }
+                exchange.getResponseHeaders().set("Content-Type","video/mp2t");
             }else if(path.matches("/segment-[0-9]+[.]ts")){
                 long sequence=Long.parseLong(path.substring(9,path.length()-3));if(sequence>10000){exchange.sendResponseHeaders(404,-1);exchange.close();return;}body=shift(original,sequence*360_000L);exchange.getResponseHeaders().set("Content-Type","video/mp2t");
             }else {exchange.sendResponseHeaders(404,-1);exchange.close();return;}
-            try{exchange.getResponseHeaders().set("Cache-Control","no-store");exchange.sendResponseHeaders(200,body.length);try(OutputStream output=exchange.getResponseBody()){output.write(body);}}finally{exchange.close();}
+            try{exchange.getResponseHeaders().set("Cache-Control","no-store");exchange.sendResponseHeaders(status,body.length);try(OutputStream output=exchange.getResponseBody()){output.write(body);}}finally{exchange.close();}
         });server.start();
     }
+    /**
+     * 自有合成信号，由随包FFmpeg 6.1.1生成；只进入mediaTest资源，不依赖外部进程。
+     * bframe-segment.ts：ffmpeg -f lavfi -i testsrc2=size=96x64:rate=10 -f lavfi -i sine=frequency=440:sample_rate=48000
+     * -t 4 -map 0:v -map 1:a -c:v mpeg2video -g 40 -bf 2 -q:v 5 -c:a mp2 -b:a 64k -f mpegts bframe-segment.ts
+     * ahead-audio.ts：ffmpeg -f lavfi -i sine=frequency=440:sample_rate=48000 -t 4 -c:a mp2 -b:a 64k -f mpegts ahead-audio.ts
+     */
+    public static byte[] sample(String name)throws IOException{
+        try(InputStream input=MediaLiveFixture.class.getResourceAsStream("/uilib-media/"+name);ByteArrayOutputStream output=new ByteArrayOutputStream()){
+            if(input==null)throw new IOException("缺少正式媒体测试样片: "+name);
+            byte[] buffer=new byte[8192];for(int count;(count=input.read(buffer))!=-1;)output.write(buffer,0,count);return output.toByteArray();
+        }
+    }
+    public int segmentBytes(){return original.length;}
     public URI uri(){return uri("/live.m3u8");}
     public URI uri(String path){return URI.create("http://127.0.0.1:"+server.getAddress().getPort()+path);}
+    public club.heiqi.uilib.ui.media.MediaSource masterSource(boolean reversed){
+        java.util.Map<String,String> headers=new java.util.LinkedHashMap<>();headers.put("Referer","https://fixture.example/watch");headers.put("User-Agent","UILib-Network-Verification");
+        return club.heiqi.uilib.ui.media.MediaSource.http(uri((reversed?"/master-reversed":"/master")+"?token=root"),headers);
+    }
     public void advanceWindow(){if(manualSequence<0)throw new IllegalStateException("仅受控窗口可显式推进");manualSequence++;}
     public void end(){ended=true;}
     private static byte[] shift(byte[] source,long ticks){

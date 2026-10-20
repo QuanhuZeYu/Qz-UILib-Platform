@@ -27,6 +27,7 @@ final class DesktopTestInput {
 
     DesktopTestInput(DesktopWindow window) {
         this.window = window;
+        DesktopTestFrames.ready(window);
         long handle = window.handle();
         cursor = glfwSetCursorPosCallback(handle, null); glfwSetCursorPosCallback(handle, cursor);
         mouse = glfwSetMouseButtonCallback(handle, null); glfwSetMouseButtonCallback(handle, mouse);
@@ -62,6 +63,7 @@ final class DesktopTestInput {
     }
 
     static SceneGeometryView geometry(DesktopWindow window) {
+        DesktopTestFrames.ready(window);
         final SceneGeometryView[] result = {null};
         window.domain.execute(() -> result[0] = window.page.pipeline().current().geometry);
         return Objects.requireNonNull(result[0], "页面缺少统一几何");

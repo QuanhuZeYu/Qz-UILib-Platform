@@ -3,7 +3,14 @@ package club.heiqi.uilib.host.desktop;
 /** 正式帧驱动及字形连续稳定等待；等待上限只属于实机验收，不改变生产调度。 */
 final class DesktopTestFrames {
     private DesktopTestFrames() {}
+    static void ready(DesktopWindow window) {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (!window.ready().isDone() && System.nanoTime() < deadline) window.frame();
+        if (!window.ready().isDone() || window.ready().isCompletedExceptionally())
+            throw new AssertionError("资源尚未完成owner发布");
+    }
     static void frames(DesktopWindow window, int count) {
+        ready(window);
         for (int i = 0; i < count; i++) {
             if (window.shouldClose()) throw new AssertionError("验收窗口提前关闭");
             window.frame();
@@ -29,6 +36,7 @@ final class DesktopTestFrames {
      * 测试只观察原调度集合，不读取业务值或预期图形，也不向生产暴露轨迹/时钟。
      */
     static void finitePresentations(DesktopWindow window) {
+        ready(window);
         long deadline = System.nanoTime() + 5_000_000_000L;
         for (;;) {
             String active = finitePresentationSteps(window);

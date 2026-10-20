@@ -59,7 +59,12 @@ final class FfmpegDecoder implements MediaDecoder {
     private AVChannelLayout outputLayout;
     private int videoStream=-1,audioStream=-1,rgbaSize,pcmSize;
     private int inputRate,inputFormat=-1,inputChannels,outputChannels;
-    private long originNanos;
+    private long originNanos,seekOriginNanos;
+    private boolean hlsSeekClock,seekClockUnavailable;
+    private long seekWindowStart;
+    private int seekPlaylist=-1;
+    private final java.util.ArrayDeque<AVPacket> observedPackets=new java.util.ArrayDeque<>();
+    private long observedBytes;
     private boolean demuxEof,closed,videoFlushed,audioFlushed,videoDone,audioDone;
     private final java.util.ArrayDeque<Held> deferred=new java.util.ArrayDeque<>();
     private long deferredBytes,deferredNanos,lastAudioPacketEnd=-1,lastVideoPacketEnd=-1;
@@ -73,12 +78,15 @@ final class FfmpegDecoder implements MediaDecoder {
         this(source,cancellation,context,initial,index,false);
     }
     FfmpegDecoder(MediaSource source,MediaCancellation cancellation,HlsSourceContext context,byte[] initial,int index,boolean sharedTimeline) throws Exception {
+        this(source,cancellation,context,initial,index,sharedTimeline,false);
+    }
+    FfmpegDecoder(MediaSource source,MediaCancellation cancellation,HlsSourceContext context,byte[] initial,int index,boolean sharedTimeline,boolean seeking) throws Exception {
         this.cancellation=cancellation;this.sourceContext=context;
         try {
             cancellation.check();
             allocateInput();
             openInput(source,initial,index);
-            discoverTracks(sharedTimeline);
+            discoverTracks(sharedTimeline,seeking);
             allocateFrames();
             publishInfo();
         } catch(Throwable error) {
@@ -129,27 +137,76 @@ final class FfmpegDecoder implements MediaDecoder {
     private void configureInput(MediaSource source,byte[] initial,int index,AVDictionary options){
         configureOptions(source,index,options);
         if(initial!=null){
-            initialIo=new InitialPlaylistIo(initial,source);initialIo.attach(input);
+            initialIo=new InitialPlaylistIo(initial,source,sourceContext,cancellation);initialIo.attach(input);
+            // 每次正常reload通过同一io_open交回完整快照，避免HTTP keepalive在回调外复用响应。
+            if(sourceContext!=null)check(av_dict_set(options,"http_persistent","0",0),"http_persistent");
             check(av_dict_set(options,"protocol_whitelist","http,https,tcp,tls,crypto",0),"protocol_whitelist");
         }
     }
 
-    private void discoverTracks(boolean sharedTimeline){
+    private void discoverTracks(boolean sharedTimeline,boolean seeking){
+        org.bytedeco.ffmpeg.avformat.AVProgram selected=null;
+        boolean bound=false;int clockPrimary=-1;
+        if(seeking&&initialIo!=null&&sourceContext!=null){
+            int primary=-1;
+            for(int i=0;i<input.nb_streams();i++){
+                int type=input.streams(i).codecpar().codec_type();
+                if(type==AVMEDIA_TYPE_VIDEO){primary=i;break;}
+                if(primary<0&&type==AVMEDIA_TYPE_AUDIO)primary=i;
+            }
+            if(primary<0)throw new IllegalStateException("HLS header没有可定位的实际轨道");
+            try{selected=initialIo.selectPlaylist(input,primary);bound=true;}
+            catch(Exception error){throw new IllegalStateException("HLS实际media事实绑定失败",error);}
+            if(!sourceContext.liveMedia()){
+                clockPrimary=primary;seekPlaylist=input.streams(primary).id();seekWindowStart=sourceContext.windowStartNanos();
+                hlsSeekClock=true;seekOriginNanos=Long.MIN_VALUE;
+                int[] discard=new int[input.nb_streams()];
+                try{
+                    // 只有本次物理seek的游标先读primary playlist；native first_timestamp与公开首packet DTS同源。
+                    for(int i=0;i<discard.length;i++){discard[i]=input.streams(i).discard();input.streams(i).discard(input.streams(i).id()==seekPlaylist?AVDISCARD_DEFAULT:AVDISCARD_ALL);}
+                    readSeekClock();
+                }finally{for(int i=0;i<discard.length;i++)input.streams(i).discard(discard[i]);}
+            }
+        }
         check(avformat_find_stream_info(input,(PointerPointer)null),"avformat_find_stream_info");
         cancellation.check();
-        // 共享时间线不能逐轨减去不同的首PTS，HLS来源仍使用所属source anchor。
-        originNanos=sharedTimeline||input.start_time()==AV_NOPTS_VALUE?0:Math.multiplyExact(input.start_time(),1000L);
-        if(sourceContext!=null)originNanos=sourceContext.anchor(originNanos);
         for(int i=0;i<input.nb_streams();i++){
             int type=input.streams(i).codecpar().codec_type();
             if(type==AVMEDIA_TYPE_VIDEO&&videoStream<0)videoStream=i;
             if(type==AVMEDIA_TYPE_AUDIO&&audioStream<0)audioStream=i;
         }
         if(videoStream<0&&audioStream<0)throw new IllegalStateException("来源没有音视频轨道");
+        if(clockPrimary>=0&&clockPrimary!=(videoStream>=0?videoStream:audioStream))throw new IllegalStateException("HLS seek实际轨道在find_stream_info后改变");
+        try{if(initialIo!=null&&!bound)selected=initialIo.selectPlaylist(input,videoStream>=0?videoStream:audioStream);}
+        catch(RuntimeException|Error error){throw error;}
+        catch(Exception error){throw new IllegalStateException("HLS实际media事实绑定失败",error);}
+        if(selected!=null&&videoStream>=0){
+            audioStream=-1;
+            for(int i=0;i<selected.nb_stream_indexes();i++){
+                int stream=selected.stream_index().get(i);
+                if(input.streams(stream).codecpar().codec_type()==AVMEDIA_TYPE_AUDIO){audioStream=stream;break;}
+            }
+        }
+        // 共享时间线不能逐轨减去不同的首PTS；先绑定实际media，再建立同来源anchor。
+        originNanos=sharedTimeline||input.start_time()==AV_NOPTS_VALUE?0:Math.multiplyExact(input.start_time(),1000L);
+        if(selected!=null){
+            long selectedStart=Math.min(trackStart(videoStream),trackStart(audioStream));
+            if(selectedStart!=Long.MAX_VALUE)originNanos=selectedStart;
+        }
+        if(sourceContext!=null)originNanos=sourceContext.anchor(originNanos);
+        if(!hlsSeekClock)seekOriginNanos=originNanos;
+        if(selected!=null){
+            // 普通join不额外读取packet；实际物理seek的时钟已在唯一primary活动时确认。
+            long duration=sourceContext.playlistDurationNanos();input.duration(duration<0?AV_NOPTS_VALUE:duration/1000);
+        }
         if(videoStream>=0)video=openCodec(videoStream);
         if(audioStream>=0)audio=openCodec(audioStream);
     }
 
+    private long trackStart(int stream){
+        if(stream<0||input.streams(stream).start_time()==AV_NOPTS_VALUE)return Long.MAX_VALUE;
+        return nanos(input.streams(stream).start_time(),input.streams(stream).time_base());
+    }
     private void allocateFrames(){
         packet=av_packet_alloc();
         if(packet==null||packet.isNull())throw new IllegalStateException("av_packet_alloc returned null");
@@ -254,13 +311,18 @@ final class FfmpegDecoder implements MediaDecoder {
     }
 
     private void readPacket(MediaDecodeRequest request) {
-        int result = av_read_frame(input, packet);
-        cancellation.check(); // HLS中断可能以EOF传播，取消优先于终结事实。
+        int result;
+        AVPacket observed=observedPackets.pollFirst();
+        if(observed==null)result=av_read_frame(input,packet);
+        else{observedBytes-=observed.size();av_packet_move_ref(packet,observed);av_packet_free(observed);released(PACKET);result=0;}
+        cancellation.check(); // HLS中断可能以EOF传播，取消和同流捕获失败优先于终结事实。
+        if(initialIo!=null)initialIo.checkFailure();
         if (result == AVERROR_EOF) {
             demuxEof = true; terminal = new MediaInputState(true, true, true, lastAudioPacketEnd, lastVideoPacketEnd);
             return;
         }
         check(result, "av_read_frame");
+        observeSeekClock(packet);
         try { dispatchPacket(request); }
         finally { av_packet_unref(packet); }
     }
@@ -371,14 +433,40 @@ final class FfmpegDecoder implements MediaDecoder {
     }
     @Override public void seek(long positionNanos) {
         owner(); cancellation.check();
-        long timestamp=(originNanos+positionNanos)/1000;
+        if(hlsSeekClock&&seekOriginNanos==Long.MIN_VALUE)readSeekClock();
+        long timestamp=Math.addExact(seekOriginNanos,positionNanos)/1000;
         check(avformat_seek_file(input,-1,Long.MIN_VALUE,timestamp,timestamp,AVSEEK_FLAG_BACKWARD),"avformat_seek_file");
         if (video!=null) avcodec_flush_buffers(video);
         if (audio!=null) avcodec_flush_buffers(audio);
         if (resample!=null) { swr_free(resample); released(CONVERSION); resample=null; }
-        clearDeferred(); demuxEof=videoFlushed=audioFlushed=videoDone=audioDone=false;
+        clearObserved();clearDeferred(); demuxEof=videoFlushed=audioFlushed=videoDone=audioDone=false;
         lastAudioPacketEnd=lastVideoPacketEnd=-1;terminal=MediaInputState.UNKNOWN;
         av_packet_unref(packet); av_frame_unref(frame);
+    }
+    private void observeSeekClock(AVPacket value){
+        if(!hlsSeekClock||seekClockUnavailable||seekOriginNanos!=Long.MIN_VALUE||input.streams(value.stream_index()).id()!=seekPlaylist)return;
+        if(value.dts()==AV_NOPTS_VALUE){seekClockUnavailable=true;return;}
+        // FFmpeg 6.1.1 hls_read_packet以首个成功packet DTS设置first_timestamp。
+        // 此次seek初始化只启用primary playlist；公开首packet直接给出同一时钟，不从PTS或其他variant推断。
+        seekOriginNanos=Math.subtractExact(Math.multiplyExact(av_rescale_q(value.dts(),input.streams(value.stream_index()).time_base(),av_get_time_base_q()),1000L),seekWindowStart);
+    }
+    private void readSeekClock(){
+        MediaBudget budget=MediaBudget.DEFAULT;
+        while(seekOriginNanos==Long.MIN_VALUE){
+            if(seekClockUnavailable)throw new IllegalStateException("HLS首playlist packet缺少可证的DTS时钟");
+            if(observedPackets.size()>=budget.deferredPackets||observedBytes>=budget.deferredBytes)throw new IllegalStateException("HLS seek时钟观测超过原packet预算");
+            AVPacket next=av_packet_alloc();if(next==null||next.isNull())throw new IllegalStateException("av_packet_alloc返回空");acquired(PACKET);
+            boolean retained=false;
+            try{
+                check(av_read_frame(input,next),"av_read_frame HLS seek clock");
+                observedPackets.addLast(next);observedBytes=Math.addExact(observedBytes,next.size());retained=true;
+                if(observedBytes>budget.deferredBytes)throw new IllegalStateException("HLS seek时钟观测超过原字节预算");
+                observeSeekClock(next);
+            }finally{if(!retained){av_packet_free(next);released(PACKET);}}
+        }
+    }
+    private void clearObserved(){
+        for(AVPacket next;(next=observedPackets.pollFirst())!=null;){av_packet_free(next);released(PACKET);}observedBytes=0;
     }
     private static long nanos(long value,AVRational base) {
         return Math.round(value*(double)base.num()*1_000_000_000d/base.den());
@@ -389,6 +477,7 @@ final class FfmpegDecoder implements MediaDecoder {
     }
     private void check(int result,String stage) {
         cancellation.check();
+        if(initialIo!=null)initialIo.checkFailure();
         checkNative(result,stage);
     }
     static void checkNative(int result,String stage) {
@@ -404,7 +493,7 @@ final class FfmpegDecoder implements MediaDecoder {
         closed=true; Throwable failure=null;
         // 每项仍单独尝试，部分分配/释放失败不会跳过后续资源；顺序与原owner保持一致。
         AutoCloseable[] releases={
-            this::clearDeferred,this::releaseFrame,this::releasePacket,
+            this::clearObserved,this::clearDeferred,this::releaseFrame,this::releasePacket,
             ()->releaseCodec(video),()->releaseCodec(audio),this::releaseScale,this::releaseResample,
             ()->releaseBuffer(rgba),()->releaseBuffer(pcm),()->releaseBuffer(rgbaPlanes),()->releaseBuffer(pcmPlanes),
             ()->releaseBuffer(rgbaStride),this::releaseOutputLayout,this::releaseInput,this::releaseInitialIo,()->{if(openedInput!=null)openedInput.close();},this::releaseCallback
