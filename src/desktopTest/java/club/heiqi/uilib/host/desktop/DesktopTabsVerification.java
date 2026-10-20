@@ -12,13 +12,15 @@ import java.util.function.Supplier;
 import javax.imageio.ImageIO;
 import club.heiqi.uilib.testing.TestApplication;
 import club.heiqi.uilib.testing.gallery.ProjectDetailsPage;
+import club.heiqi.uilib.ui.scene.control.SceneAppearance;
 import club.heiqi.uilib.ui.scene.edit.SceneCompositionTarget;
 import club.heiqi.uilib.ui.scene.edit.SceneEditState;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.layout.SceneGeometryView;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
+import club.heiqi.uilib.ui.scene.runtime.NodeBinding;
 
-/** 正式项目详情标签的可见桌面回归；仅生产回调和共同几何，运行须等待桌面可用。 */
+/** 正式项目详情标签的真实 GLFW 回归；可见性沿宿主配置，仅使用生产回调和共同几何。 */
 public final class DesktopTabsVerification extends TestApplication {
     private Path output;
     private DesktopWindow window;
@@ -31,17 +33,23 @@ public final class DesktopTabsVerification extends TestApplication {
     }
     @Override protected void runTests() throws Exception {
         Path config = output.resolve("project-details.yaml"); Files.deleteIfExists(config);
-        try (DesktopWindow w = DesktopWindow.openWithServices(config, true, services -> ctx ->
-                ctx.mountOwned(ProjectDetailsPage.create(ctx, ctx.theme(), () -> {})))) {
+        boolean requestedVisible = Boolean.parseBoolean(System.getProperty("uilib.desktop.visible", "true"));
+        try (DesktopWindow w = DesktopWindow.openWithServices(config, services -> ctx -> {
+            // 独立项目页没有广场外壳，使用同一主题画布作为根背景。
+            SceneNode root = ProjectDetailsPage.create(ctx, ctx.theme(), () -> {});
+            root.bind(NodeBinding.value(() -> new SceneAppearance.Palette(ctx.theme().get()).canvas, SceneNode::background));
+            ctx.mountOwned(root);
+        })) {
             window = w; glfwSetWindowSize(w.handle(), 1040, 860); settle(w);
-            require(glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE, "标签页验收必须使用可见窗口");
+            boolean actualVisible = glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE;
+            require(actualVisible == requestedVisible, requestedVisible ? "标签页验收必须使用可见窗口" : "隐藏标签页验收窗口意外显示");
             input = new DesktopTestInput(w); input.focus.invoke(w.handle(), true); w.frame();
             try (DesktopTestInput.ScriptedCursor cursor = input.scriptedCursor()) {
                 scenario("标签单入口及切换后同批字段文字", this::sameBatchFields);
                 scenario("窄窗横向显露和方向repeat", this::narrowHeader);
                 scenario("保存命令活动反馈及返回草稿", this::saveAndActivity);
                 scenario("动态禁用与同键重排", this::disableAndReorder);
-                System.out.println("TABS_DESKTOP visibleGLFW=true sharedProjectDetails=true installedCallbacks=true currentPanelOnly=true");
+                System.out.println("TABS_DESKTOP visibleGLFW=" + actualVisible + " focusSource=installed-callback sharedProjectDetails=true installedCallbacks=true currentPanelOnly=true");
             }
         }
     }

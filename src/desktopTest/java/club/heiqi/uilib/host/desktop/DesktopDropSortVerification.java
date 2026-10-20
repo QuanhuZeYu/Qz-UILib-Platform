@@ -453,7 +453,7 @@ public final class DesktopDropSortVerification extends TestApplication {
     static void down(DesktopWindow w, DesktopTestInput input, int x, int y) {
         input.point(x, y); input.mouse.invoke(w.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0); w.frame();
     }
-    static void move(DesktopWindow w, DesktopTestInput input, int x, int y) { input.point(x, y); w.frame(); }
+    static void move(DesktopWindow w, DesktopTestInput input, int x, int y) { input.point(x, y); DesktopTestFrames.inputFrame(w); }
     static void release(DesktopWindow w, DesktopTestInput input) {
         input.mouse.invoke(w.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0); w.frame();
     }

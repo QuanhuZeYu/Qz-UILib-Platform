@@ -355,7 +355,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         int x=edge[0],y=edge[1],target=second.y+second.height-3;
         input.point(x,y);input.mouse.invoke(w.handle(),0,GLFW_PRESS,0);w.frame();
         requireFontDragOwner(w,handle);
-        input.point(x+1,target);w.frame();
+        input.point(x+1,target);DesktopTestFrames.inputFrame(w);
         screenshot(w,w.configPath.getParent().resolve(cancel?"settings-font-drag-cancel.png":"settings-font-drag-active.png"));
         requireFontDragOwner(w,handle);
         if(cancel){input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_PRESS,0);input.key.invoke(w.handle(),GLFW_KEY_ESCAPE,0,GLFW_RELEASE,0);w.frame();}
@@ -416,22 +416,12 @@ public final class DesktopSettingsVerification extends TestApplication {
     static void requireNoFontDragOwner(DesktopWindow window){
         window.domain.execute(() -> require(window.page.runtime().pointerRouter().pressedTarget().get()==null,"字体release后仍有捕获owner"));
     }
+    /**
+     * 此字体页没有持续动画；独立操作前等待全部有限呈现和字形完成。
+     * 这是测例的起始同步边界，不限制生产返场途中新的DOWN。
+     */
     private static void settleReorder(DesktopWindow window){
-        long deadline=System.nanoTime()+5_000_000_000L;
-        do{
-            window.frame();boolean[] moving={false};
-            window.domain.execute(()->{
-                club.heiqi.uilib.ui.scene.layout.SceneLayoutPresentation positions=window.page.runtime().layoutPresentation(true);
-                club.heiqi.uilib.ui.scene.layout.LayoutBox origin=new club.heiqi.uilib.ui.scene.layout.LayoutBox(0,0,0,0);
-                for(SceneGeometryView.Entry entry:geometry(window).ordered()){
-                    club.heiqi.uilib.ui.scene.layout.LayoutBox projected=positions.place(entry.node,origin);
-                    if(projected.x!=0||projected.y!=0||entry.node.control()!=null
-                            &&entry.node.control().nextInputNanos(entry.node)!=Long.MAX_VALUE){moving[0]=true;break;}
-                }
-            });
-            if(!moving[0])return;
-        }while(System.nanoTime()<deadline);
-        throw new AssertionError("排序行在实机等待界限内未回到目标几何");
+        DesktopTestFrames.finitePresentations(window);
     }
     static List<String> current(DesktopWindow w){final List<String>[] result=new List[1];w.domain.execute(() -> result[0]=new ArrayList<>(w.configuration.get(w.fontCandidates)));return result[0];}
     private static ThemeMode currentTheme(DesktopWindow w){final ThemeMode[] result={null};w.domain.execute(() -> result[0]=w.configuration.get(ThemeConfiguration.KEY));return result[0];}

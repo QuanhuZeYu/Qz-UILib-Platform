@@ -16,6 +16,7 @@ import javax.imageio.ImageIO;
 import club.heiqi.uilib.testing.TestApplication;
 import club.heiqi.uilib.testing.gallery.ProjectDetailsPage;
 import club.heiqi.uilib.ui.reactive.Signal;
+import club.heiqi.uilib.ui.scene.control.SceneAppearance;
 import club.heiqi.uilib.ui.scene.control.SceneButton;
 import club.heiqi.uilib.ui.scene.control.SceneSelect;
 import club.heiqi.uilib.ui.scene.edit.SceneCompositionTarget;
@@ -24,32 +25,41 @@ import club.heiqi.uilib.ui.scene.host.ScenePage;
 import club.heiqi.uilib.ui.scene.host.ScenePageContext;
 import club.heiqi.uilib.ui.scene.input.SceneNavigationEvent;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
+import club.heiqi.uilib.ui.scene.layout.SceneGeometryView;
 import club.heiqi.uilib.ui.scene.layout.Size;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
+import club.heiqi.uilib.ui.scene.runtime.NodeBinding;
 
-/** 选择器和菜单的可见桌面回归；正式项目页面及公开控件fixture，运行须等待桌面可用。 */
+/** 选择器和菜单的真实 GLFW 回归；可见性沿宿主配置，使用正式项目页面及公开控件 fixture。 */
 public final class DesktopPopupVerification extends TestApplication {
     private Path output;
     private DesktopWindow window;
     private DesktopTestInput input;
+    private boolean requestedVisible, actualVisible;
     public static void main(String[] args) throws Exception { new DesktopPopupVerification().run(args); }
     @Override protected void setup() throws Exception {
         output = Paths.get(arguments().length == 0 ? "popup-report" : arguments()[0]); Files.createDirectories(output);
+        requestedVisible = Boolean.parseBoolean(System.getProperty("uilib.desktop.visible", "true"));
     }
     @Override protected void runTests() throws Exception {
         scenario("负责人预览确认与共享保存重置菜单", this::projectWorkflow);
         scenario("屏外当前项、缩高限位、外部吞尾和空Tab", this::longListAndClosing);
-        System.out.println("POPUP_DESKTOP visibleGLFW=true sharedProjectDetails=true publicFixture=true installedCallbacks=true");
+        System.out.println("POPUP_DESKTOP visibleGLFW=" + actualVisible + " focusSource=installed-callback sharedProjectDetails=true publicFixture=true installedCallbacks=true");
     }
     private Path config(String name) throws Exception { Path p = output.resolve(name + ".yaml"); Files.deleteIfExists(p); return p; }
     private void prepare(DesktopWindow w, int width, int height) {
         window = w; glfwSetWindowSize(w.handle(), width, height); settle(w);
-        require(glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE, "弹出层验收必须使用可见窗口");
+        actualVisible = glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE;
+        require(actualVisible == requestedVisible, requestedVisible ? "弹出层验收必须使用可见窗口" : "隐藏弹出层验收窗口意外显示");
         input = new DesktopTestInput(w); input.focus.invoke(w.handle(), true); w.frame();
     }
     private void projectWorkflow() throws Exception {
-        try (DesktopWindow w = DesktopWindow.openWithServices(config("project-popup"), true, services -> ctx ->
-                ctx.mountOwned(ProjectDetailsPage.create(ctx, ctx.theme(), () -> {})))) {
+        try (DesktopWindow w = DesktopWindow.openWithServices(config("project-popup"), services -> ctx -> {
+            // 独立项目页没有广场外壳，使用同一主题画布作为根背景。
+            SceneNode root = ProjectDetailsPage.create(ctx, ctx.theme(), () -> {});
+            root.bind(NodeBinding.value(() -> new SceneAppearance.Palette(ctx.theme().get()).canvas, SceneNode::background));
+            ctx.mountOwned(root);
+        })) {
             prepare(w, 1080, 860);
             try (DesktopTestInput.ScriptedCursor cursor = input.scriptedCursor()) {
                 SceneNode trigger = control("林岚", false); focus(trigger); key(GLFW_KEY_DOWN, 0);
@@ -86,10 +96,21 @@ public final class DesktopPopupVerification extends TestApplication {
                 long prepared = geometry(w).ordered().stream().filter(e -> inModal(e.node) && e.node.clickAction() != null).count();
                 require(prepared < page.optionCount, "弹出列表创建了全部行控件");
                 glfwSetWindowSize(w.handle(), 720, 120); settle(w);
-                SceneNode last = focused(); LayoutBox box = geometry(w, last).box, shown = hit(geometry(w, last));
-                LayoutBox layer = geometry(w, modal()).box;
+                SceneNode last = focused(); LayoutBox layer = geometry(w, modal()).box;
+                require(last != null && "候选999".equals(last.text()) && inModal(last)
+                        && layer.x >= 0 && layer.x + layer.width <= w.width()
+                        && layer.y >= 0 && layer.y + layer.height <= w.height()
+                        && read(() -> page.selected.get()) == 999 && read(() -> page.changes.get()) == 0,
+                        "缩高改变了焦点或选择来源，或弹层越出实际页面");
+                // 普通 resize 保留滚动位置，新的显式导航才请求显露焦点项。
+                key(GLFW_KEY_END, 0);
+                last = focused(); SceneGeometryView snapshot = geometry(w);
+                LayoutBox box = snapshot.get(last).box, shown = hit(snapshot.get(last));
+                layer = snapshot.get(modal()).box;
                 require("候选999".equals(last.text()) && shown.width == box.width && shown.height == box.height
-                        && layer.y >= 0 && layer.y + layer.height <= w.height(), "缩高后末项不完整或弹层越出实际页面");
+                        && layer.x >= 0 && layer.x + layer.width <= w.width()
+                        && layer.y >= 0 && layer.y + layer.height <= w.height(), "缩高后导航末项不完整或弹层越出实际页面");
+                require(read(() -> page.selected.get()) == 999 && read(() -> page.changes.get()) == 0, "End导航产生了选择意图");
                 screenshot("popup-last-999-short-window");
                 key(GLFW_KEY_HOME, 0); require("候选0".equals(focused().text()) && read(() -> page.selected.get()) == 999,
                         "Home预览未导航或错误写入选择来源");
@@ -128,6 +149,7 @@ public final class DesktopPopupVerification extends TestApplication {
                     value -> { throw new AssertionError("空来源发布了选择意图"); }, () -> "空来源选择器", ctx.theme());
             outside = SceneButton.create(ctx, () -> "弹层外按钮", ctx.theme(), () -> outsideActions.set(outsideActions.get() + 1));
             ctx.mountOwned(new SceneNode().axis(SceneNode.Axis.ROW).size(Size.fill(1), Size.fill(1)).padding(8).gap(80)
+                    .bind(NodeBinding.value(() -> new SceneAppearance.Palette(ctx.theme().get()).canvas, SceneNode::background))
                     .add(new SceneNode().size(Size.fixed(240), Size.fill(1)).gap(8).add(select).add(empty))
                     .add(outside.size(Size.fill(1), Size.natural())));
         }

@@ -189,7 +189,7 @@ public final class DesktopScrollAreaVerification extends TestApplication {
             w.domain.execute(() -> page.options.set(page.options.get().autoHide(true).timing(40, 40))); w.frame();
             in.moveTo(page.area.node()); wheel(w, in, -1); require(thumbPainted(w), "滚动未显示滑块");
             point(w, in, 950, 620); advance(w, 150); require(!thumbPainted(w), "空闲后未停止显示滑块");
-            in.moveTo(page.area.node()); w.frame(); require(thumbPainted(w), "进入滚动区未显示滑块");
+            in.moveTo(page.area.node()); DesktopTestFrames.inputFrame(w); require(thumbPainted(w), "进入滚动区未显示滑块");
             advance(w, 120); require(thumbPainted(w), "悬停期间未保持滑块");
             LayoutBox track = geometry(w, bar(page, SceneNode.Axis.COLUMN)).box;
             point(w, in, track.x + track.width / 2.0, track.y + 10); press(w, in);

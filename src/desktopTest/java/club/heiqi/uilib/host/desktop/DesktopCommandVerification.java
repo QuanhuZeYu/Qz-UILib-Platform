@@ -21,17 +21,16 @@ import club.heiqi.uilib.ui.scene.input.SceneEditEvent;
 import club.heiqi.uilib.ui.scene.input.SceneKey;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
 
-/** 可见GLFW及正式发行组合验收；生产回调注入与耗尽后原生物理快照分别取证。 */
+/** 真实 GLFW 及正式发行组合验收；按配置记录可见性，生产回调与原生物理快照分别取证。 */
 public final class DesktopCommandVerification extends TestApplication {
     private Path output;
+    private boolean requestedVisible, actualVisible;
 
     public static void main(String[] args) throws Exception { new DesktopCommandVerification().run(args); }
     @Override protected void setup() throws Exception {
         output = arguments().length == 0 ? Paths.get("command-report") : Paths.get(arguments()[0]);
         Files.createDirectories(output);
-        String visible = System.getProperty("uilib.desktop.visible");
-        System.setProperty("uilib.desktop.visible", "true");
-        onClose(() -> { if (visible == null) System.clearProperty("uilib.desktop.visible"); else System.setProperty("uilib.desktop.visible", visible); });
+        requestedVisible = Boolean.parseBoolean(System.getProperty("uilib.desktop.visible", "true"));
     }
     @Override protected void runTests() throws Exception {
         scenario("共享设置保存条件、实际文件与原重载确认", this::settings);
@@ -43,23 +42,29 @@ public final class DesktopCommandVerification extends TestApplication {
         scenario("嵌入旧签名、修饰键、历史门和原导航重复条件", this::embedded);
         scenario("嵌入命名文本键保留UTF-16代理对及命令边界", this::embeddedTextSource);
         Files.write(output.resolve("provenance.txt"), (
-                "可见GLFW、真实OpenGL及发行组合；常规场景经借用的生产回调注入，使用既有ScriptedCursor。\n"
+                "真实GLFW、OpenGL及发行组合；actualVisible=" + actualVisible + ", hiddenNativeFocus=false, focusSource="
+                + (actualVisible ? "native-window" : "installed-callback") + "。\n"
+                + (actualVisible ? "本轮使用原生窗口焦点并核验GLFW_FOCUSED。\n" : "隐藏模式经已安装focus回调递交焦点，不覆盖真实系统焦点。\n")
+                + "常规场景经借用的生产回调注入，使用既有ScriptedCursor。\n"
                 + "GLFW唯一poll耗尽后采集原生物理快照；旧持键及设备历史事实由Embedded场景显式递交。\n"
                 + "Embedded场景在同一正式页面管线递交历史事实，不运行Minecraft。组字仅验证中性旧入口，未验OS IME。\n")
                 .getBytes(StandardCharsets.UTF_8));
-        System.out.println("COMMAND_DESKTOP visibleGLFW=true distribution=true nativeClipboard=true glfwPhysicalSnapshot=true osIme=false renderer=" + glRenderer);
+        System.out.println("COMMAND_DESKTOP visibleGLFW=" + actualVisible + " hiddenNativeFocus=false focusSource="
+                + (actualVisible ? "native-window" : "installed-callback")
+                + " distribution=true nativeClipboard=true glfwPhysicalSnapshot=true osIme=false renderer=" + glRenderer);
     }
     private String glRenderer;
     private Path config(String name) throws Exception {
         Path path = output.resolve(name + ".yaml"); Files.deleteIfExists(path); return path;
     }
-    private static void visible(DesktopWindow w) {
-        require(glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE, "验收窗口不可见");
+    private void visible(DesktopWindow w) {
+        actualVisible = glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE;
+        require(actualVisible == requestedVisible, requestedVisible ? "验收窗口不可见" : "隐藏验收窗口意外显示");
     }
     private void settings() throws Exception {
         Path path = config("settings");
         try (DesktopWindow w = DesktopWindow.openSettings(path)) {
-            visible(w); glfwSetWindowSize(w.handle(), 1280, 900); focusWindow(w); DesktopTestInput in = new DesktopTestInput(w);
+            glfwSetWindowSize(w.handle(), 1280, 900); focusWindow(w); DesktopTestInput in = new DesktopTestInput(w);
             try (DesktopTestInput.ScriptedCursor cursor = in.scriptedCursor()) {
                 byte[] saved = Files.readAllBytes(path);
                 require(!button(w, "保存到文件").enabled(), "初始保存按钮条件不是禁用");
@@ -93,9 +98,9 @@ public final class DesktopCommandVerification extends TestApplication {
         }
     }
     private void mailbox() throws Exception {
-        try (DesktopWindow w = DesktopWindow.openWithServices(config("mailbox"), true,
+        try (DesktopWindow w = DesktopWindow.openWithServices(config("mailbox"),
                 services -> DesktopGallery.createGallery(services, TestGallery.Page.MAILBOX))) {
-            visible(w); glfwSetWindowSize(w.handle(), 1400, 1000); focusWindow(w); DesktopTestInput in = new DesktopTestInput(w);
+            glfwSetWindowSize(w.handle(), 1400, 1000); focusWindow(w); DesktopTestInput in = new DesktopTestInput(w);
             try (DesktopTestInput.ScriptedCursor cursor = in.scriptedCursor()) {
                 in.enqueueClick("反向排序"); chord(w, in, GLFW_KEY_F, GLFW_MOD_CONTROL);
                 type(w, in, "needle中文"); w.frame();
@@ -111,7 +116,7 @@ public final class DesktopCommandVerification extends TestApplication {
     private void editing() throws Exception {
         DesktopCommandPage view = new DesktopCommandPage();
         try (DesktopWindow w = DesktopWindow.open(config("editing"), view)) {
-            visible(w); focusWindow(w); DesktopTestInput in = new DesktopTestInput(w);
+            focusWindow(w); DesktopTestInput in = new DesktopTestInput(w);
             try (DesktopTestInput.ScriptedCursor cursor = in.scriptedCursor()) {
                 in.click(geometry(w, view.field)); w.domain.execute(() -> view.editing.select(0, 0));
                 String original = read(w, () -> view.editing.text().get());
@@ -389,9 +394,16 @@ public final class DesktopCommandVerification extends TestApplication {
     private static void embeddedChord(EmbeddedSceneInputs keys, int physical, EmbeddedSceneInputs.Key key, boolean control) {
         keys.key(physical, key, true, false, control, false); keys.key(physical, key, false, false, control, false);
     }
-    private static void focusWindow(DesktopWindow w) throws Exception {
-        glfwFocusWindow(w.handle());
-        await(w, () -> glfwGetWindowAttrib(w.handle(), GLFW_FOCUSED) == GLFW_TRUE, "真实验收窗口未取得输入焦点");
+    private void focusWindow(DesktopWindow w) throws Exception {
+        visible(w);
+        if (requestedVisible) {
+            glfwFocusWindow(w.handle());
+            await(w, () -> glfwGetWindowAttrib(w.handle(), GLFW_FOCUSED) == GLFW_TRUE, "真实验收窗口未取得输入焦点");
+        } else {
+            // 隐藏窗口只验证已安装的生产焦点回调；真实系统焦点仍由默认可见分支覆盖。
+            new DesktopTestInput(w).focus.invoke(w.handle(), true);
+            w.frame();
+        }
         settle(w);
     }
     private static void await(DesktopWindow w, BooleanSupplier condition, String message) throws Exception {

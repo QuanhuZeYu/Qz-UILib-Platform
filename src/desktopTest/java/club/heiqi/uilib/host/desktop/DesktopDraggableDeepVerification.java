@@ -243,7 +243,7 @@ public final class DesktopDraggableDeepVerification {
     }
     private static boolean active(DesktopWindow w,SceneDraggable.State state){boolean[] a={false};w.domain.execute(() -> a[0]=state.snapshot().get().active);return a[0];}
     private static void down(DesktopWindow w,DesktopTestInput input,int x,int y){input.point(x,y);input.mouse.invoke(w.handle(),0,GLFW_PRESS,0);w.frame();}
-    private static void move(DesktopWindow w,DesktopTestInput input,int x,int y){input.point(x,y);w.frame();}
+    private static void move(DesktopWindow w,DesktopTestInput input,int x,int y){input.point(x,y);DesktopTestFrames.inputFrame(w);}
     private static void up(DesktopWindow w,DesktopTestInput input){input.mouse.invoke(w.handle(),0,GLFW_RELEASE,0);w.frame();}
     private static void key(DesktopWindow w,DesktopTestInput input,int key){input.key.invoke(w.handle(),key,0,GLFW_PRESS,0);input.key.invoke(w.handle(),key,0,GLFW_RELEASE,0);w.frame();}
     private static boolean same(LayoutBox a,LayoutBox b){return a.x==b.x&&a.y==b.y&&a.width==b.width&&a.height==b.height;}

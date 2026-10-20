@@ -3,6 +3,7 @@ package club.heiqi.uilib.host.desktop;
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
 import static club.heiqi.uilib.host.desktop.DesktopTestFrames.settle;
+import static club.heiqi.uilib.host.desktop.DesktopTestFrames.finitePresentations;
 import static club.heiqi.uilib.host.desktop.DesktopTestInput.geometry;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,11 +13,13 @@ import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 import club.heiqi.uilib.testing.TestApplication;
 import club.heiqi.uilib.testing.gallery.PreferencesPage;
+import club.heiqi.uilib.ui.scene.control.SceneAppearance;
+import club.heiqi.uilib.ui.scene.runtime.NodeBinding;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 
-/** 正式通知偏好可见桌面回归；仅生产回调与公开绘制事实，运行须等待桌面可用。 */
+/** 正式通知偏好桌面回归；隐藏模式仍使用真实GL及生产回调，不覆盖OS可见焦点。 */
 public final class DesktopStateControlsVerification extends TestApplication {
     private Path output;
     private DesktopWindow window;
@@ -27,16 +30,24 @@ public final class DesktopStateControlsVerification extends TestApplication {
     }
     @Override protected void runTests() throws Exception {
         Path config = output.resolve("preferences.yaml"); Files.deleteIfExists(config);
-        try (DesktopWindow w = DesktopWindow.openWithServices(config, true, services -> ctx ->
-                ctx.mountOwned(PreferencesPage.create(ctx, ctx.theme(), () -> {})))) {
+        boolean requestedVisible = Boolean.parseBoolean(System.getProperty("uilib.desktop.visible", "true"));
+        try (DesktopWindow w = DesktopWindow.openWithServices(config, requestedVisible, services -> ctx -> {
+            SceneNode root = PreferencesPage.create(ctx, ctx.theme(), () -> {});
+            // 独立挂页没有Gallery外壳，沿共享主题角色补齐画布，而非暴露宿主清屏黑色。
+            root.bind(NodeBinding.value(ctx.theme(), (node, theme) -> node.background(new SceneAppearance.Palette(theme).canvas)));
+            ctx.mountOwned(root);
+        })) {
             window = w; glfwSetWindowSize(w.handle(), 1040, 860); settle(w);
-            require(glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE, "状态控件验收必须使用可见窗口");
+            boolean actualVisible = glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE;
+            require(actualVisible == requestedVisible, requestedVisible
+                    ? "状态控件验收必须使用请求的可见窗口" : "状态控件隐藏验收不应显示原生窗口");
             input = new DesktopTestInput(w); input.focus.invoke(w.handle(), true); w.frame();
             try (DesktopTestInput.ScriptedCursor cursor = input.scriptedCursor()) {
                 scenario("单Tab入口及组内方向repeat和离组隔离", this::singleTabAndRepeat);
                 scenario("禁用来源及外部选择更新", this::disabledAndExternal);
                 scenario("离线拒绝保留真实开关状态", this::switchRejection);
-                System.out.println("STATE_CONTROLS_DESKTOP visibleGLFW=true sharedPreferences=true installedCallbacks=true sourceAuthority=true");
+                System.out.println("STATE_CONTROLS_DESKTOP visibleGLFW=" + actualVisible
+                        + " sharedPreferences=true installedCallbacks=true sourceAuthority=true");
             }
         }
     }
@@ -75,16 +86,28 @@ public final class DesktopStateControlsVerification extends TestApplication {
         input.click("模拟离线"); require(!interactive(instant), "重新离线没有结束实时选项资格");
     }
     private void switchRejection() throws Exception {
-        SceneNode autosave = control("自动保存偏好"); focus(autosave); settle(window);
-        String before = symbolPlan(autosave); key(GLFW_KEY_ENTER, 0); settle(window);
+        SceneNode autosave = control("自动保存偏好"); focus(autosave); finitePresentations(window);
+        String before = symbolPlan(autosave); key(GLFW_KEY_ENTER, 0);
+        require(Boolean.TRUE.equals(checked(autosave)) && hasText("连接网络后可修改自动保存；当前偏好已保留。"),
+                "离线Enter拒绝没有即时保留原来源与反馈");
+        finitePresentations(window);
         require(hasText("连接网络后可修改自动保存；当前偏好已保留。") && before.equals(symbolPlan(autosave)),
                 "业务拒绝后开关保存了伪状态");
-        key(GLFW_KEY_SPACE, 0); settle(window);
+        key(GLFW_KEY_SPACE, 0);
+        require(Boolean.TRUE.equals(checked(autosave)) && hasText("连接网络后可修改自动保存；当前偏好已保留。"),
+                "离线Space拒绝没有即时保留原来源与反馈");
+        finitePresentations(window);
         require(before.equals(symbolPlan(autosave)), "再次拒绝反转了控件私有状态");
         screenshot("preferences-offline-rejected");
-        input.click("连接网络"); focus(autosave); key(GLFW_KEY_ENTER, 0); settle(window);
+        input.click("连接网络"); focus(autosave); key(GLFW_KEY_ENTER, 0);
+        require(Boolean.FALSE.equals(checked(autosave)) && hasText("自动保存已关闭。"),
+                "联网Enter未即时更新原来源与关闭反馈");
+        finitePresentations(window);
         require(hasText("自动保存已关闭。") && !before.equals(symbolPlan(autosave)), "连接后未重读原来源或拇指未更新");
-        key(GLFW_KEY_SPACE, 0); settle(window);
+        key(GLFW_KEY_SPACE, 0);
+        require(Boolean.TRUE.equals(checked(autosave)) && hasText("自动保存已开启。"),
+                "联网Space未即时恢复原来源与开启反馈");
+        finitePresentations(window);
         require(hasText("自动保存已开启。") && before.equals(symbolPlan(autosave)), "Space未沿当前来源恢复原状态");
         screenshot("preferences-switch-accepted");
     }
@@ -101,6 +124,7 @@ public final class DesktopStateControlsVerification extends TestApplication {
         return geometry(window).ordered().stream().map(e -> e.node).filter(n -> name.equals(n.text()) && n.clickAction() != null)
                 .findFirst().orElseThrow(() -> new AssertionError("缺少正式偏好控件：" + name));
     }
+    private Boolean checked(SceneNode node) { return read(() -> node.control().semantics(node).values.checked); }
     private boolean interactive(SceneNode node) { return read(() -> window.page.runtime().interactive(node)); }
     private void focus(SceneNode target) { window.domain.execute(() -> require(window.page.runtime().focusRouter().navigateTo(window.page.runtime().captureMount(target)), "无法聚焦正式偏好控件")); window.frame(); }
     private <T> T read(Supplier<T> action) { Object[] value = {null}; window.domain.execute(() -> value[0] = action.get()); @SuppressWarnings("unchecked") T result = (T)value[0]; return result; }
