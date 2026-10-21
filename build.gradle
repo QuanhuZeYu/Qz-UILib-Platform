@@ -43,6 +43,8 @@ dependencies {
     coreContent 'org.commonmark:commonmark-ext-gfm-tables:0.21.0'
     coreContent 'org.jsoup:jsoup:1.19.1'
     coreContent 'org.nibor.autolink:autolink:0.10.0'
+    // 仅验证侧读取实际宿主方法体，不进入任何生产适配。
+    testImplementation 'org.ow2.asm:asm-commons:9.8'
 }
 apply from: 'gradle/native-runtime.gradle'
 
@@ -82,8 +84,8 @@ sourceSets.create('desktop') {
     compileClasspath = configurations.coreDevelopment21 + configurations.coreContent + configurations.fontBindings + sourceSets.fontAdapter21.output + sourceSets.glRenderer21.output + sourceSets.lwjgl321.output + sourceSets.mediaAdapter21.output
 }
 sourceSets.test {
-    compileClasspath = configurations.coreDevelopment8 + configurations.coreVerification + configurations.gallery + configurations.coreContent + configurations.fontBindings + sourceSets.fontAdapter.output + sourceSets.glRenderer.output + sourceSets.lwjgl3.output
-    runtimeClasspath = output + compileClasspath + configurations.fontNativeRuntime
+    compileClasspath = configurations.coreDevelopment8 + configurations.coreVerification + configurations.gallery + configurations.coreContent + configurations.fontBindings + sourceSets.fontAdapter.output + sourceSets.glRenderer.output + sourceSets.lwjgl3.output + configurations.testCompileClasspath
+    runtimeClasspath = output + compileClasspath + configurations.fontNativeRuntime + configurations.testRuntimeClasspath
 }
 sourceSets.create('mediaTest') {
     compileClasspath = configurations.coreDevelopment8 + configurations.coreVerification + sourceSets.mediaAdapter.output + sourceSets.glRenderer.output

@@ -39,6 +39,9 @@ public final class Lwjgl3GlApi implements GlApi {
         org.lwjgl.opengl.GL20C.glGetActiveAttrib(
                 program, index, length, attributeSize, attributeType, nameBuffer);
         byte[] encoded = new byte[length.get(0)];
+        // Angelica 2.2.10/2.2.28 的后端用相对 put 写入名称，推进 position 而保留 limit；
+        // 原生 LWJGL 则不移动游标。输出从自有缓冲区起点读取，长度仍取宿主返回值。
+        nameBuffer.position(0);
         nameBuffer.get(encoded);
         String name = new String(encoded, java.nio.charset.StandardCharsets.UTF_8);
         return new GlProgramAttribute(

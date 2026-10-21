@@ -126,6 +126,7 @@ publishing {
                 withXml {
                     def dependencies = asNode().appendNode('dependencies')
                     formalDependency(dependencies,'core','java8'); formalDependency(dependencies,'core-verification'); formalDependency(dependencies,'gallery')
+                    formalDependency(dependencies,'asm-commons',null,'runtime','org.ow2.asm','9.8')
                     platformModules.values().each { formalDependency(dependencies,it,'java8') }
                 }
             }

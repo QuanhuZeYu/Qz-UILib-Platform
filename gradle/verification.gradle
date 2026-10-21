@@ -88,6 +88,12 @@ platformApplication('platformVerify','PlatformGalleryVerification') {
     }
 }
 platformApplication('embeddedFontSourcesScenario', 'EmbeddedFontSourcesScenario')
+// 显式真实GL回归：可传入分号分隔的实际Angelica发行Jar，不启动MC。
+platformApplication('glActiveAttributeVerify', 'GlActiveAttributeScenario', 21) {
+    if (providers.gradleProperty('angelicaJars').isPresent()) {
+        args providers.gradleProperty('angelicaJars').get().split(';') as List
+    }
+}
 
 def deviceChecks = [batch:'GlBatchScenario', glyph:'AttributedGlyphGlScenario', font:'ClientFontServicesScenario',
         document:'DocumentGlScenario', markdown:'MarkdownGlScenario', math:'MathGlScenario', paint:'PaintPrimitiveScenario',
