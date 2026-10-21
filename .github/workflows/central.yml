@@ -175,7 +175,7 @@ jobs:
   release:
     if: inputs.deploymentId != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - name: 公开已验证的指定部署
         shell: bash
@@ -196,7 +196,7 @@ jobs:
           const headers = { Authorization: 'Bearer ' + Buffer.from(username + ':' + password).toString('base64') };
           const api = 'https://central.sonatype.com/api/v1/publisher/';
           async function status() {
-            const response = await fetch(api + 'status?id=' + encodeURIComponent(id), { method: 'POST', headers });
+            const response = await fetch(api + 'status?id=' + encodeURIComponent(id), { method: 'POST', headers, signal: AbortSignal.timeout(30000) });
             if (!response.ok) throw new Error('读取部署状态失败 HTTP ' + response.status);
             return await response.json();
           }
@@ -206,16 +206,16 @@ jobs:
           // Central 受理公开后不再返回 purls；坐标必须在 VALIDATED 的写入边界核对，后续只查询同一 ID。
           if (deployment.deploymentState === 'VALIDATED') {
             if (purls.length !== expected.length || expected.some(purl => !purls.includes(purl))) throw new Error('部署内容与本仓本版 Maven 坐标不匹配：' + JSON.stringify({ deploymentId: id, state: deployment.deploymentState, purls }));
-            const response = await fetch(api + 'deployment/' + encodeURIComponent(id), { method: 'POST', headers });
+            const response = await fetch(api + 'deployment/' + encodeURIComponent(id), { method: 'POST', headers, signal: AbortSignal.timeout(30000) });
             if (!response.ok) throw new Error('公开部署失败 HTTP ' + response.status);
           } else if (!['PUBLISHING', 'PUBLISHED'].includes(deployment.deploymentState)) {
             throw new Error('部署尚未处于 VALIDATED：' + deployment.deploymentState);
           }
           // 重试已受理的部署只读取状态；成功必须对应最终 PUBLISHED。
-          const deadline = Date.now() + 10 * 60 * 1000;
+          const deadline = Date.now() + 30 * 60 * 1000;
           let result = await status();
           while (result.deploymentState === 'PUBLISHING' && Date.now() < deadline) {
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            await new Promise(resolve => setTimeout(resolve, 30000));
             result = await status();
           }
           console.log(JSON.stringify({ deploymentId: id, version, state: result.deploymentState, purls }));
