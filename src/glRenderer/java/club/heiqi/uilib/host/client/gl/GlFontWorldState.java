@@ -36,9 +36,8 @@ final class GlFontWorldState implements AutoCloseable {
     }
 
     void applyIris() {
-        // Iris Pass.use拥有目标与blend overrides；viewport/depth/scissor仍必须来自caller提交快照。
-        if (gl.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING) != context.drawFramebuffer)
-            throw new IllegalStateException("Iris Pass.use目标与捕获font target不一致");
+        // 外部 Pass.use 按当前 program/阶段拥有目标与 blend overrides；历史 caller FBO
+        // 可属于另一 pass，不能用句柄相等约束或重新绑定它。viewport/depth/scissor 仍取提交快照。
         if (context.rasterState != null) GlFontRasterState.applyNonBlend(gl, context.rasterState);
         int[] v = context.projection.viewport();
         gl.glViewport(v[0], v[1], v[2], v[3]);
