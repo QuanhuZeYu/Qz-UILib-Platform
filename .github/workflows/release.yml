@@ -18,6 +18,7 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 60
     outputs:
       version: ${{ steps.version.outputs.version }}
       commit: ${{ steps.version.outputs.commit }}
@@ -53,14 +54,6 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: |
-            8
-            21
-            25
-      - uses: gradle/actions/setup-gradle@v4
       - name: 下载同 tag Core Maven ZIP
         shell: bash
         env:
@@ -77,6 +70,16 @@ jobs:
             exit 1
           fi
           python -m zipfile -e ".release/core/qz-uilib-core-$VERSION-maven.zip" .release/maven
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
       - name: 从 tag 完整构建
         shell: bash
         env:
@@ -88,11 +91,27 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: platform-release
-          path: build/release/qz-uilib-platform-*-maven.zip
+          path: build/release/qz-uilib-platform-${{ steps.version.outputs.version }}-maven.zip
           if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: platform-release-results
+          path: |
+            build/reports
+            build/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: 记录构建失败
+        if: failure()
+        shell: bash
+        run: |
+          echo "Platform Release 构建失败：查看失败步骤日志与可用的 platform-release-results 报告。Core ZIP 缺失时先完成同 tag、同版本 Core Release（Core → Platform）。" >> "$GITHUB_STEP_SUMMARY"
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -125,3 +144,8 @@ jobs:
             --commit "$COMMIT" \
             --run-url "$RUN_URL" \
             --scope "Platform 完整 build：Java8/Java21 双目标适配、桌面发行、独立验证消费者；依赖同 tag Core Maven ZIP，Maven ZIP 根目录为 asia/quanhuzeyu/uilib。"
+      - name: 记录发布失败
+        if: failure()
+        shell: bash
+        run: |
+          echo "Platform GitHub Release 失败：查看本 job 的失败步骤日志，确认发布状态后再决定是否重跑。" >> "$GITHUB_STEP_SUMMARY"
