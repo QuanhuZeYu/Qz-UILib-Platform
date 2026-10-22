@@ -485,7 +485,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 if (!residents.containsKey(new ViewKey(key, view))) cpu.request(key);
             UploadProgress progress = new UploadProgress(uploadBudget);
             int uploadTarget = view == SamplingView.STRAIGHT_RGBA ? GL_TEXTURE_2D : target;
-            try (GlCpuUploadScope state = new GlCpuUploadScope(gl, uploadTarget)) {
+            try (GlCpuUploadScope state = GlCpuUploadScope.deferred(gl, uploadTarget)) {
                 preparingState = state;
                 if (needsSolid && view == SamplingView.STRAIGHT_RGBA) prepareSolid(progress);
                 for (List<GlyphKey> layer : priorityLayers) {
@@ -527,6 +527,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 whiteScratch.clear();
                 for (int i = 0; i < 36; i++) whiteScratch.put((byte) 255);
                 whiteScratch.flip();
+                preparingState.prepare();
                 gl.glBindTexture(whiteGroup.target, whiteGroup.texture);
                 gl.glTexSubImage2D(
                         whiteGroup.target, 0, 0, 0, 3, 3, GL_RGBA, GL_UNSIGNED_BYTE, whiteScratch);
@@ -614,6 +615,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             // 复用小块提交，单次 staging 不超过64KiB；宽行本身是最小预算单位。
             rows = Math.min(rows, Math.max(1, 65536 / rowBytes));
             ByteBuffer data = glyphBlock(job, rows, rowBytes);
+            preparingState.prepare();
             gl.glBindTexture(job.resident.group.target, job.resident.group.texture);
             if (job.resident.group.target == GL_TEXTURE_2D_ARRAY)
                 gl.glTexSubImage3D(
@@ -711,6 +713,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 rejected++;
                 return null;
             }
+        preparingState.prepare();
         int texture = gl.glGenTextures();
         try {
             gl.glBindTexture(groupTarget, texture);

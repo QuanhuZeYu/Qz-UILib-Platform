@@ -669,18 +669,19 @@ public final class ClientFontServicesScenario extends TestApplication {
             } while (light == dark && System.nanoTime() < deadline);
             require(dark != light, "主题切换未改变实际GL颜色");
             page.pointer(club.heiqi.uilib.ui.scene.input.ScenePointerEvent.move(20, 20));
-            clear();
-            page.frame();
             final ScenePresentation[] rendered = {null};
-            local.execute(() -> rendered[0] = page.pipeline().current());
-            require(
-                    rendered[0].paint.commands().stream()
-                            .anyMatch(
-                                    c ->
-                                            c.kind == PaintCommand.Kind.TEXT
-                                                    && c.text.originalText.equals(caption)
-                                                    && c.box.y >= 44),
-                    "完整文案提示未进入实际生产绘制计划");
+            boolean tooltip;
+            deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
+            // MOVE沿正式输入采样门推进；渲染加快后，紧邻首帧不保证已经消费这次移动。
+            do {
+                clear();
+                page.frame();
+                local.execute(() -> rendered[0] = page.pipeline().current());
+                tooltip = rendered[0].paint.commands().stream().anyMatch(
+                        c -> c.kind == PaintCommand.Kind.TEXT
+                                && c.text.originalText.equals(caption) && c.box.y >= 44);
+            } while (!tooltip && System.nanoTime() < deadline);
+            require(tooltip, "完整文案提示未进入实际生产绘制计划");
             local.execute(
                     () -> {
                         TextLayout displayed = rendered[0].geometry.get(button[0]).text;

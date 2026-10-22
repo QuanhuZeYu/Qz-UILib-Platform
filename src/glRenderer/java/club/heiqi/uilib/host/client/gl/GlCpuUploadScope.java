@@ -18,14 +18,29 @@ final class GlCpuUploadScope implements AutoCloseable {
     };
 
     private final GlApi gl;
-    private final int unit, pbo;
+    private int unit, pbo;
+    private boolean captured;
     private final int[] unpackValues = new int[UNPACK_NAMES.length];
     private final int[] textureTargets, textures;
 
     GlCpuUploadScope(GlApi gl, int... textureTargets) {
+        this(gl, true, textureTargets);
+    }
+
+    private GlCpuUploadScope(GlApi gl, boolean immediate, int... textureTargets) {
         this.gl = gl;
         this.textureTargets = textureTargets.clone();
         textures = new int[textureTargets.length];
+        if (immediate) prepare();
+    }
+
+    /** 缓存命中/worker未就绪不触碰上传状态；首次实际写纹理前才激活同一保护范围。 */
+    static GlCpuUploadScope deferred(GlApi gl, int... textureTargets) {
+        return new GlCpuUploadScope(gl, false, textureTargets);
+    }
+
+    void prepare() {
+        if (captured) return;
         unit = gl.glGetInteger(GL_ACTIVE_TEXTURE);
         pbo = gl.glGetInteger(GL_PIXEL_UNPACK_BUFFER_BINDING);
         for (int i = 0; i < UNPACK_NAMES.length; i++)
@@ -36,6 +51,7 @@ final class GlCpuUploadScope implements AutoCloseable {
         gl.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
         for (int name : UNPACK_NAMES)
             gl.glPixelStorei(name, name == GL_UNPACK_ALIGNMENT ? 1 : 0);
+        captured = true;
     }
 
     private static int bindingName(int target) {
@@ -51,11 +67,13 @@ final class GlCpuUploadScope implements AutoCloseable {
 
     /** 上传暂时覆盖 unit0 绑定后，淘汰仍须保护进入态所引用的纹理。 */
     void addSavedTexturesTo(Set<Integer> bound) {
+        if (!captured) return;
         for (int texture : textures) bound.add(texture);
     }
 
     @Override
     public void close() {
+        if (!captured) return;
         for (int i = 0; i < textureTargets.length; i++)
             gl.glBindTexture(textureTargets[i], textures[i]);
         gl.glActiveTexture(unit);

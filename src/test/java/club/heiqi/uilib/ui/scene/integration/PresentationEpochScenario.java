@@ -5,6 +5,9 @@ import club.heiqi.uilib.testing.GlfwTestEnvironment;
 import club.heiqi.uilib.testing.GlfwTestEnvironment.Profile;
 import club.heiqi.uilib.host.font.IsolatedFontEngine;
 import club.heiqi.uilib.host.client.gl.Lwjgl3GlApi;
+import club.heiqi.uilib.host.client.gl.GlApi;
+import java.lang.reflect.Proxy;
+import java.lang.reflect.InvocationTargetException;
 import club.heiqi.uilib.host.client.gl.GlProgramProvider;
 
 import java.nio.ByteBuffer;
@@ -34,6 +37,11 @@ public final class PresentationEpochScenario extends TestApplication {
 
     private static ClientFontServices owner(
             long bytes, long nanos, int calls, int demand, int ready) throws Exception {
+        return owner(bytes, nanos, calls, demand, ready, new Lwjgl3GlApi());
+    }
+
+    private static ClientFontServices owner(
+            long bytes, long nanos, int calls, int demand, int ready, GlApi gl) throws Exception {
         return new ClientFontServices(
                 PresentationEpochScenario.class.getClassLoader(),
                 1,
@@ -46,7 +54,7 @@ public final class PresentationEpochScenario extends TestApplication {
                         64,
                         demand),
                 IsolatedFontEngine.shared(),
-                new Lwjgl3GlApi(),
+                gl,
                 GlProgramProvider.NONE);
     }
 
@@ -139,8 +147,11 @@ public final class PresentationEpochScenario extends TestApplication {
                 if (p.readyCount() != 0) throw new AssertionError("frame0不blank");
             }
             try (GlPaintPlanRenderer.Prepared p = owner.prepare(b, pb, VIEW)) {
-                if (p.readyCount() != 0 || p.demandCount() != 4)
-                    throw new AssertionError("后consumer覆盖此前需求");
+                if (p.readyCount() != 0 || p.demandCount() != 2
+                        || owner.presentationStats().demand != 4)
+                    throw new AssertionError("局部Prepared或整帧需求并集错误");
+                if (owner.rasterizer().stats().cancelled != 0)
+                    throw new AssertionError("后consumer取消此前需求");
             }
             owner.endPresentation();
             long end = System.nanoTime() + 10000000000L;
@@ -359,6 +370,94 @@ public final class PresentationEpochScenario extends TestApplication {
         }
     }
 
+    /** 稳定字形分成多次标准文字绘制时，不能反复准备此前consumer的累计前缀。 */
+    private void warmConsumers() throws Exception {
+        boolean[] measuring = {false};
+        int[] unpackReads = {0}, unpackWrites = {0};
+        GlApi actual = new Lwjgl3GlApi();
+        GlApi counted = (GlApi) Proxy.newProxyInstance(
+                GlApi.class.getClassLoader(), new Class<?>[] {GlApi.class},
+                (proxy, method, args) -> {
+                    if (measuring[0]) {
+                        if (method.getName().equals("glGetInteger") && unpack((Integer) args[0]))
+                            unpackReads[0]++;
+                        if (method.getName().equals("glPixelStorei")) unpackWrites[0]++;
+                    }
+                    try {
+                        return method.invoke(actual, args);
+                    } catch (InvocationTargetException failure) {
+                        throw failure.getCause();
+                    }
+                });
+        ClientFontServices owner = owner(65536, 1000000000, 128, 128, 128, counted);
+        onClose(() -> close(owner));
+        GlPaintPlanRenderer renderer = owner.createPlanRenderer();
+        PaintPlan[] plans = {text(owner, "A", 4), text(owner, "B", 74),
+                text(owner, "C", 144), text(owner, "D", 214)};
+        long end = System.nanoTime() + 10000000000L;
+        int epoch = 0;
+        for (;;) {
+            boolean ready = true;
+            owner.beginPresentation(epoch++);
+            glClearColor(0, 0, 0, 0);
+            glClear(GL_COLOR_BUFFER_BIT);
+            for (PaintPlan plan : plans)
+                try (GlPaintPlanRenderer.Prepared prepared = owner.prepare(renderer, plan, VIEW)) {
+                    if (glyphs(plan).size() != 1) throw new AssertionError("夹具须为单字形");
+                    if (prepared.resident(glyphs(plan).get(0)) == null) ready = false;
+                    prepared.render(FramebufferCoordinates.orthographic(W, H), H, false);
+                }
+            owner.endPresentation();
+            if (ready) break;
+            if (System.nanoTime() > end) throw new AssertionError("热字形未就绪");
+            Thread.sleep(1);
+        }
+        int[] expected = pixels();
+        long rasterized = owner.rasterizer().stats().rasterized;
+        long uploads = owner.atlas().stats().uploadCalls;
+        int[] local = new int[plans.length], union = new int[plans.length];
+        owner.beginPresentation(epoch);
+        glClear(GL_COLOR_BUFFER_BIT);
+        try {
+            for (int i = 0; i < plans.length; i++) {
+                GlPaintPlanRenderer.Prepared prepared;
+                measuring[0] = true;
+                try {
+                    prepared = owner.prepare(renderer, plans[i], VIEW);
+                } finally {
+                    measuring[0] = false;
+                }
+                try (GlPaintPlanRenderer.Prepared current = prepared) {
+                    local[i] = current.demandCount();
+                    union[i] = owner.presentationStats().demand;
+                    if (current.resident(glyphs(plans[i]).get(0)) == null)
+                        throw new AssertionError("稳定字形丢失");
+                    current.render(FramebufferCoordinates.orthographic(W, H), H, false);
+                }
+            }
+        } finally {
+            owner.endPresentation();
+        }
+        System.out.println("warmConsumers local=" + Arrays.toString(local)
+                + " union=" + Arrays.toString(union) + " unpackReads=" + unpackReads[0]
+                + " unpackWrites=" + unpackWrites[0]);
+        if (!Arrays.equals(union, new int[] {1, 2, 3, 4}))
+            throw new AssertionError("整帧需求并集被局部准备覆盖");
+        if (!Arrays.equals(expected, pixels()) || owner.rasterizer().stats().rasterized != rasterized
+                || owner.atlas().stats().uploadCalls != uploads)
+            throw new AssertionError("稳定字形重新生成、上传或画面改变");
+        if (!Arrays.equals(local, new int[] {1, 1, 1, 1})
+                || unpackReads[0] != 0 || unpackWrites[0] != 0)
+            throw new AssertionError("热consumer重复准备累计需求或无效上传状态");
+    }
+
+    private static boolean unpack(int name) {
+        return name == GL_UNPACK_ALIGNMENT || name == GL_UNPACK_ROW_LENGTH
+                || name == GL_UNPACK_IMAGE_HEIGHT || name == GL_UNPACK_SKIP_PIXELS
+                || name == GL_UNPACK_SKIP_ROWS || name == GL_UNPACK_SKIP_IMAGES
+                || name == GL_UNPACK_SWAP_BYTES || name == GL_UNPACK_LSB_FIRST;
+    }
+
     public static void main(String[] args) throws Exception { new PresentationEpochScenario().run(args); }
 
     @Override
@@ -403,6 +502,7 @@ public final class PresentationEpochScenario extends TestApplication {
             glViewport(0, 0, W, H);
             glDisable(GL_DITHER);
             glDisable(GL_FRAMEBUFFER_SRGB);
+            scenario("热字形多consumer", this::warmConsumers);
             scenario("冷启动与取消", this::coldAndCancellation);
             scenario("多consumer共享预算", this::sharedBudget);
             scenario("需求并集与时间预算", this::unionAndTime);

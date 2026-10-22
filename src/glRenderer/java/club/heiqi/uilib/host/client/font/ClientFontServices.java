@@ -221,7 +221,8 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         if (!presenting) beginPresentation(--autoEpoch);
         long start = System.nanoTime();
         try {
-            admitDemand(
+            // owner保留整帧并集负责预算/取消；短Prepared只准备当前consumer，避免逐行扫描累计前缀。
+            Set<GlyphKey> admitted = admitDemand(
                     context == null
                             ? renderer.collectVisibleDemand(plan, viewport)
                             : renderer.collectVisibleDemand(plan, context));
@@ -240,9 +241,9 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
                 GlPaintPlanRenderer.Prepared prepared =
                         context == null
                                 ? renderer.prepareDemand(
-                                        plan, viewport, budget, presentationDemand, false, onClose)
+                                        plan, viewport, budget, admitted, false, onClose)
                                 : renderer.prepareDemandContext(
-                                        plan, context, budget, presentationDemand, onClose);
+                                        plan, context, budget, admitted, onClose);
                 preparedCount++;
                 return prepared;
             } finally {
