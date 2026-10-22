@@ -216,6 +216,7 @@ public final class ClientFontServicesScenario extends TestApplication {
         environment.window(W, H, "client shared fonts", Profile.CORE, 2, false, false);
         initializeScene();
         scenario("单像素scissor与宿主恢复", this::onePixel);
+        scenario("普通UI通用分组及Prepared策略冻结真实像素", this::batchPolicy);
         scenario("ready通知无需重布局", this::readyWithoutLayout);
         scenario("焦点响应绑定经真实GPU像素观察", this::focusReplay);
         scenario("范围进入与返回经真实GPU回放", this::scopeReplay);
@@ -340,6 +341,35 @@ public final class ClientFontServicesScenario extends TestApplication {
         glViewport(7, 9, 80, 60);
         glEnable(GL_SCISSOR_TEST);
         glScissor(3, H - 70, 230, 65);
+    }
+
+    private void batchPolicy() throws Exception {
+        int[] viewport=new int[4]; glGetIntegerv(GL_VIEWPORT,viewport);
+        boolean scissor=glIsEnabled(GL_SCISSOR_TEST);
+        PaintPlan plan=new PaintPlanBuilder()
+                .add(PaintCommand.rect(new LayoutBox(0,0,32,32),null,0xffff0000))
+                .add(PaintCommand.rect(new LayoutBox(0,0,32,32),new LayoutBox(0,0,20,20),0xff00ff00))
+                .add(PaintCommand.rect(new LayoutBox(0,0,32,32),null,0xff0000ff)).build();
+        club.heiqi.uilib.host.client.gl.GlPaintPlanRenderer renderer=owner.sharedPlanRenderer();
+        int[] colors={0xff0000ff,0xff00ff00,0xff0000ff}, draws={3,2,3};
+        try {
+            glViewport(0,0,W,H); glDisable(GL_SCISSOR_TEST);
+            for(int i=0;i<3;i++) {
+                long before=renderer.counters().draws;
+                try(club.heiqi.uilib.host.client.gl.GlPaintPlanRenderer.Prepared prepared=owner.prepare(renderer,plan,new LayoutBox(0,0,W,H))) {
+                    // 准备之后改配置和renderer选择，当前Prepared依然使用原策略。
+                    owner.allowBatchReordering(i!=1); renderer.allowBatchReordering(i!=1);
+                    clear(); prepared.render(FramebufferCoordinates.orthographic(W,H),H,false);
+                    require(read()[10*W+10]==colors[i],"普通UI分组次序或Prepared快照错误: "+i);
+                }
+                require(renderer.counters().draws-before==draws[i],"普通UI同State未集中绘制: "+i);
+            }
+            System.out.println("SHARED_BATCH_POLICY_PASS defaultThenGroupedThenOrdered=true preparedSnapshot=true nonTextUI=true");
+        } finally {
+            owner.allowBatchReordering(false);
+            glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);
+            if(scissor)glEnable(GL_SCISSOR_TEST);else glDisable(GL_SCISSOR_TEST);
+        }
     }
 
     private void onePixel() throws Exception {

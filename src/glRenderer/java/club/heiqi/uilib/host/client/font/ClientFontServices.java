@@ -87,6 +87,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
             usedNanos,
             rejectedDemand;
     private int remainingCalls, usedCalls, preparedCount;
+    private boolean allowBatchReordering;
     private final LinkedHashSet<GlyphKey> presentationDemand = new LinkedHashSet<GlyphKey>();
 
     public static final class PresentationStats {
@@ -238,6 +239,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
                             preparedCount--;
                             if (automatic) endPresentation();
                         };
+                renderer.allowBatchReordering(allowBatchReordering);
                 GlPaintPlanRenderer.Prepared prepared =
                         context == null
                                 ? renderer.prepareDemand(
@@ -357,6 +359,12 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     public AsyncGlyphRasterizer rasterizer() {
         check();
         return rasterizer;
+    }
+
+    /** 宿主配置在owner线程发布，所有共享consumer的下一次Prepared使用同一策略。 */
+    public void allowBatchReordering(boolean enabled) {
+        check();
+        allowBatchReordering = enabled;
     }
 
     public Settings settings() {

@@ -37,6 +37,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
     private final GlApi gl;
     private final GlVideoResources videos;
     private Prepared replaying;
+    private boolean allowReordering;
     private Preparation pendingPreparation;
     private long resourceEpoch;
     private long clippedGlyphs, demandOverflow, blankGlyphs, drawnGlyphs;
@@ -87,6 +88,11 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                             return replaying.resolveTexture(resource, generation);
                         },
                         programs);
+    }
+
+    /** 只影响后续Prepared；活动scope及宿主委托恢复保留创建时的策略。 */
+    public void allowBatchReordering(boolean enabled) {
+        allowReordering = enabled;
     }
 
     public long clippedGlyphs() {
@@ -336,6 +342,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         public final PaintPlan plan;
         public final LayoutBox viewport;
         private final Preparation preparation;
+        private final boolean allowReordering;
         private final GlGlyphAtlas.Frame frame;
         private boolean closed;
         private Replay active;
@@ -354,6 +361,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 GlVideoResources.Frame videoFrame,
                 Runnable onClose) {
             this.preparation = preparation;
+            this.allowReordering = GlPaintPlanRenderer.this.allowReordering;
             this.plan = preparation.plan;
             this.viewport = preparation.viewport;
             this.frame = frame;
@@ -514,7 +522,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 throw new IllegalStateException("prepare/replay atlas采样view与activepass不一致");
             scope = context == null ? quads.begin(mvp, height, depth) : quads.begin(context);
             replaying = prepared;
-            collector = new OrderedQuadCollector(capacity, this::submitBatch);
+            collector = new OrderedQuadCollector(capacity, this::submitBatch, prepared.allowReordering);
         }
 
         public void draw(PaintCommand command) {
