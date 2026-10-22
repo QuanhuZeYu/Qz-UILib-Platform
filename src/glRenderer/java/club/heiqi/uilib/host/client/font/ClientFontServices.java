@@ -210,14 +210,17 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     }
 
     private Set<GlyphKey> admitDemand(Collection<GlyphKey> incoming) {
-        LinkedHashSet<GlyphKey> admitted = new LinkedHashSet<GlyphKey>();
+        // 两处调用均传入collectVisibleDemand的独立只读有序Set；容量足够时复用该快照，不能返回整帧可变并集。
+        boolean reuseIncoming = incoming instanceof Set
+                && incoming.size() <= settings.maxDemand - presentationDemand.size();
+        Set<GlyphKey> admitted = reuseIncoming ? (Set<GlyphKey>) incoming : new LinkedHashSet<GlyphKey>();
         for (GlyphKey key : incoming) {
             // #81 临时探针：按 owner 每项裁决计数；重复已准入 key 仍是一次准入，定位后统一移除。
             FontPerformanceProbe.count(FontPerformanceProbe.DEMAND_INPUT, 1);
             if (presentationDemand.size() < settings.maxDemand
                     || presentationDemand.contains(key)) {
                 presentationDemand.add(key);
-                admitted.add(key);
+                if (!reuseIncoming) admitted.add(key);
                 FontPerformanceProbe.count(FontPerformanceProbe.DEMAND_ADMITTED, 1);
             } else {
                 rejectedDemand++;
@@ -225,7 +228,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
             }
         }
         FontPerformanceProbe.observe(FontPerformanceProbe.PRESENTATION_DEMAND, presentationDemand.size());
-        return Collections.unmodifiableSet(admitted);
+        return reuseIncoming ? admitted : Collections.unmodifiableSet(admitted);
     }
 
     public GlPaintPlanRenderer.Prepared prepare(

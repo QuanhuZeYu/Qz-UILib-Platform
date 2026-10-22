@@ -268,13 +268,16 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         final FontRenderContext context;
         final GlFontVisibility.Query visibility;
         final java.util.List<java.util.List<PaintCommand>> layers;
-        final java.util.List<PaintCommand> commands = new java.util.ArrayList<>();
-        final java.util.Map<PaintCommand, CommandFacts> facts = new java.util.IdentityHashMap<>();
+        final java.util.List<PaintCommand> commands;
+        final java.util.Map<PaintCommand, CommandFacts> facts;
         final SceneClipRegion viewportClip;
         boolean needsSolid;
 
         Preparation(PaintPlan plan, LayoutBox viewport, FontRenderContext context) {
             this.plan = plan; this.viewport = viewport; this.context = context;
+            // #81 单行宿主计划不预留默认32项身份表；资源子计划仍按实际添加自动扩容。
+            commands = new java.util.ArrayList<>(plan.commands().size());
+            facts = new java.util.IdentityHashMap<>(plan.commands().size());
             visibility = context == null ? null : new GlFontVisibility.Query(context);
             viewportClip = context == null ? SceneClipRegion.rectangle(viewport) : SceneClipRegion.UNBOUNDED;
             layers = plan.resourceLayers();
@@ -315,8 +318,8 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
     }
     private final class CommandFacts {
         final SceneClipRegion clip, visible;
-        final java.util.Map<TextLayout.Glyph, GlyphKey> glyphs = new java.util.IdentityHashMap<>();
-        final java.util.List<GlyphKey> visibleKeys = new java.util.ArrayList<>();
+        final java.util.Map<TextLayout.Glyph, GlyphKey> glyphs;
+        final java.util.List<GlyphKey> visibleKeys;
         long clipped;
         CommandFacts(Preparation preparation, PaintCommand command) {
             visible = command.effectiveClip().intersect(preparation.viewportClip);
@@ -325,6 +328,14 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                     && (command.sceneGeometry || !command.transform.identity() || !command.shapeClip.unbounded())
                     && !visible.unbounded()) drawClip = SceneClipRegion.of(visible.mesh());
             clip = drawClip;
+            int glyphCount = 0;
+            if (command.kind == PaintCommand.Kind.TEXT && command.text != null
+                    && (preparation.context != null || !visible.empty()))
+                for (TextLayout.Line line : command.text.lines())
+                    glyphCount = Math.addExact(glyphCount, line.glyphs().size());
+            // 不按固定文字长度预分配；不可变布局已给出本次上界，空裁剪保持最小容器。
+            glyphs = new java.util.IdentityHashMap<>(glyphCount);
+            visibleKeys = new java.util.ArrayList<>(glyphCount);
             if (command.kind != PaintCommand.Kind.TEXT || command.text == null
                     || preparation.context == null && visible.empty()) return;
             LayoutBox rectangularClip = preparation.context == null ? clip(command.clip, preparation.viewport) : null;
