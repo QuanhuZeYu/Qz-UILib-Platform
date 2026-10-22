@@ -66,39 +66,6 @@ final class GlFontWorldState implements AutoCloseable {
         }
     }
 
-    void uniforms(int program) {
-        float[] lighting = context.state.lighting(), color = context.state.color();
-        gl.glUniform3fv(gl.glGetUniformLocation(program, "hostLighting"), lighting);
-        // resolved文字RGB已由adapter固化，不再次乘caller currentColor；emoji同样只受整体alpha与lighting影响。
-        gl.glUniform1f(gl.glGetUniformLocation(program, "hostAlpha"), color[3]);
-        gl.glUniform1i(
-                gl.glGetUniformLocation(program, "outputStraight"),
-                context.rasterState != null ? 1 : 0);
-        gl.glUniform1i(
-                gl.glGetUniformLocation(program, "alphaEnabled"), context.state.alphaTest ? 1 : 0);
-        gl.glUniform1i(
-                gl.glGetUniformLocation(program, "alphaFunction"), context.state.alphaFunction);
-        gl.glUniform1f(
-                gl.glGetUniformLocation(program, "alphaReference"), context.state.alphaReference);
-        gl.glUniform1i(
-                gl.glGetUniformLocation(program, "lightmapEnabled"),
-                context.state.lightmapActive ? 1 : 0);
-        gl.glUniform1i(gl.glGetUniformLocation(program, "lightmapImage"), 1);
-        gl.glUniform2f(
-                gl.glGetUniformLocation(program, "lightmapUv"),
-                context.state.lightmapU,
-                context.state.lightmapV);
-    }
-
-    static void uiUniforms(GlApi gl, int program) {
-        gl.glUniform3f(gl.glGetUniformLocation(program, "hostLighting"), 1, 1, 1);
-        gl.glUniform1f(gl.glGetUniformLocation(program, "hostAlpha"), 1);
-        gl.glUniform1i(gl.glGetUniformLocation(program, "outputStraight"), 0);
-        gl.glUniform1i(gl.glGetUniformLocation(program, "alphaEnabled"), 0);
-        gl.glUniform1i(gl.glGetUniformLocation(program, "lightmapEnabled"), 0);
-        gl.glUniform1i(gl.glGetUniformLocation(program, "lightmapImage"), 1);
-    }
-
     @Override
     public void close() {
         GlFontRasterState.apply(gl, entryRaster);

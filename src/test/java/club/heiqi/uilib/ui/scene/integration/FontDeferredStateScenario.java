@@ -7,6 +7,8 @@ import club.heiqi.uilib.host.client.gl.GlApi;
 import club.heiqi.uilib.host.client.gl.Lwjgl3GlApi;
 
 import java.util.Arrays;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.file.Paths;
@@ -20,6 +22,7 @@ import club.heiqi.uilib.host.client.font.ClientFontServices;
 import club.heiqi.uilib.host.client.font.context.StandardFontContext;
 import club.heiqi.uilib.host.client.gl.GlPaintPlanRenderer;
 import club.heiqi.uilib.host.client.gl.GlProgramProvider;
+import club.heiqi.uilib.host.client.gl.GlGlyphAtlas;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
@@ -29,6 +32,7 @@ import club.heiqi.uilib.ui.scene.text.TextLayout;
 import club.heiqi.uilib.ui.scene.text.font.FontSource;
 
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
@@ -339,7 +343,15 @@ public final class FontDeferredStateScenario extends TestApplication {
             FontRenderContext context,
             boolean opaque)
             throws Exception {
+        return render(owner, renderer, plan, context, opaque, false);
+    }
+
+    private static int[] render(
+            ClientFontServices owner, GlPaintPlanRenderer renderer, PaintPlan plan,
+            FontRenderContext context, boolean opaque, boolean ui) throws Exception {
         long end = System.nanoTime() + 20000000000L;
+        int entryFramebuffer = ui ? context.drawFramebuffer : 0;
+        int[] entryViewport = ui ? new int[] {0, 0, WIDTH, HEIGHT} : new int[] {2, 4, 30, 40};
         for (int frame = 0; ; frame++) {
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, context.drawFramebuffer);
             GL11.glDisable(GL11.GL_SCISSOR_TEST);
@@ -347,16 +359,19 @@ public final class FontDeferredStateScenario extends TestApplication {
             GL11.glClearColor(0, 0, 0, opaque ? 1 : 0);
             GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
             // 回放入口故意与捕获目标不同；scope必须恢复实际入口blend/viewport/FBO。
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, 0);
-            GL11.glViewport(2, 4, 30, 40);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, entryFramebuffer);
+            GL11.glViewport(entryViewport[0], entryViewport[1], entryViewport[2], entryViewport[3]);
             GL11.glDisable(GL11.GL_BLEND);
             GL14.glBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE, GL11.GL_ZERO);
             GL20.glBlendEquationSeparate(GL14.GL_FUNC_SUBTRACT, GL14.GL_FUNC_REVERSE_SUBTRACT);
             owner.beginPresentation(frame);
             boolean ready;
-            try (GlPaintPlanRenderer.Prepared prepared = owner.prepare(renderer, plan, context)) {
+            try (GlPaintPlanRenderer.Prepared prepared = ui
+                    ? owner.prepare(renderer, plan, new LayoutBox(0, 0, WIDTH, HEIGHT))
+                    : owner.prepare(renderer, plan, context)) {
                 ready = prepared.readyCount() == prepared.demandCount();
-                prepared.render(context);
+                if (ui) prepared.render(context.projection.mvp(), HEIGHT, false);
+                else prepared.render(context);
             } finally {
                 owner.endPresentation();
             }
@@ -369,13 +384,110 @@ public final class FontDeferredStateScenario extends TestApplication {
             int[] viewport = new int[4];
             GL11.glGetIntegerv(GL11.GL_VIEWPORT, viewport);
             require(
-                    GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING) == 0
-                            && Arrays.equals(viewport, new int[] {2, 4, 30, 40}),
+                    GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING) == entryFramebuffer
+                            && Arrays.equals(viewport, entryViewport),
                     "文字回放未恢复目标/viewport");
             if (ready) return pixels(context.drawFramebuffer);
             if (System.nanoTime() > end) throw new AssertionError("真实字形未就绪");
             Thread.sleep(2);
         }
+    }
+
+    private static FontRenderContext uniformContext(FontRenderContext base, float alpha, float[] lighting,
+            int lightmap, float u, boolean alphaTest, int function, float reference, boolean typed) {
+        FontRenderContext.MatrixState old = base.state;
+        FontRenderContext.MatrixState state = new FontRenderContext.MatrixState(
+                old.projection(), old.modelView(), new float[] {1, 1, 1, alpha}, alphaTest, function, reference,
+                true, lightmap, u, .5f, old.packedLight, old.normal(), lighting, old.blockEntityId);
+        return new FontRenderContext(base.projection, base.drawFramebuffer, HEIGHT, false, GL11.GL_LESS,
+                false, false, base.scissor(), state, base.contextIdentity, base.revision, base.passKey,
+                typed ? base.rasterState : null);
+    }
+
+    private static void uniformPixel(int[] pixels, int offset, double[] expected, double coverage) {
+        for (int c = 0; c < 4; c++)
+            require(Math.abs(pixels[offset + c] - expected[c] * coverage) <= 2,
+                    "动态 uniform 像素未更新 channel=" + c + " actual=" + pixels[offset + c]);
+    }
+
+    /** 同一真实 renderer 交替消费 world/UI；位置复用不能冻结灯光、alpha、lightmap 或污染进入态。 */
+    private static void uniformScopes(ClientFontServices owner, GlPaintPlanRenderer renderer,
+            FontRenderContext base, PaintPlan text, int[] textPixels, boolean compatibility) throws Exception {
+        int sample = 3;
+        for (int i = 7; i < textPixels.length; i += 4)
+            if (textPixels[i] > textPixels[sample]) sample = i;
+        double coverage = textPixels[sample] / 128.0;
+        PaintPlanBuilder builder = new PaintPlanBuilder()
+                .add(PaintCommand.rect(new LayoutBox(0, 0, 6, 6), null, 0x80ffffff));
+        for (PaintCommand command : text.commands()) builder.add(command);
+        PaintPlan plan = builder.build();
+        int lightmap = GL11.glGenTextures(), entryLightmap = GL11.glGenTextures();
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, lightmap);
+            ByteBuffer texels = BufferUtils.createByteBuffer(8);
+            texels.put(new byte[] {(byte) 128, (byte) 255, 64, (byte) 255,
+                    (byte) 255, 64, (byte) 128, (byte) 255}).flip();
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, 2, 1, 0,
+                    GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, texels);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            GL13.glActiveTexture(GL13.GL_TEXTURE1);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, entryLightmap);
+            GL13.glActiveTexture(GL13.GL_TEXTURE3);
+            GL11.glEnable(GL11.GL_DEPTH_TEST);
+            GL11.glDepthFunc(GL11.GL_GEQUAL);
+            GL11.glDepthMask(false);
+            GL11.glEnable(GL11.GL_CULL_FACE);
+            GL11.glCullFace(GL11.GL_FRONT);
+            GL11.glFrontFace(GL11.GL_CW);
+            if (compatibility) {
+                GL11.glEnable(GL11.GL_ALPHA_TEST);
+                GL11.glAlphaFunc(GL11.GL_NEVER, 0);
+            }
+            FontRenderContext first = uniformContext(base, .5f, new float[] {.25f, 1, .5f},
+                    lightmap, .25f, false, GL11.GL_NEVER, 0, true);
+            FontRenderContext second = uniformContext(base, 1, new float[] {.5f, .25f, 1},
+                    lightmap, .75f, true, GL11.GL_GREATER, .25f, true);
+            FontRenderContext[] contexts = {first, second,
+                    uniformContext(base, 1, new float[] {.5f, .25f, 1}, lightmap, .75f,
+                            true, GL11.GL_GREATER, .75f, true),
+                    uniformContext(base, 1, new float[] {.5f, .25f, 1}, lightmap, .75f,
+                            true, GL11.GL_LESS, .75f, true),
+                    uniformContext(base, .5f, new float[] {.25f, 1, .5f}, lightmap, .25f,
+                            false, GL11.GL_NEVER, 0, false)};
+            double[] firstColor = {128 * .5 * .25 * 128 / 255, 64, 128 * .5 * .5 * 64 / 255, 64};
+            double[] secondColor = {64, 128 * .25 * 64 / 255, 128.0 * 128 / 255, 128};
+            double[][] expected = {firstColor, secondColor, new double[4], secondColor, firstColor};
+            int marker = ((HEIGHT - 1 - 2) * WIDTH + 2) * 4;
+            for (int i = 0; i < contexts.length; i++) {
+                int[] world = render(owner, renderer, plan, contexts[i]);
+                uniformPixel(world, marker, expected[i], 1);
+                uniformPixel(world, sample - 3, expected[i], coverage);
+                int[] ui = render(owner, renderer, plan, base, false, true);
+                uniformPixel(ui, marker, new double[] {128, 128, 128, 128}, 1);
+                uniformPixel(ui, sample - 3, new double[] {128, 128, 128, 128}, coverage);
+                require(GL11.glIsEnabled(GL11.GL_DEPTH_TEST) && !GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
+                                && GL11.glGetInteger(GL11.GL_DEPTH_FUNC) == GL11.GL_GEQUAL
+                                && GL11.glIsEnabled(GL11.GL_CULL_FACE)
+                                && GL11.glGetInteger(GL11.GL_CULL_FACE_MODE) == GL11.GL_FRONT
+                                && GL11.glGetInteger(GL11.GL_FRONT_FACE) == GL11.GL_CW
+                                && GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE) == GL13.GL_TEXTURE3,
+                        "world/UI scope 未恢复进入态 depth/cull/texture unit");
+                if (compatibility)
+                    require(GL11.glIsEnabled(GL11.GL_ALPHA_TEST)
+                                    && GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC) == GL11.GL_NEVER,
+                            "compat alpha 未禁用或恢复");
+                GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                require(GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D) == entryLightmap, "lightmap 绑定未恢复");
+                GL13.glActiveTexture(GL13.GL_TEXTURE3);
+            }
+        } finally {
+            GL11.glDeleteTextures(lightmap);
+            GL11.glDeleteTextures(entryLightmap);
+        }
+        System.out.println("UNIFORM_SCOPES_REAL_GL dynamicLightingAlphaLightmap=true worldUiIsolation=true atlas="
+                + owner.settings().mode);
     }
 
     private void coverage(GlfwTestEnvironment environment, boolean compatibility) throws Exception {
@@ -386,12 +498,24 @@ public final class FontDeferredStateScenario extends TestApplication {
                         "standard-font-coverage",
                         compatibility ? Profile.COMPATIBILITY : Profile.CORE,
                         compatibility ? 3 : 2));
-        Lwjgl3GlApi gl = new Lwjgl3GlApi();
+        GlApi actual = new Lwjgl3GlApi();
+        int[] uniformQueries = {0};
+        GlApi gl = (GlApi) Proxy.newProxyInstance(
+                GlApi.class.getClassLoader(), new Class<?>[] {GlApi.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("glGetUniformLocation")) uniformQueries[0]++;
+                    try { return method.invoke(actual, args); }
+                    catch (InvocationTargetException failure) { throw failure.getCause(); }
+                });
+        ClientFontServices.Settings defaults = ClientFontServices.Settings.defaults();
+        ClientFontServices.Settings settings = new ClientFontServices.Settings(
+                defaults.cpu, compatibility ? GlGlyphAtlas.Mode.TEXTURE_ARRAY : GlGlyphAtlas.Mode.TEXTURE_2D,
+                defaults.atlas, defaults.upload, defaults.quadCapacity, defaults.maxDemand);
         ClientFontServices owner =
                 new ClientFontServices(
                         getClass().getClassLoader(),
                         1,
-                        ClientFontServices.Settings.defaults(),
+                        settings,
                         IsolatedFontEngine.shared(),
                         gl,
                         GlProgramProvider.NONE);
@@ -401,6 +525,8 @@ public final class FontDeferredStateScenario extends TestApplication {
                     require(owner.awaitRasterizerClose(10000), "worker关闭失败");
                 });
         GlPaintPlanRenderer renderer = owner.sharedPlanRenderer();
+        int resolvedUniforms = uniformQueries[0];
+        require(resolvedUniforms > 0, "真实 program 未解析 uniform");
         int texture = GL11.glGenTextures(), fbo = GL30.glGenFramebuffers();
         onClose(
                 () -> {
@@ -552,6 +678,8 @@ public final class FontDeferredStateScenario extends TestApplication {
                     "半透明文字被双乘alpha或丢alpha");
         }
         require(maximum >= 127 && grayPixels(halfPixels) > 0, "半透明真实文字未绘制");
+        uniformScopes(owner, renderer, standard, half, halfPixels, compatibility);
+        require(uniformQueries[0] == resolvedUniforms, "重复 world/UI scope 重新查询 uniform 位置");
         require(GL11.glGetError() == GL11.GL_NO_ERROR, "coverage GL错误");
         System.out.println(
                 profile

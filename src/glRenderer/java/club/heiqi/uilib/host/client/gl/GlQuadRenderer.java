@@ -73,11 +73,54 @@ public final class GlQuadRenderer implements AutoCloseable {
     private final ResourceProvider resources;
     private ByteBuffer staging;
     private int vao, vbo, ebo;
-    private final int[] programs = new int[2],
-            matrices = new int[2],
-            materials = new int[2],
-            samplers = new int[2],
-            coverageChannels = new int[2];
+    private final int[] programs = new int[2];
+    private final ProgramUniforms[] uniforms = new ProgramUniforms[2];
+
+    /** 位置只属于本 renderer 创建且不再重链的 program；动态宿主值仍在每个 Scope 应用。 */
+    private static final class ProgramUniforms {
+        final int mvp, material, image, coverageRed;
+        final int hostLighting, hostAlpha, outputStraight, alphaEnabled, alphaFunction, alphaReference;
+        final int lightmapEnabled, lightmapImage, lightmapUv;
+
+        ProgramUniforms(GlApi gl, int program) {
+            mvp = gl.glGetUniformLocation(program, "mvp");
+            material = gl.glGetUniformLocation(program, "material");
+            image = gl.glGetUniformLocation(program, "image");
+            coverageRed = gl.glGetUniformLocation(program, "coverageRed");
+            hostLighting = gl.glGetUniformLocation(program, "hostLighting");
+            hostAlpha = gl.glGetUniformLocation(program, "hostAlpha");
+            outputStraight = gl.glGetUniformLocation(program, "outputStraight");
+            alphaEnabled = gl.glGetUniformLocation(program, "alphaEnabled");
+            alphaFunction = gl.glGetUniformLocation(program, "alphaFunction");
+            alphaReference = gl.glGetUniformLocation(program, "alphaReference");
+            lightmapEnabled = gl.glGetUniformLocation(program, "lightmapEnabled");
+            lightmapImage = gl.glGetUniformLocation(program, "lightmapImage");
+            lightmapUv = gl.glGetUniformLocation(program, "lightmapUv");
+        }
+
+        void world(GlApi gl, FontRenderContext context) {
+            gl.glUniform3fv(hostLighting, context.state.lighting());
+            // resolved 文字 RGB 已由 adapter 固化；彩色字形同样只受整体 alpha 与 lighting 影响。
+            gl.glUniform1f(hostAlpha, context.state.color()[3]);
+            gl.glUniform1i(outputStraight, context.rasterState != null ? 1 : 0);
+            gl.glUniform1i(alphaEnabled, context.state.alphaTest ? 1 : 0);
+            gl.glUniform1i(alphaFunction, context.state.alphaFunction);
+            gl.glUniform1f(alphaReference, context.state.alphaReference);
+            gl.glUniform1i(lightmapEnabled, context.state.lightmapActive ? 1 : 0);
+            gl.glUniform1i(lightmapImage, 1);
+            gl.glUniform2f(lightmapUv, context.state.lightmapU, context.state.lightmapV);
+        }
+
+        void ui(GlApi gl) {
+            gl.glUniform3f(hostLighting, 1, 1, 1);
+            gl.glUniform1f(hostAlpha, 1);
+            gl.glUniform1i(outputStraight, 0);
+            gl.glUniform1i(alphaEnabled, 0);
+            gl.glUniform1i(lightmapEnabled, 0);
+            gl.glUniform1i(lightmapImage, 1);
+        }
+    }
+
     private Scope active;
     private boolean closed;
     private long draws, uploads, bytes, bindings, indexUploads;
@@ -129,10 +172,7 @@ public final class GlQuadRenderer implements AutoCloseable {
                     ByteBuffer.allocateDirect(capacity * 4 * STRIDE).order(ByteOrder.nativeOrder());
             for (int i = 0; i < 2; i++) {
                 programs[i] = program(fragment(i == 1));
-                matrices[i] = gl.glGetUniformLocation(programs[i], "mvp");
-                materials[i] = gl.glGetUniformLocation(programs[i], "material");
-                samplers[i] = gl.glGetUniformLocation(programs[i], "image");
-                coverageChannels[i] = gl.glGetUniformLocation(programs[i], "coverageRed");
+                uniforms[i] = new ProgramUniforms(gl, programs[i]);
             }
             vao = gl.glGenVertexArrays();
             vbo = gl.glGenBuffers();
@@ -286,12 +326,24 @@ public final class GlQuadRenderer implements AutoCloseable {
                 // Pass.use拥有FBO/blend/alpha overrides；不能再用普通world.apply盖掉pack定义。
                 return scope;
             }
-            scope =
-                    begin(
-                            context.projection.mvp(),
-                            context.sourceFramebufferHeight,
-                            context.depthTest);
-            scope.world = world;
+            if (context.rasterState == null) {
+                scope =
+                        begin(
+                                context.projection.mvp(),
+                                context.sourceFramebufferHeight,
+                                context.depthTest);
+                scope.world = world;
+            } else {
+                // typed world 直接应用捕获状态，避免先建立 UI blend/cull 与通用 EBO 后再覆盖。
+                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight);
+                active = scope;
+                scope.world = world;
+                scope.selectTextureUnit();
+                gl.glBindVertexArray(vao);
+                gl.glBindBuffer(GL_ARRAY_BUFFER, vbo);
+                enable(GL_DEPTH_TEST, context.depthTest);
+                if (scope.compatibility) enable(GL_ALPHA_TEST, false);
+            }
             world.apply();
             bindFontIndices();
             return scope;
@@ -390,16 +442,17 @@ public final class GlQuadRenderer implements AutoCloseable {
                                                 draw.state.resource, draw.state.generation),
                                         "texture");
                 int variant = t != null && t.target == GL_TEXTURE_2D_ARRAY ? 1 : 0;
+                ProgramUniforms binding = uniforms[variant];
                 if (currentProgram != variant) {
                     gl.glUseProgram(programs[variant]);
-                    gl.glUniformMatrix4fv(matrices[variant], false, mvp);
-                    gl.glUniform1i(samplers[variant], 0);
-                    if (world == null) GlFontWorldState.uiUniforms(gl, programs[variant]);
-                    else world.uniforms(programs[variant]);
+                    gl.glUniformMatrix4fv(binding.mvp, false, mvp);
+                    gl.glUniform1i(binding.image, 0);
+                    if (world == null) binding.ui(gl);
+                    else binding.world(gl, world.context);
                     currentProgram = variant;
                 }
-                gl.glUniform1i(materials[variant], material);
-                gl.glUniform1i(coverageChannels[variant],
+                gl.glUniform1i(binding.material, material);
+                gl.glUniform1i(binding.coverageRed,
                         t != null && t.coverageChannel == CoverageChannel.RED ? 1 : 0);
                 if (t != null && (variant == 0 ? bound2d : boundArray) != t.id) {
                     gl.glBindTexture(t.target, t.id);
@@ -530,7 +583,10 @@ public final class GlQuadRenderer implements AutoCloseable {
         for (int i = 0; i < programs.length; i++) if (programs[i] != 0) {
             try { gl.glDeleteProgram(programs[i]); }
             catch (RuntimeException | Error error) { failure = cleanupFailure(failure, error); }
-            finally { programs[i] = 0; }
+            finally {
+                programs[i] = 0;
+                uniforms[i] = null;
+            }
         }
         staging = null;
         if (failure instanceof Error) throw (Error) failure;
