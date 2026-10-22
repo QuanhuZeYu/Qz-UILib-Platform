@@ -13,6 +13,7 @@ import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
 import club.heiqi.uilib.ui.scene.text.TextLayout;
+import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 import club.heiqi.uilib.ui.scene.text.font.glyph.AsyncGlyphRasterizer;
 import club.heiqi.uilib.ui.scene.text.font.glyph.GlyphKey;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.InkBounds;
@@ -40,6 +41,11 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
     private Prepared replaying;
     private boolean allowReordering;
     private Preparation pendingPreparation;
+    private static final int FACTS_ENTRIES = 256, FACTS_GLYPHS = 8192;
+    private final java.util.LinkedHashMap<CommandKey, CommandFacts> commandFactsMemo;
+    private AutoCloseable fontInvalidation;
+    private int memoGlyphs;
+    private boolean closed;
     private long resourceEpoch;
     private long clippedGlyphs, demandOverflow, blankGlyphs, drawnGlyphs;
     // 同包场景以工作量检查重复准备，不把计数换算为帧时间。
@@ -68,6 +74,15 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
 
     public GlPaintPlanRenderer(GlApi gl, AsyncGlyphRasterizer cpu, GlGlyphAtlas atlas, int quadCapacity,
             int maxDemand, GlProgramProvider programs, GlImageResources images, GlVideoResources videos) {
+        this(gl, cpu, atlas, quadCapacity, maxDemand, programs, images, videos, null);
+    }
+
+    /** 字体owner装配失效来源，按原生命周期先关闭renderer再关闭fonts；close可重复调用。
+     * 旧独立入口没有该来源，只在单次Preparation内复用。 */
+    public GlPaintPlanRenderer(GlApi gl, AsyncGlyphRasterizer cpu, GlGlyphAtlas atlas, int quadCapacity,
+            int maxDemand, GlProgramProvider programs, GlImageResources images, GlVideoResources videos,
+            FontTextService fonts) {
+        commandFactsMemo = fonts == null ? null : new java.util.LinkedHashMap<>(32, 0.75f, true);
         this.images = images;
         this.videos = videos;
         this.gl = Objects.requireNonNull(gl, "gl");
@@ -89,6 +104,12 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                             return replaying.resolveTexture(resource, generation);
                         },
                         programs);
+        try {
+            fontInvalidation = fonts == null ? null : fonts.onInvalidated(this::clearCommandFacts);
+        } catch (RuntimeException | Error failure) {
+            try { quads.close(); } catch (Throwable next) { if (next != failure) failure.addSuppressed(next); }
+            throw failure;
+        }
     }
 
     /** 只影响后续Prepared；活动scope及宿主委托恢复保留创建时的策略。 */
@@ -261,12 +282,82 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 (int) Math.max(0, bottom - top));
     }
 
-    /** 只属于一次collect→prepare→replay，既不持有scene，也不跨帧保留旧几何或atlas resident。 */
+    /** 只保存数值源：每个Preparation捕获/散列一次，多条命令共享；不保留context或GL状态对象。 */
+    private static final class VisibilitySource {
+        private final int[] values;
+        private final int hash;
+        VisibilitySource(FontRenderContext context, LayoutBox viewport) {
+            values = new int[30];
+            float[] mvp = context.projection.mvp();
+            for (int i = 0; i < 16; i++) values[i] = Float.floatToRawIntBits(mvp[i]);
+            System.arraycopy(context.projection.viewport(), 0, values, 16, 4);
+            values[20] = context.scissorEnabled ? 1 : 0;
+            System.arraycopy(context.scissor(), 0, values, 21, 4);
+            values[25] = context.sourceFramebufferHeight;
+            values[26] = viewport.x; values[27] = viewport.y;
+            values[28] = viewport.width; values[29] = viewport.height;
+            hash = java.util.Arrays.hashCode(values);
+        }
+        @Override public int hashCode() { return hash; }
+        @Override public boolean equals(Object other) {
+            return other instanceof VisibilitySource
+                    && java.util.Arrays.equals(values, ((VisibilitySource) other).values);
+        }
+    }
+    private static final class CommandKey {
+        private final TextLayout layout;
+        private final LayoutBox box, clip;
+        private final VisibilitySource source;
+        private final int hash;
+        CommandKey(PaintCommand command, VisibilitySource source) {
+            layout = command.text; box = command.box; clip = command.clip; this.source = source;
+            hash = boxHash(boxHash(31 * System.identityHashCode(layout) + source.hashCode(), box), clip);
+        }
+        private static int boxHash(int hash, LayoutBox box) {
+            if (box == null) return 31 * hash;
+            hash = 31 * hash + 1;
+            hash = 31 * hash + box.x; hash = 31 * hash + box.y;
+            hash = 31 * hash + box.width; return 31 * hash + box.height;
+        }
+        private static boolean sameBox(LayoutBox a, LayoutBox b) {
+            return a == b || a != null && b != null && a.x == b.x && a.y == b.y
+                    && a.width == b.width && a.height == b.height;
+        }
+        @Override public int hashCode() { return hash; }
+        @Override public boolean equals(Object other) {
+            if (!(other instanceof CommandKey)) return false;
+            CommandKey key = (CommandKey) other;
+            return layout == key.layout && sameBox(box, key.box) && sameBox(clip, key.clip)
+                    && source.equals(key.source);
+        }
+    }
+    private void remember(CommandKey key, CommandFacts facts) {
+        // 重复glyph身份仍可在visibleKeys出现多次，按出现次数计预算，避免长布局绕过上限。
+        long weight = facts.visibleKeys.size() + facts.clipped;
+        if (weight > FACTS_GLYPHS) return;
+        java.util.Iterator<CommandFacts> oldest = commandFactsMemo.values().iterator();
+        while (commandFactsMemo.size() >= FACTS_ENTRIES || memoGlyphs > FACTS_GLYPHS - weight) {
+            CommandFacts retired = oldest.next();
+            memoGlyphs -= (int) (retired.visibleKeys.size() + retired.clipped);
+            oldest.remove();
+        }
+        commandFactsMemo.put(key, facts);
+        memoGlyphs += (int) weight;
+    }
+    private void clearCommandFacts() {
+        pendingPreparation = null;
+        if (commandFactsMemo != null) commandFactsMemo.clear();
+        memoGlyphs = 0;
+        // 已有Prepared继续持有原不可变facts；换代/逐出不改其冻结资源或几何。
+    }
+
+    /** 只属于一次collect→prepare→replay；跨帧memo只接收不含Preparation引用的CPU事实。 */
     private final class Preparation {
         final PaintPlan plan;
         final LayoutBox viewport;
         final FontRenderContext context;
-        final GlFontVisibility.Query visibility;
+        private GlFontVisibility.Query visibility;
+        private VisibilitySource source;
         final java.util.List<java.util.List<PaintCommand>> layers;
         final java.util.List<PaintCommand> commands;
         final java.util.Map<PaintCommand, CommandFacts> facts;
@@ -274,11 +365,11 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         boolean needsSolid;
 
         Preparation(PaintPlan plan, LayoutBox viewport, FontRenderContext context) {
+            if (closed) throw new IllegalStateException("renderer已关闭");
             this.plan = plan; this.viewport = viewport; this.context = context;
             // #81 单行宿主计划不预留默认32项身份表；资源子计划仍按实际添加自动扩容。
             commands = new java.util.ArrayList<>(plan.commands().size());
             facts = new java.util.IdentityHashMap<>(plan.commands().size());
-            visibility = context == null ? null : new GlFontVisibility.Query(context);
             viewportClip = context == null ? SceneClipRegion.rectangle(viewport) : SceneClipRegion.UNBOUNDED;
             layers = plan.resourceLayers();
             for (java.util.List<PaintCommand> layer : layers) for (PaintCommand command : layer) {
@@ -294,9 +385,26 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             return this.plan == plan && this.context == context
                     && club.heiqi.uilib.ui.scene.layout.SceneGeometryView.sameBox(this.viewport, viewport);
         }
+        private GlFontVisibility.Query visibility() {
+            if (visibility == null) visibility = new GlFontVisibility.Query(context);
+            return visibility;
+        }
         CommandFacts command(PaintCommand command) {
             CommandFacts known = facts.get(command);
-            if (known == null) { known = new CommandFacts(this, command); facts.put(command, known); }
+            if (known != null) return known;
+            CommandKey key = null;
+            if (commandFactsMemo != null && context != null && command.kind == PaintCommand.Kind.TEXT
+                    && command.text != null && !command.sceneGeometry && command.transform.identity()
+                    && command.shapeClip.unbounded()) {
+                if (source == null) source = new VisibilitySource(context, viewport);
+                key = new CommandKey(command, source);
+                known = commandFactsMemo.get(key);
+            }
+            if (known == null) {
+                known = new CommandFacts(this, command);
+                if (key != null) remember(key, known);
+            }
+            facts.put(command, known);
             return known;
         }
         /** 隐藏同key不能占用主层；只分层owner已admit的key，不扩张需求。 */
@@ -320,7 +428,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         final SceneClipRegion clip, visible;
         final java.util.Map<TextLayout.Glyph, GlyphKey> glyphs;
         final java.util.List<GlyphKey> visibleKeys;
-        long clipped;
+        final long clipped;
         CommandFacts(Preparation preparation, PaintCommand command) {
             visible = command.effectiveClip().intersect(preparation.viewportClip);
             SceneClipRegion drawClip = command.shapeClip.intersect(preparation.viewportClip);
@@ -334,23 +442,28 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 for (TextLayout.Line line : command.text.lines())
                     glyphCount = Math.addExact(glyphCount, line.glyphs().size());
             // 不按固定文字长度预分配；不可变布局已给出本次上界，空裁剪保持最小容器。
-            glyphs = new java.util.IdentityHashMap<>(glyphCount);
-            visibleKeys = new java.util.ArrayList<>(glyphCount);
-            if (command.kind != PaintCommand.Kind.TEXT || command.text == null
-                    || preparation.context == null && visible.empty()) return;
-            LayoutBox rectangularClip = preparation.context == null ? clip(command.clip, preparation.viewport) : null;
-            for (TextLayout.Line line : command.text.lines()) for (TextLayout.Glyph glyph : line.glyphs()) {
-                if (!glyphs.containsKey(glyph)) {
-                    visibilityChecks++;
-                    boolean shown = preparation.context == null
-                            ? visible(command, glyph, rectangularClip, visible)
-                            : preparation.visibility.visible(command, glyph, visible);
-                    glyphs.put(glyph, shown ? GlyphKey.of(glyph) : null);
+            java.util.Map<TextLayout.Glyph, GlyphKey> glyphs = new java.util.IdentityHashMap<>(glyphCount);
+            java.util.List<GlyphKey> visibleKeys = new java.util.ArrayList<>(glyphCount);
+            long clipped = 0;
+            if (command.kind == PaintCommand.Kind.TEXT && command.text != null
+                    && (preparation.context != null || !visible.empty())) {
+                LayoutBox rectangularClip = preparation.context == null ? clip(command.clip, preparation.viewport) : null;
+                for (TextLayout.Line line : command.text.lines()) for (TextLayout.Glyph glyph : line.glyphs()) {
+                    if (!glyphs.containsKey(glyph)) {
+                        visibilityChecks++;
+                        boolean shown = preparation.context == null
+                                ? visible(command, glyph, rectangularClip, visible)
+                                : preparation.visibility().visible(command, glyph, visible);
+                        glyphs.put(glyph, shown ? GlyphKey.of(glyph) : null);
+                    }
+                    GlyphKey key = glyphs.get(glyph);
+                    if (key == null) clipped++;
+                    else visibleKeys.add(key);
                 }
-                GlyphKey key = glyphs.get(glyph);
-                if (key == null) clipped++;
-                else visibleKeys.add(key);
             }
+            this.glyphs = java.util.Collections.unmodifiableMap(glyphs);
+            this.visibleKeys = java.util.Collections.unmodifiableList(visibleKeys);
+            this.clipped = clipped;
         }
     }
     private static boolean visible(PaintCommand command, TextLayout.Glyph glyph, LayoutBox clip, SceneClipRegion region) {
@@ -923,7 +1036,18 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
 
     @Override
     public void close() {
-        pendingPreparation = null;
-        quads.close();
+        if (closed) return;
+        closed = true;
+        clearCommandFacts();
+        Throwable failure = null;
+        AutoCloseable subscription = fontInvalidation;
+        fontInvalidation = null;
+        try { if (subscription != null) subscription.close(); }
+            catch (Throwable next) { failure = next; }
+        try { quads.close(); }
+            catch (Throwable next) { if (failure == null) failure = next; else if (next != failure) failure.addSuppressed(next); }
+        if (failure instanceof Error) throw (Error) failure;
+        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+        if (failure != null) throw new IllegalStateException("renderer资源释放失败", failure);
     }
 }

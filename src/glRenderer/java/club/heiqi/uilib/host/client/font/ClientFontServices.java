@@ -497,7 +497,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
                         settings.quadCapacity,
                         settings.maxDemand,
                         programs,
-                        images, videos);
+                        images, videos, fonts);
         renderers.add(renderer);
         return renderer;
     }
