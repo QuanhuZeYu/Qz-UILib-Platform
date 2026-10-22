@@ -438,18 +438,23 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
 
         private final LinkedHashSet<GlyphKey> demand = new LinkedHashSet<GlyphKey>();
         private final List<List<GlyphKey>> priorityLayers = new ArrayList<>();
+        // 仅复用已发布且本Frame已pin的正项：close前evict不能移除其组，Resident因而保持有效。
+        // 备用层仍到原pinLayer时机才加入；未命中和未完整上传的partial不进入此映射。
+        private final Map<GlyphKey, Resident> visible = new HashMap<GlyphKey, Resident>();
 
         private void pinLayer(Collection<GlyphKey> layer) {
             for (GlyphKey key : layer) {
-                Resident r = residents.get(new ViewKey(key, view));
+                Resident r = visible.get(key);
+                boolean known = r != null;
+                if (!known) r = residents.get(new ViewKey(key, view));
                 if (r != null) {
                     r.group.pinned = true;
                     r.group.lastUsed = ++clock;
+                    if (!known) visible.put(key, r);
                 }
             }
         }
 
-        private final Map<GlyphKey, Resident> visible = new HashMap<GlyphKey, Resident>();
         private boolean frozen, done;
 
         public Collection<GlyphKey> demand() {
@@ -482,7 +487,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             } else if (!demand.isEmpty())
                 throw new IllegalArgumentException("非empty glyph需求须提供CPUworker");
             for (GlyphKey key : demand)
-                if (!residents.containsKey(new ViewKey(key, view))) cpu.request(key);
+                if (!visible.containsKey(key) && !residents.containsKey(new ViewKey(key, view))) cpu.request(key);
             UploadProgress progress = new UploadProgress(uploadBudget);
             int uploadTarget = view == SamplingView.STRAIGHT_RGBA ? GL_TEXTURE_2D : target;
             try (GlCpuUploadScope state = GlCpuUploadScope.deferred(gl, uploadTarget)) {
@@ -492,7 +497,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                     pinLayer(layer);
                     for (GlyphKey key : layer) {
                         if (!progress.canSubmit(1)) break;
-                        if (residents.containsKey(new ViewKey(key, view))) continue;
+                        if (visible.containsKey(key) || residents.containsKey(new ViewKey(key, view))) continue;
                         if (uploading != null
                                 && (!uploading.key.equals(key)
                                         || uploading.resident.samplingView != view)) continue;
@@ -503,7 +508,9 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                             if (uploading == null) continue;
                         }
                         if (!uploadRows(uploading, progress)) break;
-                        publish(uploading);
+                        Upload completed = uploading;
+                        publish(completed);
+                        visible.put(key, completed.resident);
                     }
                 }
             } finally {
@@ -541,10 +548,11 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             checkFrame();
             if (frozen) return;
             for (GlyphKey key : demand) {
+                if (visible.containsKey(key)) continue;
                 Resident r = residents.get(new ViewKey(key, view));
                 if (r != null) {
-                    visible.put(key, r);
                     r.group.pinned = true;
+                    visible.put(key, r);
                 }
             }
             frozen = true;
