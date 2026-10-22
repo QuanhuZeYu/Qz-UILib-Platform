@@ -354,13 +354,18 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         Preparation(PaintPlan plan, LayoutBox viewport, FontRenderContext context) {
             if (closed) throw new IllegalStateException("renderer已关闭");
             this.plan = plan; this.viewport = viewport; this.context = context;
-            // 单行宿主计划不预留默认32项身份表；资源子计划仍按实际添加自动扩容。
-            commands = new java.util.ArrayList<>(plan.commands().size());
-            facts = new java.util.IdentityHashMap<>(plan.commands().size());
             viewportClip = context == null ? SceneClipRegion.rectangle(viewport) : SceneClipRegion.UNBOUNDED;
             layers = plan.resourceLayers();
-            for (java.util.List<PaintCommand> layer : layers) for (PaintCommand command : layer) {
-                commands.add(command);
+            // #81 单资源层已经是只读快照，需求登记与短Prepared不再复制相同命令列表。
+            if (layers.isEmpty()) commands = java.util.Collections.emptyList();
+            else if (layers.size() == 1) commands = layers.get(0);
+            else {
+                java.util.List<PaintCommand> collected = new java.util.ArrayList<>(plan.commands().size());
+                for (java.util.List<PaintCommand> layer : layers) collected.addAll(layer);
+                commands = collected;
+            }
+            facts = new java.util.IdentityHashMap<>(commands.size());
+            for (PaintCommand command : commands) {
                 if (command.kind == PaintCommand.Kind.RECT || command.kind == PaintCommand.Kind.LINE
                         || command.kind == PaintCommand.Kind.PATH || command.kind == PaintCommand.Kind.IMAGE) needsSolid = true;
                 if (command.text != null) for (TextLayout.Line line : command.text.lines())

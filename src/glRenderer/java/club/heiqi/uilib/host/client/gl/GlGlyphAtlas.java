@@ -486,6 +486,12 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 cpu.drainReady(budget.maxDemand);
             } else if (!demand.isEmpty())
                 throw new IllegalArgumentException("非empty glyph需求须提供CPUworker");
+            // #81 visible只含本Frame已经pin的已发布正项；全驻留时不建立上传游标或重复扫描需求。
+            // 直色solid仍须沿原路径准备，CPU队列维护与参数失败也必须先完成。
+            if (visible.size() == demand.size() && !(needsSolid && view == SamplingView.STRAIGHT_RGBA)) {
+                java.util.Objects.requireNonNull(uploadBudget, "uploadBudget");
+                return;
+            }
             for (GlyphKey key : demand)
                 if (!visible.containsKey(key) && !residents.containsKey(new ViewKey(key, view))) cpu.request(key);
             UploadProgress progress = new UploadProgress(uploadBudget);
@@ -547,6 +553,10 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         public void freeze() {
             checkFrame();
             if (frozen) return;
+            if (visible.size() == demand.size()) {
+                frozen = true;
+                return;
+            }
             for (GlyphKey key : demand) {
                 if (visible.containsKey(key)) continue;
                 Resident r = residents.get(new ViewKey(key, view));
