@@ -416,28 +416,48 @@ public final class PresentationEpochScenario extends TestApplication {
         long rasterized = owner.rasterizer().stats().rasterized;
         long uploads = owner.atlas().stats().uploadCalls;
         int[] local = new int[plans.length], union = new int[plans.length];
-        owner.beginPresentation(epoch);
-        glClear(GL_COLOR_BUFFER_BIT);
+        // #81 临时探针：用真实热字形回放验证开启不改变像素、帧满自动停止，报告定位后移除。
+        if (!Boolean.FALSE.equals(club.heiqi.uilib.host.client.font.FontPerformanceProbe.status().get("pendingSnapshot")))
+            throw new AssertionError("临时探针非默认关闭");
+        java.util.Map<String, Object> profile;
+        club.heiqi.uilib.host.client.font.FontPerformanceProbe.start(1, 30000000000L);
         try {
-            for (int i = 0; i < plans.length; i++) {
-                GlPaintPlanRenderer.Prepared prepared;
-                measuring[0] = true;
-                try {
-                    prepared = owner.prepare(renderer, plans[i], VIEW);
-                } finally {
-                    measuring[0] = false;
+            club.heiqi.uilib.host.client.font.FontPerformanceProbe.frame();
+            owner.beginPresentation(epoch);
+            glClear(GL_COLOR_BUFFER_BIT);
+            try {
+                for (int i = 0; i < plans.length; i++) {
+                    GlPaintPlanRenderer.Prepared prepared;
+                    measuring[0] = true;
+                    try {
+                        prepared = owner.prepare(renderer, plans[i], VIEW);
+                    } finally {
+                        measuring[0] = false;
+                    }
+                    try (GlPaintPlanRenderer.Prepared current = prepared) {
+                        local[i] = current.demandCount();
+                        union[i] = owner.presentationStats().demand;
+                        if (current.resident(glyphs(plans[i]).get(0)) == null)
+                            throw new AssertionError("稳定字形丢失");
+                        current.render(FramebufferCoordinates.orthographic(W, H), H, false);
+                    }
                 }
-                try (GlPaintPlanRenderer.Prepared current = prepared) {
-                    local[i] = current.demandCount();
-                    union[i] = owner.presentationStats().demand;
-                    if (current.resident(glyphs(plans[i]).get(0)) == null)
-                        throw new AssertionError("稳定字形丢失");
-                    current.render(FramebufferCoordinates.orthographic(W, H), H, false);
-                }
+            } finally {
+                owner.endPresentation();
             }
+            club.heiqi.uilib.host.client.font.FontPerformanceProbe.frame();
         } finally {
-            owner.endPresentation();
+            profile = club.heiqi.uilib.host.client.font.FontPerformanceProbe.finish();
         }
+        if (!"frameLimit".equals(profile.get("stopReason"))
+                || ((Number) profile.get("frameCount")).intValue() != 1
+                || ((long[]) profile.get("stageCalls"))[club.heiqi.uilib.host.client.font.FontPerformanceProbe.OWNER_PREPARE] != plans.length
+                || ((long[]) profile.get("stageCalls"))[club.heiqi.uilib.host.client.font.FontPerformanceProbe.QUAD_SUBMIT] == 0
+                || club.heiqi.uilib.host.client.font.FontPerformanceProbe.begin(0) != 0)
+            throw new AssertionError("临时探针真实回放计数或自动停止错误");
+        System.out.println("TEMPORARY_FONT_PROBE_GL_PASS frames=1 prepare="
+                + ((long[]) profile.get("stageCalls"))[club.heiqi.uilib.host.client.font.FontPerformanceProbe.OWNER_PREPARE]
+                + " frozen=frameLimit disabledAfterFinish=true");
         System.out.println("warmConsumers local=" + Arrays.toString(local)
                 + " union=" + Arrays.toString(union) + " unpackReads=" + unpackReads[0]
                 + " unpackWrites=" + unpackWrites[0]);

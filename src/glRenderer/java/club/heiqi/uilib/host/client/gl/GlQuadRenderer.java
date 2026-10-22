@@ -3,6 +3,7 @@ package club.heiqi.uilib.host.client.gl;
 import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 
 import club.heiqi.uilib.host.client.font.context.FontRenderContext;
+import club.heiqi.uilib.host.client.font.FontPerformanceProbe;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.Draw;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.Quad;
@@ -356,99 +357,117 @@ public final class GlQuadRenderer implements AutoCloseable {
 
         /** 一段恰好一次顶点上传；逐 Draw 使用原 firstQuad/quadCount，不合并或排序。 */
         public void consumeBatch(OrderedQuadBatch batch) {
-            if (done || active != this) throw new IllegalStateException("范围已结束");
-            Objects.requireNonNull(batch, "batch");
-            if (batch.quads().size() > capacity)
-                throw new IllegalArgumentException("提交段超过 backend 容量");
-            if (batch.quads().isEmpty()) return;
-            if (iris != null) {
-                bytes += programProducer.consume(batch, iris, world.context, resources);
+            // #81 临时探针：QUAD_SUBMIT 计原 batch 方法；外部 producer 内部不冒拆上传和 draw，定位后统一移除。
+            long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.QUAD_SUBMIT);
+            try {
+                if (done || active != this) throw new IllegalStateException("范围已结束");
+                Objects.requireNonNull(batch, "batch");
+                if (batch.quads().size() > capacity)
+                    throw new IllegalArgumentException("提交段超过 backend 容量");
+                if (batch.quads().isEmpty()) return;
+                if (iris != null) {
+                    bytes += programProducer.consume(batch, iris, world.context, resources);
+                    uploads++;
+                    draws += batch.draws().size();
+                    return;
+                }
+                staging.clear();
+                for (Quad q : batch.quads()) {
+                    vertex(q, q.x0, q.y0, q.s0, q.t0);
+                    vertex(q, q.x1, q.y1, q.s1, q.t1);
+                    vertex(q, q.x2, q.y2, q.s2, q.t2);
+                    vertex(q, q.x3, q.y3, q.s3, q.t3);
+                }
+                staging.flip();
+                // #81 临时探针：仅计现有驱动上传调用，定位后统一移除。
+                long uploadToken = FontPerformanceProbe.begin(FontPerformanceProbe.VERTEX_UPLOAD);
+                try {
+                    gl.glBufferSubData(GL_ARRAY_BUFFER, 0, staging);
+                } finally {
+                    FontPerformanceProbe.end(FontPerformanceProbe.VERTEX_UPLOAD, uploadToken);
+                }
                 uploads++;
-                draws += batch.draws().size();
-                return;
-            }
-            staging.clear();
-            for (Quad q : batch.quads()) {
-                vertex(q, q.x0, q.y0, q.s0, q.t0);
-                vertex(q, q.x1, q.y1, q.s1, q.t1);
-                vertex(q, q.x2, q.y2, q.s2, q.t2);
-                vertex(q, q.x3, q.y3, q.s3, q.t3);
-            }
-            staging.flip();
-            gl.glBufferSubData(GL_ARRAY_BUFFER, 0, staging);
-            uploads++;
-            bytes += staging.remaining();
-            for (Draw draw : batch.draws()) {
-                int material = draw.state.material;
-                if (material < SOLID || material > COLOR_PREMULT)
-                    throw new IllegalArgumentException("未知材质: " + material);
-                Texture t =
-                        material == SOLID
-                                ? null
-                                : Objects.requireNonNull(
-                                        resources.resolve(
-                                                draw.state.resource, draw.state.generation),
-                                        "texture");
-                int variant = t != null && t.target == GL_TEXTURE_2D_ARRAY ? 1 : 0;
-                if (currentProgram != variant) {
-                    gl.glUseProgram(programs[variant]);
-                    gl.glUniformMatrix4fv(matrices[variant], false, mvp);
-                    gl.glUniform1i(samplers[variant], 0);
-                    if (world == null) GlFontWorldState.uiUniforms(gl, programs[variant]);
-                    else world.uniforms(programs[variant]);
-                    currentProgram = variant;
-                }
-                gl.glUniform1i(materials[variant], material);
-                gl.glUniform1i(coverageChannels[variant],
-                        t != null && t.coverageChannel == CoverageChannel.RED ? 1 : 0);
-                if (t != null && (variant == 0 ? bound2d : boundArray) != t.id) {
-                    gl.glBindTexture(t.target, t.id);
-                    if (variant == 0) bound2d = t.id;
-                    else boundArray = t.id;
-                    bindings++;
-                }
-                LayoutBox clip =
-                        world == null ? draw.state.clip : GlFontVisibility.viewport(world.context);
-                if (world != null && world.context.scissorEnabled) {
-                    int[] s = world.context.scissor();
-                    LayoutBox hostClip =
-                            new LayoutBox(
-                                    s[0], Math.toIntExact((long) height - s[1] - s[3]), s[2], s[3]);
-                    if (clip == null) clip = hostClip;
-                    else {
-                        long l = Math.max((long) clip.x, hostClip.x),
-                                top = Math.max((long) clip.y, hostClip.y);
-                        long
-                                r =
-                                        Math.min(
-                                                (long) clip.x + clip.width,
-                                                (long) hostClip.x + hostClip.width),
-                                bottom =
-                                        Math.min(
-                                                (long) clip.y + clip.height,
-                                                (long) hostClip.y + hostClip.height);
-                        clip =
-                                new LayoutBox(
-                                        Math.toIntExact(l),
-                                        Math.toIntExact(top),
-                                        Math.toIntExact(Math.max(0, r - l)),
-                                        Math.toIntExact(Math.max(0, bottom - top)));
+                bytes += staging.remaining();
+                for (Draw draw : batch.draws()) {
+                    int material = draw.state.material;
+                    if (material < SOLID || material > COLOR_PREMULT)
+                        throw new IllegalArgumentException("未知材质: " + material);
+                    Texture t =
+                            material == SOLID
+                                    ? null
+                                    : Objects.requireNonNull(
+                                            resources.resolve(
+                                                    draw.state.resource, draw.state.generation),
+                                            "texture");
+                    int variant = t != null && t.target == GL_TEXTURE_2D_ARRAY ? 1 : 0;
+                    if (currentProgram != variant) {
+                        gl.glUseProgram(programs[variant]);
+                        gl.glUniformMatrix4fv(matrices[variant], false, mvp);
+                        gl.glUniform1i(samplers[variant], 0);
+                        if (world == null) GlFontWorldState.uiUniforms(gl, programs[variant]);
+                        else world.uniforms(programs[variant]);
+                        currentProgram = variant;
                     }
-                }
+                    gl.glUniform1i(materials[variant], material);
+                    gl.glUniform1i(coverageChannels[variant],
+                            t != null && t.coverageChannel == CoverageChannel.RED ? 1 : 0);
+                    if (t != null && (variant == 0 ? bound2d : boundArray) != t.id) {
+                        gl.glBindTexture(t.target, t.id);
+                        if (variant == 0) bound2d = t.id;
+                        else boundArray = t.id;
+                        bindings++;
+                    }
+                    LayoutBox clip =
+                            world == null ? draw.state.clip : GlFontVisibility.viewport(world.context);
+                    if (world != null && world.context.scissorEnabled) {
+                        int[] s = world.context.scissor();
+                        LayoutBox hostClip =
+                                new LayoutBox(
+                                        s[0], Math.toIntExact((long) height - s[1] - s[3]), s[2], s[3]);
+                        if (clip == null) clip = hostClip;
+                        else {
+                            long l = Math.max((long) clip.x, hostClip.x),
+                                    top = Math.max((long) clip.y, hostClip.y);
+                            long
+                                    r =
+                                            Math.min(
+                                                    (long) clip.x + clip.width,
+                                                    (long) hostClip.x + hostClip.width),
+                                    bottom =
+                                            Math.min(
+                                                    (long) clip.y + clip.height,
+                                                    (long) hostClip.y + hostClip.height);
+                            clip =
+                                    new LayoutBox(
+                                            Math.toIntExact(l),
+                                            Math.toIntExact(top),
+                                            Math.toIntExact(Math.max(0, r - l)),
+                                            Math.toIntExact(Math.max(0, bottom - top)));
+                        }
+                    }
 
-                enable(GL_SCISSOR_TEST, clip != null);
-                if (clip != null)
-                    gl.glScissor(
-                            clip.x,
-                            Math.toIntExact((long) height - clip.y - clip.height),
-                            clip.width,
-                            clip.height);
-                gl.glDrawElements(
-                        GL_TRIANGLES,
-                        draw.quadCount * 6,
-                        GL_UNSIGNED_INT,
-                        (long) draw.firstQuad * 6 * 4);
-                draws++;
+                    enable(GL_SCISSOR_TEST, clip != null);
+                    if (clip != null)
+                        gl.glScissor(
+                                clip.x,
+                                Math.toIntExact((long) height - clip.y - clip.height),
+                                clip.width,
+                                clip.height);
+                    // #81 临时探针：仅计实际 Draw 驱动调用，逐 glyph 不读时钟，定位后统一移除。
+                    long drawToken = FontPerformanceProbe.begin(FontPerformanceProbe.GL_DRAW);
+                    try {
+                        gl.glDrawElements(
+                                GL_TRIANGLES,
+                                draw.quadCount * 6,
+                                GL_UNSIGNED_INT,
+                                (long) draw.firstQuad * 6 * 4);
+                    } finally {
+                        FontPerformanceProbe.end(FontPerformanceProbe.GL_DRAW, drawToken);
+                    }
+                    draws++;
+                }
+            } finally {
+                FontPerformanceProbe.end(FontPerformanceProbe.QUAD_SUBMIT, probeToken);
             }
         }
 

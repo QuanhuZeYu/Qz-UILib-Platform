@@ -136,20 +136,32 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         usedCalls = 0;
         usedNanos = 0;
         rejectedDemand = 0;
+        // #81 临时探针：只观测原 presentation 预算与需求，定位后统一移除。
+        FontPerformanceProbe.observe(FontPerformanceProbe.PRESENTATION_DEMAND, presentationDemand.size());
+        FontPerformanceProbe.observe(FontPerformanceProbe.PREPARED_COUNT, preparedCount);
+        FontPerformanceProbe.observe(FontPerformanceProbe.UPLOAD_REMAINING_BYTES, remainingBytes);
+        FontPerformanceProbe.observe(FontPerformanceProbe.UPLOAD_REMAINING_NANOS, remainingNanos);
+        FontPerformanceProbe.observe(FontPerformanceProbe.UPLOAD_REMAINING_CALLS, remainingCalls);
         // begin尚未知道本帧完整需求，不能撤销持续可见的queued请求；end统一清理过期。
         pumpReady();
     }
 
     public void endPresentation() {
-        check();
-        if (!presenting) throw new IllegalStateException("没有活动presentation");
-        if (preparedCount != 0) throw new IllegalStateException("先关闭所有Prepared再结束presentation");
+        // #81 临时探针：END_PRESENTATION 沿原方法 inclusive 计时，定位后统一移除。
+        long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.END_PRESENTATION);
         try {
-            rasterizer.retainPending(presentationDemand);
-            if (atlas != null) atlas.retainUploadDemand(presentationDemand);
-            pumpReady();
+            check();
+            if (!presenting) throw new IllegalStateException("没有活动presentation");
+            if (preparedCount != 0) throw new IllegalStateException("先关闭所有Prepared再结束presentation");
+            try {
+                rasterizer.retainPending(presentationDemand);
+                if (atlas != null) atlas.retainUploadDemand(presentationDemand);
+                pumpReady();
+            } finally {
+                presenting = false;
+            }
         } finally {
-            presenting = false;
+            FontPerformanceProbe.end(FontPerformanceProbe.END_PRESENTATION, probeToken);
         }
     }
 
@@ -162,13 +174,19 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
      * 与scene/immediate consumer共用完整呈现需求；真正回放时才取得短Prepared。 */
     public Set<GlyphKey> registerVisibleDemand(
             GlPaintPlanRenderer renderer, PaintPlan plan, FontRenderContext context) {
-        checkRenderer(renderer);
-        if (!presentationBoundaryRequired && !presenting)
-            throw new IllegalStateException("延期consumer需要显式presentation或真实present边界");
-        if (!presenting) beginPresentation(--autoEpoch);
-        Set<GlyphKey> admitted = admitDemand(renderer.collectVisibleDemand(plan, context));
-        for (GlyphKey key : admitted) rasterizer.request(key);
-        return admitted;
+        // #81 临时探针：REGISTER_VISIBLE 沿原方法 inclusive 计时，定位后统一移除。
+        long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.REGISTER_VISIBLE);
+        try {
+            checkRenderer(renderer);
+            if (!presentationBoundaryRequired && !presenting)
+                throw new IllegalStateException("延期consumer需要显式presentation或真实present边界");
+            if (!presenting) beginPresentation(--autoEpoch);
+            Set<GlyphKey> admitted = admitDemand(renderer.collectVisibleDemand(plan, context));
+            for (GlyphKey key : admitted) rasterizer.request(key);
+            return admitted;
+        } finally {
+            FontPerformanceProbe.end(FontPerformanceProbe.REGISTER_VISIBLE, probeToken);
+        }
     }
 
     /** 仅在调用方flush并退出quad范围之后借用；保持同一presentation预算和父Frame冻结资源。 */
@@ -176,10 +194,13 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         check();
         if (preparedCount != 1) throw new IllegalStateException("字体委托需要唯一父Prepared");
         preparedCount--;
+        // #81 临时探针：记录原委托借用期间的 Prepared 计数，定位后统一移除。
+        FontPerformanceProbe.observe(FontPerformanceProbe.PREPARED_COUNT, preparedCount);
         try {
             atlas().borrowFrozenFrame(delegated);
         } finally {
             preparedCount++;
+            FontPerformanceProbe.observe(FontPerformanceProbe.PREPARED_COUNT, preparedCount);
         }
     }
 
@@ -191,12 +212,19 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     private Set<GlyphKey> admitDemand(Collection<GlyphKey> incoming) {
         LinkedHashSet<GlyphKey> admitted = new LinkedHashSet<GlyphKey>();
         for (GlyphKey key : incoming) {
+            // #81 临时探针：按 owner 每项裁决计数；重复已准入 key 仍是一次准入，定位后统一移除。
+            FontPerformanceProbe.count(FontPerformanceProbe.DEMAND_INPUT, 1);
             if (presentationDemand.size() < settings.maxDemand
                     || presentationDemand.contains(key)) {
                 presentationDemand.add(key);
                 admitted.add(key);
-            } else rejectedDemand++;
+                FontPerformanceProbe.count(FontPerformanceProbe.DEMAND_ADMITTED, 1);
+            } else {
+                rejectedDemand++;
+                FontPerformanceProbe.count(FontPerformanceProbe.DEMAND_REJECTED, 1);
+            }
         }
+        FontPerformanceProbe.observe(FontPerformanceProbe.PRESENTATION_DEMAND, presentationDemand.size());
         return Collections.unmodifiableSet(admitted);
     }
 
@@ -216,54 +244,67 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
             PaintPlan plan,
             LayoutBox viewport,
             FontRenderContext context) {
-        checkRenderer(renderer);
-        if (preparedCount != 0) throw new IllegalStateException("共享atlas只允许即时短Prepared");
-        boolean automatic = !presenting && !presentationBoundaryRequired;
-        if (!presenting) beginPresentation(--autoEpoch);
+        // #81 临时探针：OWNER_PREPARE 沿原方法 inclusive 计时，定位后统一移除。
+        long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.OWNER_PREPARE);
         try {
-            // owner保留整帧并集负责预算/取消；短Prepared只准备当前consumer，避免逐行扫描累计前缀。
-            Set<GlyphKey> admitted = admitDemand(
-                    context == null
-                            ? renderer.collectVisibleDemand(plan, viewport)
-                            : renderer.collectVisibleDemand(plan, context));
-            GlGlyphAtlas sharedAtlas = atlas();
-            GlGlyphAtlas.Stats before = sharedAtlas.stats();
-            // 需求收集不扣上传限时；大计划若先耗尽额度，新增字形会每帧都无法上传。
-            long start = System.nanoTime();
-            long availableNanos = remainingNanos;
+            checkRenderer(renderer);
+            if (preparedCount != 0) throw new IllegalStateException("共享atlas只允许即时短Prepared");
+            boolean automatic = !presenting && !presentationBoundaryRequired;
+            if (!presenting) beginPresentation(--autoEpoch);
             try {
-                GlGlyphAtlas.UploadBudget budget =
-                        new GlGlyphAtlas.UploadBudget(
-                                remainingBytes, availableNanos, remainingCalls);
-                Runnable onClose =
-                        () -> {
-                            preparedCount--;
-                            if (automatic) endPresentation();
-                        };
-                renderer.allowBatchReordering(allowBatchReordering);
-                GlPaintPlanRenderer.Prepared prepared =
+                // owner保留整帧并集负责预算/取消；短Prepared只准备当前consumer，避免逐行扫描累计前缀。
+                Set<GlyphKey> admitted = admitDemand(
                         context == null
-                                ? renderer.prepareDemand(
-                                        plan, viewport, budget, admitted, false, onClose)
-                                : renderer.prepareDemandContext(
-                                        plan, context, budget, admitted, onClose);
-                preparedCount++;
-                return prepared;
-            } finally {
-                GlGlyphAtlas.Stats after = sharedAtlas.stats();
-                long bytes = after.uploadedBytes - before.uploadedBytes;
-                int calls = Math.toIntExact(after.uploadCalls - before.uploadCalls);
-                long elapsed = System.nanoTime() - start;
-                usedBytes += bytes;
-                usedCalls += calls;
-                usedNanos += elapsed;
-                remainingBytes = Math.max(0, remainingBytes - bytes);
-                remainingCalls = Math.max(0, remainingCalls - calls);
-                remainingNanos = Math.max(0, remainingNanos - elapsed);
+                                ? renderer.collectVisibleDemand(plan, viewport)
+                                : renderer.collectVisibleDemand(plan, context));
+                GlGlyphAtlas sharedAtlas = atlas();
+                GlGlyphAtlas.Stats before = sharedAtlas.stats();
+                // 需求收集不扣上传限时；大计划若先耗尽额度，新增字形会每帧都无法上传。
+                long start = System.nanoTime();
+                long availableNanos = remainingNanos;
+                try {
+                    GlGlyphAtlas.UploadBudget budget =
+                            new GlGlyphAtlas.UploadBudget(
+                                    remainingBytes, availableNanos, remainingCalls);
+                    Runnable onClose =
+                            () -> {
+                                preparedCount--;
+                                // #81 临时探针：沿原 onClose 归还计数，定位后统一移除。
+                                FontPerformanceProbe.observe(FontPerformanceProbe.PREPARED_COUNT, preparedCount);
+                                if (automatic) endPresentation();
+                            };
+                    renderer.allowBatchReordering(allowBatchReordering);
+                    GlPaintPlanRenderer.Prepared prepared =
+                            context == null
+                                    ? renderer.prepareDemand(
+                                            plan, viewport, budget, admitted, false, onClose)
+                                    : renderer.prepareDemandContext(
+                                            plan, context, budget, admitted, onClose);
+                    preparedCount++;
+                    return prepared;
+                } finally {
+                    GlGlyphAtlas.Stats after = sharedAtlas.stats();
+                    long bytes = after.uploadedBytes - before.uploadedBytes;
+                    int calls = Math.toIntExact(after.uploadCalls - before.uploadCalls);
+                    long elapsed = System.nanoTime() - start;
+                    usedBytes += bytes;
+                    usedCalls += calls;
+                    usedNanos += elapsed;
+                    remainingBytes = Math.max(0, remainingBytes - bytes);
+                    remainingCalls = Math.max(0, remainingCalls - calls);
+                    remainingNanos = Math.max(0, remainingNanos - elapsed);
+                    // #81 临时探针：在原预算扣减之后观测余量，不新增预算时钟，定位后统一移除。
+                    FontPerformanceProbe.observe(FontPerformanceProbe.UPLOAD_REMAINING_BYTES, remainingBytes);
+                    FontPerformanceProbe.observe(FontPerformanceProbe.UPLOAD_REMAINING_NANOS, remainingNanos);
+                    FontPerformanceProbe.observe(FontPerformanceProbe.UPLOAD_REMAINING_CALLS, remainingCalls);
+                }
+            } catch (RuntimeException | Error failure) {
+                if (automatic && preparedCount == 0) endPresentation();
+                throw failure;
             }
-        } catch (RuntimeException | Error failure) {
-            if (automatic && preparedCount == 0) endPresentation();
-            throw failure;
+        } finally {
+            FontPerformanceProbe.observe(FontPerformanceProbe.PREPARED_COUNT, preparedCount);
+            FontPerformanceProbe.end(FontPerformanceProbe.OWNER_PREPARE, probeToken);
         }
     }
 
@@ -390,7 +431,14 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     /** 宿主每帧准备阶段主动pump；ready只影响资源可画，不递增布局/字体度量代际。 */
     public int pumpReady() {
         check();
-        int count = rasterizer.drainReady(settings.cpu.ready).size();
+        // #81 临时探针：仅计原 drainReady 调用，不改变完成队列，定位后统一移除。
+        long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.CPU_DRAIN_READY);
+        int count;
+        try {
+            count = rasterizer.drainReady(settings.cpu.ready).size();
+        } finally {
+            FontPerformanceProbe.end(FontPerformanceProbe.CPU_DRAIN_READY, probeToken);
+        }
         readyVersion = rasterizer.stats().version;
         return count;
     }
