@@ -236,6 +236,8 @@ public final class FontDeferredStateScenario extends TestApplication {
             stateA(fboA);
             FontRenderContext a = capture.capture(64, 5, 9);
             verifyA(a, fboA);
+            club.heiqi.uilib.host.client.font.context.SuppliedBlendCaptureScenario.verify(
+                    new Lwjgl3GlApi(), a.rasterState);
             stateB(fboB);
             FontRenderContext b = capture.capture(64, 6, 10);
             FontRenderContext font = StandardFontContext.from(a);
