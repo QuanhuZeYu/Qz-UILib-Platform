@@ -253,6 +253,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         final PaintPlan plan;
         final LayoutBox viewport;
         final FontRenderContext context;
+        final GlFontVisibility.Query visibility;
         final java.util.List<java.util.List<PaintCommand>> layers;
         final java.util.List<PaintCommand> commands = new java.util.ArrayList<>();
         final java.util.Map<PaintCommand, CommandFacts> facts = new java.util.IdentityHashMap<>();
@@ -261,6 +262,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
 
         Preparation(PaintPlan plan, LayoutBox viewport, FontRenderContext context) {
             this.plan = plan; this.viewport = viewport; this.context = context;
+            visibility = context == null ? null : new GlFontVisibility.Query(context);
             viewportClip = context == null ? SceneClipRegion.rectangle(viewport) : SceneClipRegion.UNBOUNDED;
             layers = plan.resourceLayers();
             for (java.util.List<PaintCommand> layer : layers) for (PaintCommand command : layer) {
@@ -318,7 +320,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                     visibilityChecks++;
                     boolean shown = preparation.context == null
                             ? visible(command, glyph, rectangularClip, visible)
-                            : GlFontVisibility.visible(command, glyph, preparation.context, visible);
+                            : preparation.visibility.visible(command, glyph, visible);
                     glyphs.put(glyph, shown ? GlyphKey.of(glyph) : null);
                 }
                 GlyphKey key = glyphs.get(glyph);

@@ -77,6 +77,8 @@ public final class FontPlanSampling {
                         double d = projection.densityClip(q[0], q[1], w);
                         if (!Double.isFinite(d)) return capped(maximum, em, context.revision);
                         best = Math.max(best, d);
+                        // 最大值已到策略顶档，后续角点或保守边界只会维持同一结果。
+                        if (best * em >= maximum) return capped(maximum, em, context.revision);
                     }
                 }
                 // 线性clip平面在quad四角的异号意味着可能有可见部分，不按originbehind放弃质量。

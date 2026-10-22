@@ -28,47 +28,74 @@ final class GlFontVisibility {
 
     static boolean visible(PaintCommand command, TextLayout.Glyph glyph, FontRenderContext context,
             club.heiqi.uilib.ui.scene.geometry.SceneClipRegion clip) {
-        if (!glyph.inkBounds.known) return true;
-        double x = (double) command.box.x + glyph.x, y = (double) command.box.y + glyph.y;
-        double l = x + glyph.inkBounds.left,
-                r = x + glyph.inkBounds.right,
-                t = y + glyph.inkBounds.top,
-                b = y + glyph.inkBounds.bottom;
-        if (r <= l || b <= t) return false;
-        if (command.sceneGeometry || !command.transform.identity() || !command.shapeClip.unbounded()) {
-            SceneMesh mesh = clip.clip(SceneMesh.rectangle(l, t, r - l, b - t).transformed(command.transform));
-            for (int i = 0; i < mesh.vertexCount(); i += 3) {
-                List<double[]> triangle = new ArrayList<double[]>(3);
-                for (int j = 0; j < 3; j++) triangle.add(context.projection.clipAt(mesh.x(i + j), mesh.y(i + j), 0));
-                if (visible(triangle, context)) return true;
-            }
-            return false;
+        return new Query(context).visible(command, glyph, clip);
+    }
+
+    /** 只随一次Preparation存活；同一不可变context的防御副本和四角缓冲不随glyph重建。 */
+    static final class Query {
+        final FontRenderContext context;
+        final int[] viewport, scissor;
+        final double[] limits;
+        private final float[] mvp;
+        private final List<double[]> quad = new ArrayList<double[]>(4);
+
+        Query(FontRenderContext context) {
+            this.context = context;
+            mvp = context.projection.mvp();
+            viewport = context.projection.viewport();
+            scissor = context.scissorEnabled ? context.scissor() : null;
+            limits = scissor == null ? null : screenLimits(viewport, scissor);
+            for (int i = 0; i < 4; i++) quad.add(new double[4]);
         }
-        // 旧world输入仍走四角齐次裁剪，不新增UI坐标或资源前提。
-        List<double[]> polygon = new ArrayList<double[]>();
-        polygon.add(context.projection.clipAt(l, t, 0));
-        polygon.add(context.projection.clipAt(r, t, 0));
-        polygon.add(context.projection.clipAt(r, b, 0));
-        polygon.add(context.projection.clipAt(l, b, 0));
-        return visible(polygon, context);
+
+        private void fill(double x, double y, double[] target) {
+            if (!Double.isFinite(x) || !Double.isFinite(y))
+                throw new IllegalArgumentException("非有限anchor");
+            // 与FontProjection.clipAt保留相同运算顺序，避免裁面临界值因增量或重结合而改变。
+            for (int r = 0; r < 4; r++)
+                target[r] = mvp[r] * x + mvp[4 + r] * y + mvp[8 + r] * 0.0 + mvp[12 + r];
+        }
+
+        boolean visible(PaintCommand command, TextLayout.Glyph glyph,
+                club.heiqi.uilib.ui.scene.geometry.SceneClipRegion clip) {
+            if (!glyph.inkBounds.known) return true;
+            double x = (double) command.box.x + glyph.x, y = (double) command.box.y + glyph.y;
+            double l = x + glyph.inkBounds.left,
+                    r = x + glyph.inkBounds.right,
+                    t = y + glyph.inkBounds.top,
+                    b = y + glyph.inkBounds.bottom;
+            if (r <= l || b <= t) return false;
+            if (command.sceneGeometry || !command.transform.identity() || !command.shapeClip.unbounded()) {
+                SceneMesh mesh = clip.clip(SceneMesh.rectangle(l, t, r - l, b - t).transformed(command.transform));
+                for (int i = 0; i < mesh.vertexCount(); i += 3) {
+                    List<double[]> triangle = new ArrayList<double[]>(3);
+                    for (int j = 0; j < 3; j++) triangle.add(context.projection.clipAt(mesh.x(i + j), mesh.y(i + j), 0));
+                    if (GlFontVisibility.visible(triangle, this)) return true;
+                }
+                return false;
+            }
+            // 旧world输入仍走四角齐次裁剪，不新增UI坐标或资源前提。
+            fill(l, t, quad.get(0));
+            fill(r, t, quad.get(1));
+            fill(r, b, quad.get(2));
+            fill(l, b, quad.get(3));
+            // 精确裁剪只读输入且判定同步结束，返回后才允许下一glyph重填四角。
+            return GlFontVisibility.visible(quad, this);
+        }
     }
     private static final int REJECTED = -1, INSIDE = 0, CLIP_REQUIRED = 1;
 
     private static boolean visible(List<double[]> polygon, FontRenderContext context) {
-        int[] viewport = null, scissor = null;
-        double[] limits = null;
-        int planes = context.scissorEnabled ? 10 : 6;
-        if (context.scissorEnabled) {
-            viewport = context.projection.viewport();
-            scissor = context.scissor();
-            limits = screenLimits(viewport, scissor);
-        }
-        int classification = classify(polygon, planes, limits);
+        return visible(polygon, new Query(context));
+    }
+
+    private static boolean visible(List<double[]> polygon, Query query) {
+        int planes = query.scissor == null ? 6 : 10;
+        int classification = classify(polygon, planes, query.limits);
         if (classification == REJECTED) return false;
-        if (classification == CLIP_REQUIRED) polygon = clipped(polygon, planes, limits);
+        if (classification == CLIP_REQUIRED) polygon = clipped(polygon, planes, query.limits);
         if (polygon.isEmpty()) return false;
-        if (viewport == null) viewport = context.projection.viewport();
-        return projectedBoundsVisible(polygon, viewport, scissor);
+        return projectedBoundsVisible(polygon, query.viewport, query.scissor);
     }
 
     private static double[] screenLimits(int[] viewport, int[] scissor) {
