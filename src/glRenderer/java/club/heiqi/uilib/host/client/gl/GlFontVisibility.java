@@ -3,7 +3,6 @@ package club.heiqi.uilib.host.client.gl;
 import java.util.ArrayList;
 import java.util.List;
 import club.heiqi.uilib.host.client.font.context.FontRenderContext;
-import club.heiqi.uilib.host.client.font.FontPerformanceProbe;
 import club.heiqi.uilib.ui.scene.geometry.SceneMesh;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
@@ -59,10 +58,7 @@ final class GlFontVisibility {
 
         boolean visible(PaintCommand command, TextLayout.Glyph glyph,
                 club.heiqi.uilib.ui.scene.geometry.SceneClipRegion clip) {
-            // #81 临时探针：逐 glyph 只计数，不读时钟，定位后统一移除。
-            FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_GLYPHS, 1);
             if (!glyph.inkBounds.known) {
-                FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_UNKNOWN, 1);
                 return true;
             }
             double x = (double) command.box.x + glyph.x, y = (double) command.box.y + glyph.y;
@@ -71,19 +67,15 @@ final class GlFontVisibility {
                     t = y + glyph.inkBounds.top,
                     b = y + glyph.inkBounds.bottom;
             if (r <= l || b <= t) {
-                FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_REJECTED, 1);
                 return false;
             }
             if (command.sceneGeometry || !command.transform.identity() || !command.shapeClip.unbounded()) {
-                // #81 临时探针：每 glyph 进入 scene mesh 分支计一次，定位后统一移除。
-                FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_SCENE, 1);
                 SceneMesh mesh = clip.clip(SceneMesh.rectangle(l, t, r - l, b - t).transformed(command.transform));
                 for (int i = 0; i < mesh.vertexCount(); i += 3) {
                     List<double[]> triangle = new ArrayList<double[]>(3);
                     for (int j = 0; j < 3; j++) triangle.add(context.projection.clipAt(mesh.x(i + j), mesh.y(i + j), 0));
                     if (GlFontVisibility.visible(triangle, this)) return true;
                 }
-                FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_REJECTED, 1);
                 return false;
             }
             // 旧world输入仍走四角齐次裁剪，不新增UI坐标或资源前提。
@@ -92,9 +84,7 @@ final class GlFontVisibility {
             fill(r, b, quad.get(2));
             fill(l, b, quad.get(3));
             // 精确裁剪只读输入且判定同步结束，返回后才允许下一glyph重填四角。
-            boolean shown = GlFontVisibility.visible(quad, this);
-            if (!shown) FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_REJECTED, 1);
-            return shown;
+            return GlFontVisibility.visible(quad, this);
         }
     }
     private static final int REJECTED = -1, INSIDE = 0, CLIP_REQUIRED = 1;
@@ -108,8 +98,6 @@ final class GlFontVisibility {
         int classification = classify(polygon, planes, query.limits);
         if (classification == REJECTED) return false;
         if (classification == CLIP_REQUIRED) {
-            // #81 临时探针：计原分类器要求精裁的 polygon；scene 单 glyph 可含多三角，定位后统一移除。
-            FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_NEEDS_CLIP, 1);
             polygon = clipped(polygon, planes, query.limits);
         }
         if (polygon.isEmpty()) return false;

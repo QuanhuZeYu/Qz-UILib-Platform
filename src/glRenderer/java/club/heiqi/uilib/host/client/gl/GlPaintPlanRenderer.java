@@ -3,7 +3,6 @@ package club.heiqi.uilib.host.client.gl;
 import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 
 import club.heiqi.uilib.host.client.font.context.FontRenderContext;
-import club.heiqi.uilib.host.client.font.FontPerformanceProbe;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.Quad;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.State;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadCollector;
@@ -139,27 +138,15 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
 
     /** 可见需求与后续资源准备交接同一批事实；只保留一次待消费的需求准备。 */
     public java.util.Set<GlyphKey> collectVisibleDemand(PaintPlan plan, LayoutBox viewport) {
-        // #81 临时探针：COLLECT_VISIBLE 沿原方法 inclusive 计时，定位后统一移除。
-        long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.COLLECT_VISIBLE);
-        try {
-            return collectVisibleDemand(new Preparation(Objects.requireNonNull(plan, "plan"),
-                    Objects.requireNonNull(viewport, "viewport"), null));
-        } finally {
-            FontPerformanceProbe.end(FontPerformanceProbe.COLLECT_VISIBLE, probeToken);
-        }
+        return collectVisibleDemand(new Preparation(Objects.requireNonNull(plan, "plan"),
+                Objects.requireNonNull(viewport, "viewport"), null));
     }
 
     /** caller空间的world需求：context对象属于不可变本次原生状态，不能以plan身份跨world状态复用。 */
     public java.util.Set<GlyphKey> collectVisibleDemand(PaintPlan plan, FontRenderContext context) {
-        // #81 临时探针：COLLECT_VISIBLE 沿原方法 inclusive 计时，定位后统一移除。
-        long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.COLLECT_VISIBLE);
-        try {
-            Objects.requireNonNull(context, "context");
-            return collectVisibleDemand(new Preparation(Objects.requireNonNull(plan, "plan"),
-                    GlFontVisibility.viewport(context), context));
-        } finally {
-            FontPerformanceProbe.end(FontPerformanceProbe.COLLECT_VISIBLE, probeToken);
-        }
+        Objects.requireNonNull(context, "context");
+        return collectVisibleDemand(new Preparation(Objects.requireNonNull(plan, "plan"),
+                GlFontVisibility.viewport(context), context));
     }
     private java.util.Set<GlyphKey> collectVisibleDemand(Preparation preparation) {
         pendingPreparation = preparation;
@@ -367,7 +354,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         Preparation(PaintPlan plan, LayoutBox viewport, FontRenderContext context) {
             if (closed) throw new IllegalStateException("renderer已关闭");
             this.plan = plan; this.viewport = viewport; this.context = context;
-            // #81 单行宿主计划不预留默认32项身份表；资源子计划仍按实际添加自动扩容。
+            // 单行宿主计划不预留默认32项身份表；资源子计划仍按实际添加自动扩容。
             commands = new java.util.ArrayList<>(plan.commands().size());
             facts = new java.util.IdentityHashMap<>(plan.commands().size());
             viewportClip = context == null ? SceneClipRegion.rectangle(viewport) : SceneClipRegion.UNBOUNDED;
@@ -467,11 +454,8 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         }
     }
     private static boolean visible(PaintCommand command, TextLayout.Glyph glyph, LayoutBox clip, SceneClipRegion region) {
-        // #81 临时探针：只计实际执行的 glyph 可见性检查，定位后统一移除。
-        FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_GLYPHS, 1);
         InkBounds bounds = glyph.inkBounds;
         if (!bounds.known) {
-            FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_UNKNOWN, 1);
             return true;
         }
         double x = (double) command.box.x + glyph.x, y = (double) command.box.y + glyph.y;
@@ -480,12 +464,9 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             shown = x + bounds.left < (long) clip.x + clip.width && x + bounds.right > clip.x
                     && y + bounds.top < (long) clip.y + clip.height && y + bounds.bottom > clip.y;
         else {
-            // #81 临时探针：scene 计实际进入的 mesh 几何分支，不计命令数，定位后统一移除。
-            FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_SCENE, 1);
             shown = region.intersects(SceneMesh.rectangle(x + bounds.left, y + bounds.top,
                     bounds.right - bounds.left, bounds.bottom - bounds.top).transformed(command.transform));
         }
-        if (!shown) FontPerformanceProbe.count(FontPerformanceProbe.VISIBILITY_REJECTED, 1);
         return shown;
     }
 
@@ -589,26 +570,14 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         }
 
         public void render(FontRenderContext context) {
-            // #81 临时探针：PLAN_REPLAY 沿原方法 inclusive 计时，定位后统一移除。
-            long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.PLAN_REPLAY);
-            try {
-                try (Replay replay = begin(context)) {
-                    for (PaintCommand command : plan.commands()) replay.draw(command);
-                }
-            } finally {
-                FontPerformanceProbe.end(FontPerformanceProbe.PLAN_REPLAY, probeToken);
+            try (Replay replay = begin(context)) {
+                for (PaintCommand command : plan.commands()) replay.draw(command);
             }
         }
 
         public void render(float[] mvp, int framebufferHeight, boolean depthEnabled) {
-            // #81 临时探针：PLAN_REPLAY 沿原方法 inclusive 计时，定位后统一移除。
-            long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.PLAN_REPLAY);
-            try {
-                try (Replay replay = begin(mvp, framebufferHeight, depthEnabled)) {
-                    for (PaintCommand command : plan.commands()) replay.draw(command);
-                }
-            } finally {
-                FontPerformanceProbe.end(FontPerformanceProbe.PLAN_REPLAY, probeToken);
+            try (Replay replay = begin(mvp, framebufferHeight, depthEnabled)) {
+                for (PaintCommand command : plan.commands()) replay.draw(command);
             }
         }
 

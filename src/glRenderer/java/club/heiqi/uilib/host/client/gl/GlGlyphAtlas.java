@@ -12,7 +12,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import club.heiqi.uilib.host.client.font.FontPerformanceProbe;
 import club.heiqi.uilib.ui.scene.text.font.glyph.AsyncGlyphRasterizer;
 import club.heiqi.uilib.ui.scene.text.font.glyph.GlyphKey;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.GlyphBitmap;
@@ -464,11 +463,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
 
         public Resident lookup(GlyphKey key) {
             checkFrame();
-            Resident resident = frozen ? visible.get(key) : residents.get(new ViewKey(key, view));
-            // #81 临时探针：只计实际 lookup 结果，不给逐 glyph 路径读时钟，定位后统一移除。
-            FontPerformanceProbe.count(resident == null ? FontPerformanceProbe.ATLAS_LOOKUP_MISS
-                    : FontPerformanceProbe.ATLAS_LOOKUP_HIT, 1);
-            return resident;
+            return frozen ? visible.get(key) : residents.get(new ViewKey(key, view));
         }
 
         private void checkFrame() {
@@ -484,55 +479,42 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         /** 共享owner在presentation结束时统一retain；单consumer默认保持旧行为。 */
         public void prepare(
                 AsyncGlyphRasterizer cpu, UploadBudget uploadBudget, boolean retainPending) {
-            // #81 临时探针：ATLAS_PREPARE 包含原上传 scope 的清理，定位后统一移除。
-            long probeToken = FontPerformanceProbe.begin(FontPerformanceProbe.ATLAS_PREPARE);
-            try {
-                checkFrame();
-                if (frozen) throw new IllegalStateException("绘制期间禁止上传");
-                if (cpu != null) {
-                    if (retainPending) cpu.retainPending(demand);
-                    // #81 临时探针：仅包原完成队列排空调用，定位后统一移除。
-                    long drainToken = FontPerformanceProbe.begin(FontPerformanceProbe.CPU_DRAIN_READY);
-                    try {
-                        cpu.drainReady(budget.maxDemand);
-                    } finally {
-                        FontPerformanceProbe.end(FontPerformanceProbe.CPU_DRAIN_READY, drainToken);
-                    }
-                } else if (!demand.isEmpty())
-                    throw new IllegalArgumentException("非empty glyph需求须提供CPUworker");
-                for (GlyphKey key : demand)
-                    if (!visible.containsKey(key) && !residents.containsKey(new ViewKey(key, view))) cpu.request(key);
-                UploadProgress progress = new UploadProgress(uploadBudget);
-                int uploadTarget = view == SamplingView.STRAIGHT_RGBA ? GL_TEXTURE_2D : target;
-                try (GlCpuUploadScope state = GlCpuUploadScope.deferred(gl, uploadTarget)) {
-                    preparingState = state;
-                    if (needsSolid && view == SamplingView.STRAIGHT_RGBA) prepareSolid(progress);
-                    for (List<GlyphKey> layer : priorityLayers) {
-                        pinLayer(layer);
-                        for (GlyphKey key : layer) {
-                            if (!progress.canSubmit(1)) break;
-                            if (visible.containsKey(key) || residents.containsKey(new ViewKey(key, view))) continue;
-                            if (uploading != null
-                                    && (!uploading.key.equals(key)
-                                            || uploading.resident.samplingView != view)) continue;
-                            if (uploading == null) {
-                                GlyphBitmap bitmap = cpu.peek(key);
-                                if (bitmap == null) continue;
-                                uploading = allocate(key, bitmap, view);
-                                if (uploading == null) continue;
-                            }
-                            if (!uploadRows(uploading, progress)) break;
-                            Upload completed = uploading;
-                            publish(completed);
-                            visible.put(key, completed.resident);
+            checkFrame();
+            if (frozen) throw new IllegalStateException("绘制期间禁止上传");
+            if (cpu != null) {
+                if (retainPending) cpu.retainPending(demand);
+                cpu.drainReady(budget.maxDemand);
+            } else if (!demand.isEmpty())
+                throw new IllegalArgumentException("非empty glyph需求须提供CPUworker");
+            for (GlyphKey key : demand)
+                if (!visible.containsKey(key) && !residents.containsKey(new ViewKey(key, view))) cpu.request(key);
+            UploadProgress progress = new UploadProgress(uploadBudget);
+            int uploadTarget = view == SamplingView.STRAIGHT_RGBA ? GL_TEXTURE_2D : target;
+            try (GlCpuUploadScope state = GlCpuUploadScope.deferred(gl, uploadTarget)) {
+                preparingState = state;
+                if (needsSolid && view == SamplingView.STRAIGHT_RGBA) prepareSolid(progress);
+                for (List<GlyphKey> layer : priorityLayers) {
+                    pinLayer(layer);
+                    for (GlyphKey key : layer) {
+                        if (!progress.canSubmit(1)) break;
+                        if (visible.containsKey(key) || residents.containsKey(new ViewKey(key, view))) continue;
+                        if (uploading != null
+                                && (!uploading.key.equals(key)
+                                        || uploading.resident.samplingView != view)) continue;
+                        if (uploading == null) {
+                            GlyphBitmap bitmap = cpu.peek(key);
+                            if (bitmap == null) continue;
+                            uploading = allocate(key, bitmap, view);
+                            if (uploading == null) continue;
                         }
+                        if (!uploadRows(uploading, progress)) break;
+                        Upload completed = uploading;
+                        publish(completed);
+                        visible.put(key, completed.resident);
                     }
-                } finally {
-                    preparingState = null;
                 }
             } finally {
-                FontPerformanceProbe.observe(FontPerformanceProbe.ATLAS_RESIDENTS, residents.size());
-                FontPerformanceProbe.end(FontPerformanceProbe.ATLAS_PREPARE, probeToken);
+                preparingState = null;
             }
         }
 
