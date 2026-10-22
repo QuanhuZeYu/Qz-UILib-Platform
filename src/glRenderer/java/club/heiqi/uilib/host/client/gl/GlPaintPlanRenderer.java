@@ -367,7 +367,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             this.plan = plan; this.viewport = viewport; this.context = context;
             viewportClip = context == null ? SceneClipRegion.rectangle(viewport) : SceneClipRegion.UNBOUNDED;
             layers = plan.resourceLayers();
-            // #81 单资源层已经是只读快照，需求登记与短Prepared不再复制相同命令列表。
+            // 单资源层复用只读快照，多层保持资源优先序。
             if (layers.isEmpty()) commands = java.util.Collections.emptyList();
             else if (layers.size() == 1) commands = layers.get(0);
             else {
@@ -446,7 +446,13 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                     && (preparation.context != null || !visible.empty()))
                 for (TextLayout.Line line : command.text.lines())
                     glyphCount = Math.addExact(glyphCount, line.glyphs().size());
-            // 不按固定文字长度预分配；不可变布局已给出本次上界，空裁剪保持最小容器。
+            if (glyphCount == 0) {
+                glyphs = java.util.Collections.emptyMap();
+                visibleKeys = java.util.Collections.emptyList();
+                visibleDemand = java.util.Collections.emptySet();
+                clipped = 0;
+                return;
+            }
             java.util.Map<TextLayout.Glyph, GlyphKey> glyphs = new java.util.IdentityHashMap<>(glyphCount);
             java.util.List<GlyphKey> visibleKeys = new java.util.ArrayList<>(glyphCount);
             long clipped = 0;

@@ -152,6 +152,22 @@ public final class FontRenderContext {
             return value.clone();
         }
 
+        private boolean sameState(RasterState other) {
+            return this == other || other != null
+                    && blendEnabled == other.blendEnabled
+                    && blendSrcRgb == other.blendSrcRgb && blendDstRgb == other.blendDstRgb
+                    && blendSrcAlpha == other.blendSrcAlpha && blendDstAlpha == other.blendDstAlpha
+                    && blendEquationRgb == other.blendEquationRgb && blendEquationAlpha == other.blendEquationAlpha
+                    && stencilEnabled == other.stencilEnabled
+                    && cullEnabled == other.cullEnabled && cullFace == other.cullFace && frontFace == other.frontFace
+                    && polygonOffsetFill == other.polygonOffsetFill
+                    && sameFloat(polygonOffsetFactor, other.polygonOffsetFactor)
+                    && sameFloat(polygonOffsetUnits, other.polygonOffsetUnits)
+                    && frontStencil.sameState(other.frontStencil) && backStencil.sameState(other.backStencil)
+                    && sameFloats(blendColor, other.blendColor) && sameFloats(depthRange, other.depthRange)
+                    && java.util.Arrays.equals(colorMask, other.colorMask);
+        }
+
         public float[] blendColor() {
             return blendColor.clone();
         }
@@ -184,6 +200,38 @@ public final class FontRenderContext {
             this.depthFail = depthFail;
             this.depthPass = depthPass;
         }
+
+        private boolean sameState(StencilFace other) {
+            return this == other || other != null
+                    && function == other.function && reference == other.reference
+                    && valueMask == other.valueMask && writeMask == other.writeMask
+                    && fail == other.fail && depthFail == other.depthFail && depthPass == other.depthPass;
+        }
+    }
+
+    /** 同一绘制来源的完整值比较；直接读取不可变快照，保留 P/MV 及浮点原始位身份。 */
+    public boolean sameDrawState(FontRenderContext other) {
+        return this == other || other != null
+                && contextIdentity == other.contextIdentity && revision == other.revision
+                && passKey == other.passKey && drawFramebuffer == other.drawFramebuffer
+                && sourceFramebufferHeight == other.sourceFramebufferHeight
+                && depthTest == other.depthTest && depthFunction == other.depthFunction
+                && depthWrite == other.depthWrite && scissorEnabled == other.scissorEnabled
+                && java.util.Arrays.equals(scissor, other.scissor)
+                && projection.sameState(other.projection) && state.sameState(other.state)
+                && (rasterState == other.rasterState
+                        || rasterState != null && rasterState.sameState(other.rasterState));
+    }
+
+    static boolean sameFloat(float a, float b) {
+        return Float.floatToRawIntBits(a) == Float.floatToRawIntBits(b);
+    }
+
+    static boolean sameFloats(float[] a, float[] b) {
+        if (a == b) return true;
+        if (a.length != b.length) return false;
+        for (int i = 0; i < a.length; i++) if (!sameFloat(a[i], b[i])) return false;
+        return true;
     }
 
     public int[] scissor() {
@@ -241,6 +289,17 @@ public final class FontRenderContext {
             float[] c = v.clone();
             for (float x : c) if (!Float.isFinite(x)) throw new IllegalArgumentException("非有限状态");
             return c;
+        }
+
+        private boolean sameState(MatrixState other) {
+            return this == other || other != null
+                    && alphaTest == other.alphaTest && alphaFunction == other.alphaFunction
+                    && sameFloat(alphaReference, other.alphaReference)
+                    && lightmapActive == other.lightmapActive && lightmapTexture == other.lightmapTexture
+                    && sameFloat(lightmapU, other.lightmapU) && sameFloat(lightmapV, other.lightmapV)
+                    && packedLight == other.packedLight && blockEntityId == other.blockEntityId
+                    && sameFloats(p, other.p) && sameFloats(mv, other.mv) && sameFloats(color, other.color)
+                    && sameFloats(normal, other.normal) && sameFloats(lighting, other.lighting);
         }
 
         public float[] projection() {

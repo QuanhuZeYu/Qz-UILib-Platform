@@ -191,7 +191,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         final boolean color;
         final Page[] pages;
         long lastUsed;
-        boolean pinned, whiteReady;
+        boolean pinned, whiteReady, presentationPinned;
         final SamplingView view;
         final List<ViewKey> keys = new ArrayList<ViewKey>();
 
@@ -354,7 +354,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         return beginFrame(demand, false);
     }
 
-    /** managed consumer保留此前consumer的分帧upload，epoch结束时才裁决过期。 */
+    /** managed consumer保留此前consumer的分帧upload及实际使用组，epoch结束时才裁决过期。 */
     public Frame beginFrame(Collection<GlyphKey> demand, boolean preserveUpload) {
         return beginFrame(demand, preserveUpload, SamplingView.PREMULT_RGBA);
     }
@@ -383,7 +383,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             boolean needsSolid) {
         check();
         if (active != null) throw new IllegalStateException("先结束上一个图集范围");
-        Frame frame = new Frame(view, needsSolid);
+        Frame frame = new Frame(view, needsSolid, preserveUpload);
         for (Collection<GlyphKey> layer : layers) {
             List<GlyphKey> admitted = new ArrayList<>();
             for (GlyphKey key : layer) {
@@ -406,15 +406,16 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 && !preserveUpload
                 && (frame.priorityLayers.isEmpty()
                         || !frame.priorityLayers.get(0).contains(uploading.key))) uploading = null;
-        if (uploading != null) uploading.resident.group.pinned = true;
+        if (uploading != null) frame.pinGroup(uploading.resident.group);
         active = frame;
         return frame;
     }
 
-    /** 不持Frame/UV的epoch结束裁决，仅丢弃不再可见的未完成upload。 */
+    /** 不持Frame/UV的epoch结束裁决；释放组保护，只丢弃不再可见的未完成upload。 */
     public void retainUploadDemand(Collection<GlyphKey> demand) {
         check();
         if (active != null) throw new IllegalStateException("先关闭Frame再结束epoch");
+        for (Group group : groups.values()) group.presentationPinned = false;
         if (uploading != null && !demand.contains(uploading.key)) uploading = null;
         java.util.Iterator<Upload> pending = partials.values().iterator();
         while (pending.hasNext()) if (!demand.contains(pending.next().key)) pending.remove();
@@ -422,12 +423,19 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
 
     public final class Frame implements AutoCloseable {
         public final SamplingView view;
-        private final boolean needsSolid;
+        private final boolean needsSolid, preserveUpload;
         private Resident white;
 
-        private Frame(SamplingView view, boolean needsSolid) {
+        private Frame(SamplingView view, boolean needsSolid, boolean preserveUpload) {
             this.view = view;
             this.needsSolid = needsSolid;
+            this.preserveUpload = preserveUpload;
+        }
+
+        private void pinGroup(Group group) {
+            group.pinned = true;
+            // 保护位只随现有组存在，至多maxGroups；短Frame仍只持本consumer的可见资源。
+            if (preserveUpload) group.presentationPinned = true;
         }
 
         public Resident solid() {
@@ -448,7 +456,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 boolean known = r != null;
                 if (!known) r = residents.get(new ViewKey(key, view));
                 if (r != null) {
-                    r.group.pinned = true;
+                    pinGroup(r.group);
                     r.group.lastUsed = ++clock;
                     if (!known) visible.put(key, r);
                 }
@@ -534,7 +542,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             if (whiteGroup == null && progress.canSubmit(36))
                 whiteGroup = createGroup(false, view);
             if (whiteGroup == null) return;
-            whiteGroup.pinned = true;
+            pinGroup(whiteGroup);
             whiteGroup.lastUsed = ++clock;
             if (!whiteGroup.whiteReady && progress.canSubmit(36)) {
                 whiteScratch.clear();
@@ -561,7 +569,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 if (visible.containsKey(key)) continue;
                 Resident r = residents.get(new ViewKey(key, view));
                 if (r != null) {
-                    r.group.pinned = true;
+                    pinGroup(r.group);
                     visible.put(key, r);
                 }
             }
@@ -569,8 +577,8 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         }
 
         private void pin() {
-            for (Resident resident : visible.values()) resident.group.pinned = true;
-            if (white != null) white.group.pinned = true;
+            for (Resident resident : visible.values()) pinGroup(resident.group);
+            if (white != null) pinGroup(white.group);
         }
 
         @Override
@@ -787,7 +795,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
 
     private Upload place(GlyphKey key, GlyphBitmap bitmap, Group group, int layer, int w, int h) {
         int[] pos = group.pages[layer].allocate(w, h, budget.pageSize);
-        group.pinned = true;
+        active.pinGroup(group);
         group.lastUsed = ++clock;
         return new Upload(
                 key,
@@ -824,6 +832,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         Group candidate = null;
         for (Group group : groups.values())
             if (!group.pinned
+                    && !group.presentationPinned
                     && !bound.contains(group.texture)
                     && !hasPartial(group)
                     && (candidate == null || group.lastUsed < candidate.lastUsed))
@@ -837,7 +846,6 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         return true;
     }
 
-    /** 只读取已 freeze 的 pin 范围，不上传、不创建、不推测资源代际。 */
     /** 单atlas可复用scratch，最大为64KiB或一行；每上传清零padding而不分配native行buffer。 */
     private ByteBuffer uploadScratch(int bytes) {
         if (uploadScratch == null || uploadScratch.capacity() < bytes)

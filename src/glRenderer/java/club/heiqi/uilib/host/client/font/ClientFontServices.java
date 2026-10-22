@@ -145,19 +145,27 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         if (!presenting) throw new IllegalStateException("没有活动presentation");
         if (preparedCount != 0) throw new IllegalStateException("先关闭所有Prepared再结束presentation");
         try {
-            rasterizer.retainPending(presentationDemand);
-            if (atlas != null) atlas.retainUploadDemand(presentationDemand);
+            Throwable failure = null;
+            try {
+                rasterizer.retainPending(presentationDemand);
+            } catch (RuntimeException | Error error) {
+                failure = error;
+            }
+            // CPU清理失败也须归还GPU组保护；保留原始主错与后续清理错误。
+            try {
+                if (atlas != null) atlas.retainUploadDemand(presentationDemand);
+            } catch (RuntimeException | Error error) {
+                if (failure == null) failure = error;
+                else if (failure != error) failure.addSuppressed(error);
+            }
+            if (failure instanceof Error) throw (Error) failure;
+            if (failure != null) throw (RuntimeException) failure;
             pumpReady();
         } finally {
             presenting = false;
         }
     }
 
-    /** 所有共享consumer必须走此入口；无显式epoch时懒建立范围。默认构造模式在Prepared.close结束，
-     * 有真实present边界的宿主模式保留到endPresentation。
-     * nanos扣atlas prepare耗时（不含需求收集、布局、回放和consumer间空闲），比仅驱动耗时保守；
-     * GL调用不可抢占，单调用可超过剩余时间，但后续消费不会重新获取预算。
-     */
     /** 延期consumer只注册投影可见key并启动有界worker，不创建Frame、图集或冻结UV。
      * 与scene/immediate consumer共用完整呈现需求；真正回放时才取得短Prepared。 */
     public Set<GlyphKey> registerVisibleDemand(
@@ -205,6 +213,8 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         return reuseIncoming ? admitted : Collections.unmodifiableSet(admitted);
     }
 
+    /** consumer 共享呈现预算；自动范围在 Prepared 关闭时结束，显式范围由宿主结束。
+     * 预算扣除 atlas prepare 时间，包含提交边界，不能抢占单次驱动调用。 */
     public GlPaintPlanRenderer.Prepared prepare(
             GlPaintPlanRenderer renderer, PaintPlan plan, LayoutBox viewport) {
         return prepare(renderer, plan, viewport, null);

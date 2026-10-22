@@ -35,6 +35,13 @@ public final class FontProjection {
         return result;
     }
 
+    boolean sameState(FontProjection other) {
+        return this == other || other != null
+                && FontRenderContext.sameFloats(projection, other.projection)
+                && FontRenderContext.sameFloats(modelView, other.modelView)
+                && java.util.Arrays.equals(viewport, other.viewport);
+    }
+
     public float[] projection() {
         return projection.clone();
     }

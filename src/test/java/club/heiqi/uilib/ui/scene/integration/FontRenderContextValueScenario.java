@@ -64,6 +64,34 @@ public final class FontRenderContextValueScenario extends TestApplication {
         require(
                 old.rasterState == null,
                 "legacy constructor synthesized driver snapshot without context");
+        Object identity = new Object();
+        FontRenderContext a = context(identity, IDENTITY, IDENTITY, new float[]{1, 1, 1, 1}, r);
+        FontRenderContext equal = context(identity, IDENTITY.clone(), IDENTITY.clone(), new float[]{1, 1, 1, 1}, r);
+        require(a.sameDrawState(equal) && equal.sameDrawState(a), "等值新快照不兼容");
+        require(!a.sameDrawState(context(new Object(), IDENTITY, IDENTITY, new float[]{1, 1, 1, 1}, r)),
+                "不同 GL context 被合并");
+        float[] negativeZero = IDENTITY.clone();
+        negativeZero[12] = -0.0f;
+        require(!a.sameDrawState(context(identity, negativeZero, IDENTITY, new float[]{1, 1, 1, 1}, r)),
+                "原始浮点位身份被数值判等抹平");
+        float[] scaledProjection = IDENTITY.clone(), inverseModel = IDENTITY.clone();
+        scaledProjection[0] = 2; inverseModel[0] = 0.5f;
+        require(!a.sameDrawState(context(identity, scaledProjection, inverseModel, new float[]{1, 1, 1, 1}, r)),
+                "相同 MVP 不能替代各自的 P/MV shader 语义");
+        require(!a.sameDrawState(context(identity, IDENTITY, IDENTITY, new float[]{1, 1, 1, 0.5f}, r)),
+                "动态颜色被忽略");
+        float[] borrowed = equal.state.color(); borrowed[3] = 0;
+        require(a.sameDrawState(equal) && !a.sameDrawState(null), "值比较破坏防御复制或 null 边界");
+    }
+
+    private static FontRenderContext context(Object identity, float[] projection, float[] model,
+            float[] color, FontRenderContext.RasterState raster) {
+        FontRenderContext.MatrixState matrix = new FontRenderContext.MatrixState(projection, model, color,
+                false, GL11.GL_GREATER, 0, false, 0, 0, 0, 0,
+                new float[]{0, 0, 1}, new float[]{1, 1, 1}, -1);
+        return new FontRenderContext(new club.heiqi.uilib.host.client.font.context.FontProjection(
+                projection, model, new int[]{0, 0, 64, 64}), 0, 64, false, GL11.GL_LESS, true,
+                false, new int[]{0, 0, 64, 64}, matrix, identity, 0, 0, raster);
     }
 
 }

@@ -451,6 +451,128 @@ public final class PresentationEpochScenario extends TestApplication {
             throw new AssertionError("热consumer重复准备累计需求或无效上传状态");
     }
 
+    /** 两种实际格式各可单独装页；同epoch先就绪的可见组不能被后consumer反复淘汰。 */
+    private void tightVisibleGroups() throws Exception {
+        ClientFontServices.Settings defaults = ClientFontServices.Settings.defaults();
+        ClientFontServices owner = new ClientFontServices(
+                PresentationEpochScenario.class.getClassLoader(), 1,
+                new ClientFontServices.Settings(defaults.cpu, GlGlyphAtlas.Mode.TEXTURE_2D,
+                        new GlGlyphAtlas.Budget(256, 1, 1, 8, 8, 256L * 256 * 4),
+                        new GlGlyphAtlas.UploadBudget(1024 * 1024, 1000000000, 8), 64, 8),
+                IsolatedFontEngine.shared(), new Lwjgl3GlApi(), GlProgramProvider.NONE);
+        onClose(() -> close(owner));
+        GlPaintPlanRenderer a = owner.createPlanRenderer(), b = owner.createPlanRenderer();
+        PaintPlan pa = text(owner, "A", 4), pb = text(owner, "😀", 94);
+        if (glyphs(pa).size() != 1 || glyphs(pb).size() != 1)
+            throw new AssertionError("紧预算夹具须各含一个实际字形");
+        GlyphKey ka = GlyphKey.of(glyphs(pa).get(0)), kb = GlyphKey.of(glyphs(pb).get(0));
+        owner.rasterizer().request(ka);
+        owner.rasterizer().request(kb);
+        long deadline = System.nanoTime() + 10000000000L;
+        while (owner.rasterizer().peek(ka) == null || owner.rasterizer().peek(kb) == null) {
+            owner.pumpReady();
+            if (System.nanoTime() > deadline) throw new AssertionError("紧预算CPU字形未就绪");
+            Thread.sleep(1);
+        }
+        club.heiqi.uilib.ui.scene.text.font.nativefont.GlyphBitmap mono = owner.rasterizer().peek(ka),
+                color = owner.rasterizer().peek(kb);
+        if (mono.color || !color.color || mono.width + 2 > 256 || mono.height + 2 > 256
+                || color.width + 2 > 256 || color.height + 2 > 256)
+            throw new AssertionError("mono/color须已CPUready且均可独立装入单页");
+        long rasterized = owner.rasterizer().stats().rasterized;
+        long firstResource = -1, firstGeneration = -1, firstUploads = -1, firstBytes = -1;
+        boolean stable = true;
+        boolean[] ready = new boolean[9];
+        long[] uploads = new long[9], evictions = new long[9];
+        for (int epoch = 0; epoch < 3; epoch++) {
+            owner.beginPresentation(epoch);
+            try {
+                for (int draw = 0; draw < 3; draw++) {
+                    // evict会保护任何纹理单元仍绑定的页，显式解绑才能命中真实预算压力。
+                    unbindGlyphPages();
+                    PaintPlan plan = draw == 1 ? pb : pa;
+                    int index = epoch * 3 + draw;
+                    try (GlPaintPlanRenderer.Prepared p = owner.prepare(draw == 1 ? b : a, plan, VIEW)) {
+                        GlGlyphAtlas.Resident r = p.resident(glyphs(plan).get(0));
+                        ready[index] = r != null;
+                        if (index == 0 && r != null) {
+                            firstResource = r.resource;
+                            firstGeneration = r.generation;
+                            firstUploads = owner.atlas().stats().uploadCalls;
+                            firstBytes = owner.atlas().stats().uploadedBytes;
+                        }
+                        if (draw != 1 && (r == null || r.resource != firstResource
+                                || r.generation != firstGeneration)) stable = false;
+                        if (p.demandCount() != 1) throw new AssertionError("短Frame重复准备累计需求");
+                        glClearColor(0, 0, 0, 0);
+                        glClear(GL_COLOR_BUFFER_BIT);
+                        p.render(FramebufferCoordinates.orthographic(W, H), H, false);
+                        boolean ink = false;
+                        int[] image = pixels();
+                        for (int i = 3; i < image.length; i += 4) if (image[i] != 0) ink = true;
+                        if (ink != ready[index]) throw new AssertionError("紧预算ready与真实像素不符");
+                    }
+                    uploads[index] = owner.atlas().stats().uploadCalls;
+                    evictions[index] = owner.atlas().stats().evictedGroups;
+                    if (owner.presentationStats().activePrepared != 0)
+                        throw new AssertionError("短Prepared未释放");
+                }
+            } finally {
+                owner.endPresentation();
+            }
+        }
+        System.out.println("tightVisibleGroups CPUready=mono+color maxGroups=1 ready="
+                + Arrays.toString(ready) + " uploads=" + Arrays.toString(uploads)
+                + " evictions=" + Arrays.toString(evictions));
+        for (int i = 0; i < ready.length; i++)
+            stable &= ready[i] == (i % 3 != 1) && uploads[i] == firstUploads && evictions[i] == 0;
+        if (!stable || owner.atlas().stats().uploadedBytes != firstBytes
+                || owner.atlas().stats().rejected == 0)
+            throw new AssertionError("超预算可见组反复淘汰/上传，B应留白且firstA持续ready");
+        owner.beginPresentation(3);
+        try {
+            unbindGlyphPages();
+            try (GlPaintPlanRenderer.Prepared p = owner.prepare(b, pb, VIEW)) {
+                GlGlyphAtlas.Resident r = p.resident(glyphs(pb).get(0));
+                if (r == null || !r.color || owner.atlas().stats().evictedGroups != 1
+                        || owner.atlas().stats().uploadCalls <= firstUploads)
+                    throw new AssertionError("下一epoch仅B需求未释放A并前进");
+                p.render(FramebufferCoordinates.orthographic(W, H), H, false);
+            }
+        } finally {
+            owner.endPresentation();
+        }
+        if (owner.rasterizer().stats().rasterized != rasterized || owner.atlas().stats().groups != 1)
+            throw new AssertionError("紧预算重复光栅或组数越界");
+        long beforeStandalone = owner.atlas().stats().evictedGroups;
+        PaintPlan[] standalone = {pa, pb};
+        for (PaintPlan plan : standalone) {
+            unbindGlyphPages();
+            try (GlPaintPlanRenderer.Prepared p = a.prepare(plan, VIEW, owner.settings().upload)) {
+                if (p.resident(glyphs(plan).get(0)) == null)
+                    throw new AssertionError("standalone错误保留上个Frame的组保护");
+            }
+        }
+        if (owner.atlas().stats().evictedGroups != beforeStandalone + standalone.length)
+            throw new AssertionError("standalone未按当前需求释放旧组");
+        System.out.println("tightVisibleGroups firstAStable=true budgetBBlank=true nextEpochBReady=true"
+                + " releasedA=true standaloneReclaims=true nativeRasterized=" + rasterized);
+    }
+
+    private static void unbindGlyphPages() {
+        int previous = glGetInteger(GL_ACTIVE_TEXTURE);
+        int units = glGetInteger(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+        try {
+            for (int unit = 0; unit < units; unit++) {
+                glActiveTexture(GL_TEXTURE0 + unit);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+            }
+        } finally {
+            glActiveTexture(previous);
+        }
+    }
+
     private static boolean unpack(int name) {
         return name == GL_UNPACK_ALIGNMENT || name == GL_UNPACK_ROW_LENGTH
                 || name == GL_UNPACK_IMAGE_HEIGHT || name == GL_UNPACK_SKIP_PIXELS
@@ -502,6 +624,7 @@ public final class PresentationEpochScenario extends TestApplication {
             glViewport(0, 0, W, H);
             glDisable(GL_DITHER);
             glDisable(GL_FRAMEBUFFER_SRGB);
+            scenario("紧预算可见组", this::tightVisibleGroups);
             scenario("热字形多consumer", this::warmConsumers);
             scenario("冷启动与取消", this::coldAndCancellation);
             scenario("多consumer共享预算", this::sharedBudget);
