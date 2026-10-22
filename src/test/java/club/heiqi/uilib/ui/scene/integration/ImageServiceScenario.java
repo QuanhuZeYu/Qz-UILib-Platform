@@ -43,7 +43,8 @@ public final class ImageServiceScenario extends TestApplication {
             retry = new AtomicInteger(),
             timeout = new AtomicInteger();
     private final CountDownLatch lateStarted = new CountDownLatch(1),
-            lateRelease = new CountDownLatch(1);
+            lateRelease = new CountDownLatch(1),
+            timeoutRelease = new CountDownLatch(1);
 
     /** 普通容器扩展的真实绘制调用计数，捕获沿生产管线而非测试回放。 */
     private static final class CaptureProbe implements club.heiqi.uilib.ui.scene.control.SceneControl {
@@ -193,9 +194,8 @@ public final class ImageServiceScenario extends TestApplication {
                 exchange -> {
                     timeout.incrementAndGet();
                     try {
-                        Thread.sleep(650);
-                        exchange.sendResponseHeaders(200, png.length);
-                        exchange.getResponseBody().write(png);
+                        // 客户端完成两次真实超时后才释放，故障不依赖服务端睡眠时长。
+                        timeoutRelease.await();
                     } catch (Exception ignored) {
                     } finally {
                         exchange.close();
@@ -219,6 +219,7 @@ public final class ImageServiceScenario extends TestApplication {
         onClose(
                 () -> {
                     lateRelease.countDown();
+                    timeoutRelease.countDown();
                     server.stop(0);
                     http.shutdownNow();
                     require(http.awaitTermination(3000, TimeUnit.MILLISECONDS), "HTTP fixture未结束");
@@ -226,12 +227,14 @@ public final class ImageServiceScenario extends TestApplication {
     }
 
     private SharedImageService service() {
+        // 成功共享沿生产默认预算；短超时只用于故障场景，避免合法重试被误判为去重失败。
+        return service(JavaImageLoader.Budget.defaults());
+    }
+
+    private SharedImageService service(JavaImageLoader.Budget budget) {
         return own(
                 new SharedImageService(
-                        new JavaImageLoader(
-                                id -> new ByteArrayInputStream(png),
-                                new JavaImageLoader.Budget(
-                                        1024 * 1024, 1024 * 1024, 150, 150, 350)),
+                        new JavaImageLoader(id -> new ByteArrayInputStream(png), budget),
                         new SharedImageService.Budget(2, 8, 16, 8, 2 * 1024 * 1024)));
     }
 
@@ -365,7 +368,8 @@ public final class ImageServiceScenario extends TestApplication {
                                     && result.content.height == 60,
                             "HTTP未解码");
                     require((result.content.pixels()[3] & 255) == 128, "透明RGBA丢失");
-                    require(state(b).content == result.content && hits.get() == 1, "相同资源没有共享");
+                    require(state(b).content == result.content, "相同资源没有共享内容");
+                    require(hits.get() == 1, "共享首次加载的HTTP请求次数错误: " + hits.get());
                     domain.execute(a::close);
                     s.reload(source);
                     require(
@@ -381,12 +385,19 @@ public final class ImageServiceScenario extends TestApplication {
                                     .stage
                                     .equals("http"),
                             "HTTP失败缺stage");
-                    ImageState result = ready(s, lease(s, ImageSource.http(base + "/timeout")));
-                    require(
-                            result.status == ImageState.Status.FAILED && timeout.get() == 2,
-                            "timeout或一次重试预算错误");
-                    for (int i = 0; i < 8; i++) s.drain();
-                    require(timeout.get() == 2, "失败每帧重发");
+                    SharedImageService timeoutService = service(new JavaImageLoader.Budget(
+                            1024 * 1024, 1024 * 1024, 150, 150, 350));
+                    try {
+                        ImageState result = ready(timeoutService,
+                                lease(timeoutService, ImageSource.http(base + "/timeout")));
+                        require(
+                                result.status == ImageState.Status.FAILED && timeout.get() == 2,
+                                "timeout或一次重试预算错误: " + timeout.get());
+                        for (int i = 0; i < 8; i++) timeoutService.drain();
+                        require(timeout.get() == 2, "失败每帧重发");
+                    } finally {
+                        timeoutRelease.countDown();
+                    }
                     require(
                             ready(s, lease(s, ImageSource.http(base + "/retry"))).status
                                             == ImageState.Status.READY
