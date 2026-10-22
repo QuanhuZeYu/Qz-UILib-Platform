@@ -36,10 +36,12 @@ public final class FontPlanSampling {
         int[] sizes = policy.sizes();
         int maximum = sizes[sizes.length - 1];
         FontProjection projection = context.projection;
-        float[] m = projection.mvp();
+        // 同一command逐角复用clip缓冲，不再次投影已得到的角点。
+        double[] q = new double[4];
         // 平行投影在整个logical x/y平面有同一Jacobian，GUI不必逐glyph取四角。
-        if (m[3] == 0 && m[7] == 0) {
-            double density = density(projection, command.box.x, command.box.y);
+        if (projection.parallelXY()) {
+            projection.fillClip(command.box.x, command.box.y, 0, q);
+            double density = density(projection, q);
             return selected(policy, density, em, maximum, context.revision);
         }
         double best = 0;
@@ -63,7 +65,7 @@ public final class FontPlanSampling {
                 for (int corner = 0; corner < 4; corner++) {
                     double x = (corner & 1) == 0 ? left : right,
                             y = (corner & 2) == 0 ? top : bottom;
-                    double[] q = projection.clipAt(x, y, 0);
+                    projection.fillClip(x, y, 0, q);
                     double w = q[3], near = q[2] + w;
                     if (!Double.isFinite(w) || !Double.isFinite(near))
                         return capped(maximum, em, context.revision);
@@ -72,7 +74,7 @@ public final class FontPlanSampling {
                     minNear = Math.min(minNear, near);
                     maxNear = Math.max(maxNear, near);
                     if (w > 1e-9) {
-                        double d = density(projection, x, y);
+                        double d = projection.densityClip(q[0], q[1], w);
                         if (!Double.isFinite(d)) return capped(maximum, em, context.revision);
                         best = Math.max(best, d);
                     }
@@ -84,14 +86,12 @@ public final class FontPlanSampling {
         return selected(policy, best, em, maximum, context.revision);
     }
 
-    private static double density(FontProjection projection, double x, double y) {
-        try {
-            return projection.pixelsPerUnitAt(x, y, 0);
-        } catch (IllegalArgumentException nonSampleable) {
-            // 完全behind使用逻辑档；数值退化/溢出保守封顶，不能因为诊断而丢可见墨迹。
-            double w = projection.clipAt(x, y, 0)[3];
-            return Double.isFinite(w) && w <= 0 ? 0 : Double.POSITIVE_INFINITY;
-        }
+    private static double density(FontProjection projection, double[] q) {
+        double density = projection.densityClip(q[0], q[1], q[3]);
+        if (Double.isFinite(density)) return density;
+        // 保留原失败语义：完全behind使用逻辑档，正tiny-w及数值退化/溢出保守封顶。
+        double w = q[3];
+        return Double.isFinite(w) && w <= 0 ? 0 : Double.POSITIVE_INFINITY;
     }
 
     private static RasterSampling selected(

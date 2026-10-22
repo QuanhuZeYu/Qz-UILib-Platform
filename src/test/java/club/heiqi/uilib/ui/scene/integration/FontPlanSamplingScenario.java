@@ -84,6 +84,8 @@ public final class FontPlanSamplingScenario extends TestApplication {
 
     @Override
     protected void runTests() throws Exception {
+        scenario("齐次裁剪边界与旋转scissor",
+                club.heiqi.uilib.host.client.gl.HomogeneousVisibilityScenario::verify);
         String[] args = arguments();
         String font =
                 args.length == 0

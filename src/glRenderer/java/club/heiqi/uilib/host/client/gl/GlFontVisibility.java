@@ -52,23 +52,63 @@ final class GlFontVisibility {
         polygon.add(context.projection.clipAt(l, b, 0));
         return visible(polygon, context);
     }
+    private static final int REJECTED = -1, INSIDE = 0, CLIP_REQUIRED = 1;
+
     private static boolean visible(List<double[]> polygon, FontRenderContext context) {
-        int[] viewport = context.projection.viewport(), scissor = context.scissor();
-        double[] screenLimits = {
+        int[] viewport = null, scissor = null;
+        double[] limits = null;
+        int planes = context.scissorEnabled ? 10 : 6;
+        if (context.scissorEnabled) {
+            viewport = context.projection.viewport();
+            scissor = context.scissor();
+            limits = screenLimits(viewport, scissor);
+        }
+        int classification = classify(polygon, planes, limits);
+        if (classification == REJECTED) return false;
+        if (classification == CLIP_REQUIRED) polygon = clipped(polygon, planes, limits);
+        if (polygon.isEmpty()) return false;
+        if (viewport == null) viewport = context.projection.viewport();
+        return projectedBoundsVisible(polygon, viewport, scissor);
+    }
+
+    private static double[] screenLimits(int[] viewport, int[] scissor) {
+        return new double[] {
             2.0 * (scissor[0] - viewport[0]) / viewport[2] - 1,
             2.0 * ((long) scissor[0] + scissor[2] - viewport[0]) / viewport[2] - 1,
             2.0 * (scissor[1] - viewport[1]) / viewport[3] - 1,
             2.0 * ((long) scissor[1] + scissor[3] - viewport[1]) / viewport[3] - 1
         };
+    }
+
+    /** 只用原齐次平面的严格外侧判定；边界不加epsilon，非有限值仍交原精确路径。 */
+    private static int classify(List<double[]> polygon, int planes, double[] limits) {
+        int any = 0, common = (1 << planes) - 1;
+        boolean positiveW = true;
+        for (double[] point : polygon) {
+            for (double value : point) if (!Double.isFinite(value)) return CLIP_REQUIRED;
+            positiveW &= point[3] > 0;
+            int code = 0;
+            for (int plane = 0; plane < planes; plane++) {
+                double d = distance(point, plane, limits);
+                if (!Double.isFinite(d)) return CLIP_REQUIRED;
+                if (d < 0) code |= 1 << plane;
+            }
+            any |= code;
+            common &= code;
+        }
+        if (common != 0) return REJECTED;
+        // 全内仅跳过裁剪；仍须投影bbox检查退化。非正w保留原路径的保守可见语义。
+        return any == 0 && positiveW ? INSIDE : CLIP_REQUIRED;
+    }
+
+    private static List<double[]> clipped(List<double[]> polygon, int planes, double[] limits) {
         // scissor亦以齐次平面裁多边形，避免旋转quad AABB与小scissor交但实际全在外。
-        for (int plane = 0;
-                plane < (context.scissorEnabled ? 10 : 6) && !polygon.isEmpty();
-                plane++) {
+        for (int plane = 0; plane < planes && !polygon.isEmpty(); plane++) {
             List<double[]> out = new ArrayList<double[]>();
             double[] previous = polygon.get(polygon.size() - 1);
-            double pd = distance(previous, plane, screenLimits);
+            double pd = distance(previous, plane, limits);
             for (double[] current : polygon) {
-                double cd = distance(current, plane, screenLimits);
+                double cd = distance(current, plane, limits);
                 if ((pd >= 0) != (cd >= 0)) {
                     double f = pd / (pd - cd);
                     double[] q = new double[4];
@@ -81,8 +121,10 @@ final class GlFontVisibility {
             }
             polygon = out;
         }
-        if (polygon.isEmpty()) return false;
-        int[] v = context.projection.viewport();
+        return polygon;
+    }
+
+    private static boolean projectedBoundsVisible(List<double[]> polygon, int[] v, int[] scissor) {
         double minX = Double.POSITIVE_INFINITY,
                 minY = minX,
                 maxX = Double.NEGATIVE_INFINITY,
@@ -97,12 +139,11 @@ final class GlFontVisibility {
             maxY = Math.max(maxY, sy);
         }
         if (maxX <= minX || maxY <= minY) return false;
-        if (context.scissorEnabled) {
-            int[] s = context.scissor();
-            return minX < (long) s[0] + s[2]
-                    && maxX > s[0]
-                    && minY < (long) s[1] + s[3]
-                    && maxY > s[1];
+        if (scissor != null) {
+            return minX < (long) scissor[0] + scissor[2]
+                    && maxX > scissor[0]
+                    && minY < (long) scissor[1] + scissor[3]
+                    && maxY > scissor[1];
         }
         return true;
     }
