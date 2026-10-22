@@ -171,6 +171,10 @@ public final class DesktopSettingsWorkspaceVerification extends TestApplication 
     }
 
     private static void escape(DesktopWindow w, DesktopTestInput input) {
+        // 此矩阵测弹层返回；先离开目录行，避免真实Tooltip按合同优先消费ESC。
+        input.point(0, 0);
+        DesktopTestFrames.inputFrame(w);
+        finitePresentations(w);
         input.key.invoke(w.handle(), GLFW_KEY_ESCAPE, 0, GLFW_PRESS, 0);
         input.key.invoke(w.handle(), GLFW_KEY_ESCAPE, 0, GLFW_RELEASE, 0);
         finitePresentations(w);
