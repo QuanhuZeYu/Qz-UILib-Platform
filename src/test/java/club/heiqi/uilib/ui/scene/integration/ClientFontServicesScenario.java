@@ -367,6 +367,7 @@ public final class ClientFontServicesScenario extends TestApplication {
             System.out.println("SHARED_BATCH_POLICY_PASS defaultThenGroupedThenOrdered=true preparedSnapshot=true nonTextUI=true");
         } finally {
             owner.allowBatchReordering(false);
+            renderer.allowBatchReordering(false);
             glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);
             if(scissor)glEnable(GL_SCISSOR_TEST);else glDisable(GL_SCISSOR_TEST);
         }
