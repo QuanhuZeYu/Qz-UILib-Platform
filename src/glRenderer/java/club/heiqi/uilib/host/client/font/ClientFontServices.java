@@ -220,7 +220,6 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         if (preparedCount != 0) throw new IllegalStateException("共享atlas只允许即时短Prepared");
         boolean automatic = !presenting && !presentationBoundaryRequired;
         if (!presenting) beginPresentation(--autoEpoch);
-        long start = System.nanoTime();
         try {
             // owner保留整帧并集负责预算/取消；短Prepared只准备当前consumer，避免逐行扫描累计前缀。
             Set<GlyphKey> admitted = admitDemand(
@@ -229,7 +228,9 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
                             : renderer.collectVisibleDemand(plan, context));
             GlGlyphAtlas sharedAtlas = atlas();
             GlGlyphAtlas.Stats before = sharedAtlas.stats();
-            long availableNanos = Math.max(0, remainingNanos - (System.nanoTime() - start));
+            // 需求收集不扣上传限时；大计划若先耗尽额度，新增字形会每帧都无法上传。
+            long start = System.nanoTime();
+            long availableNanos = remainingNanos;
             try {
                 GlGlyphAtlas.UploadBudget budget =
                         new GlGlyphAtlas.UploadBudget(
