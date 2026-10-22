@@ -10,7 +10,8 @@ import club.heiqi.uilib.host.client.font.context.FontRenderContext;
 final class GlFontWorldState implements AutoCloseable {
     private final GlApi gl;
     final FontRenderContext context;
-    private final FontRenderContext.RasterState entryRaster;
+    // 与同一短范围的 Scope 共用 actual 进入态；重叠的 blend/cull 只在此处恢复。
+    final FontRenderContext.RasterState entryRaster;
     private final int fbo, depthFunction, unit;
     private final boolean depthWrite;
     private final int[] viewport = new int[4];

@@ -249,11 +249,16 @@ public final class GlQuadRenderer implements AutoCloseable {
      * 与 pass 由宿主固定，本范围仅指定 depth enable。
      */
     public Scope begin(float[] mvp, int framebufferHeight, boolean depthEnabled) {
+        return begin(mvp, framebufferHeight, depthEnabled, null);
+    }
+
+    private Scope begin(float[] mvp, int framebufferHeight, boolean depthEnabled,
+            FontRenderContext.RasterState worldEntryRaster) {
         if (closed || active != null) throw new IllegalStateException("backend 已关闭或范围重入");
         if (mvp == null || mvp.length != 16 || framebufferHeight < 0)
             throw new IllegalArgumentException("无效宿主范围");
         for (float f : mvp) if (!Float.isFinite(f)) throw new IllegalArgumentException("无效 MVP");
-        Scope scope = new Scope(mvp.clone(), framebufferHeight);
+        Scope scope = new Scope(mvp.clone(), framebufferHeight, worldEntryRaster);
         active = scope;
         try {
             scope.selectTextureUnit();
@@ -309,7 +314,7 @@ public final class GlQuadRenderer implements AutoCloseable {
         Scope scope = null;
         try {
             if (programProvider.preview(context)) {
-                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight);
+                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight, world.entryRaster);
                 active = scope;
                 scope.world = world;
                 scope.iris = programProvider.open(context);
@@ -331,11 +336,12 @@ public final class GlQuadRenderer implements AutoCloseable {
                         begin(
                                 context.projection.mvp(),
                                 context.sourceFramebufferHeight,
-                                context.depthTest);
+                                context.depthTest,
+                                world.entryRaster);
                 scope.world = world;
             } else {
                 // typed world 直接应用捕获状态，避免先建立 UI blend/cull 与通用 EBO 后再覆盖。
-                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight);
+                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight, world.entryRaster);
                 active = scope;
                 scope.world = world;
                 scope.selectTextureUnit();
@@ -367,15 +373,9 @@ public final class GlQuadRenderer implements AutoCloseable {
                 oldVao = gl.glGetInteger(GL_VERTEX_ARRAY_BINDING),
                 oldVbo = gl.glGetInteger(GL_ARRAY_BUFFER_BINDING),
                 unit = gl.glGetInteger(GL_ACTIVE_TEXTURE);
-        private final int eqRgb = gl.glGetInteger(GL_BLEND_EQUATION_RGB),
-                eqAlpha = gl.glGetInteger(GL_BLEND_EQUATION_ALPHA),
-                srcRgb = gl.glGetInteger(GL_BLEND_SRC_RGB),
-                dstRgb = gl.glGetInteger(GL_BLEND_DST_RGB),
-                srcAlpha = gl.glGetInteger(GL_BLEND_SRC_ALPHA),
-                dstAlpha = gl.glGetInteger(GL_BLEND_DST_ALPHA);
-        private final boolean blend = gl.glIsEnabled(GL_BLEND),
-                scissor = gl.glIsEnabled(GL_SCISSOR_TEST),
-                cull = gl.glIsEnabled(GL_CULL_FACE),
+        private final int eqRgb, eqAlpha, srcRgb, dstRgb, srcAlpha, dstAlpha;
+        private final boolean blend, cull, restoreBlendCull;
+        private final boolean scissor = gl.glIsEnabled(GL_SCISSOR_TEST),
                 depth = gl.glIsEnabled(GL_DEPTH_TEST);
         private final int[] box = new int[4];
         private final int texture2d, textureArray, sampler;
@@ -387,9 +387,19 @@ public final class GlQuadRenderer implements AutoCloseable {
         private boolean done;
         private int currentProgram = -1, bound2d, boundArray;
 
-        private Scope(float[] mvp, int height) {
+        private Scope(float[] mvp, int height, FontRenderContext.RasterState worldEntryRaster) {
             this.mvp = mvp;
             this.height = height;
+            // preview 只读；world 在它之前捕获的同一 actual 进入态拥有 blend/cull 的恢复。
+            restoreBlendCull = worldEntryRaster == null;
+            eqRgb = restoreBlendCull ? gl.glGetInteger(GL_BLEND_EQUATION_RGB) : worldEntryRaster.blendEquationRgb;
+            eqAlpha = restoreBlendCull ? gl.glGetInteger(GL_BLEND_EQUATION_ALPHA) : worldEntryRaster.blendEquationAlpha;
+            srcRgb = restoreBlendCull ? gl.glGetInteger(GL_BLEND_SRC_RGB) : worldEntryRaster.blendSrcRgb;
+            dstRgb = restoreBlendCull ? gl.glGetInteger(GL_BLEND_DST_RGB) : worldEntryRaster.blendDstRgb;
+            srcAlpha = restoreBlendCull ? gl.glGetInteger(GL_BLEND_SRC_ALPHA) : worldEntryRaster.blendSrcAlpha;
+            dstAlpha = restoreBlendCull ? gl.glGetInteger(GL_BLEND_DST_ALPHA) : worldEntryRaster.blendDstAlpha;
+            blend = restoreBlendCull ? gl.glIsEnabled(GL_BLEND) : worldEntryRaster.blendEnabled;
+            cull = restoreBlendCull ? gl.glIsEnabled(GL_CULL_FACE) : worldEntryRaster.cullEnabled;
             gl.glGetIntegerv(GL_SCISSOR_BOX, box);
             gl.glActiveTexture(GL_TEXTURE0);
             texture2d = gl.glGetInteger(GL_TEXTURE_BINDING_2D);
@@ -518,12 +528,14 @@ public final class GlQuadRenderer implements AutoCloseable {
                 gl.glBindTexture(GL_TEXTURE_2D, texture2d);
                 gl.glBindTexture(GL_TEXTURE_2D_ARRAY, textureArray);
                 gl.glActiveTexture(unit);
-                gl.glBlendEquationSeparate(eqRgb, eqAlpha);
-                gl.glBlendFuncSeparate(srcRgb, dstRgb, srcAlpha, dstAlpha);
-                enable(GL_BLEND, blend);
+                if (restoreBlendCull) {
+                    gl.glBlendEquationSeparate(eqRgb, eqAlpha);
+                    gl.glBlendFuncSeparate(srcRgb, dstRgb, srcAlpha, dstAlpha);
+                    enable(GL_BLEND, blend);
+                    enable(GL_CULL_FACE, cull);
+                }
                 gl.glScissor(box[0], box[1], box[2], box[3]);
                 enable(GL_SCISSOR_TEST, scissor);
-                enable(GL_CULL_FACE, cull);
                 enable(GL_DEPTH_TEST, depth);
                 if (compatibility) enable(GL_ALPHA_TEST, alphaTest);
                 if (samplerObjects) gl.glBindSampler(0, sampler);

@@ -102,7 +102,8 @@ public final class PreparedVisibilityScenario {
         verifyBounds(owner, text, width, height, identity);
         require(listenerCount(fonts) == listeners, "预算/独立renderer场景泄漏字体订阅");
         System.out.println("preparedVisibility memo equalContexts/newCommands/epochs=true sourceChanges=true reload/oldPrepared=true"
-                + " lruEntries=256 glyphFacts=8192 oversizedUncached=true closeUnsubscribed=true");
+                + " lruEntries=256 glyphFacts=8192 oversizedUncached=true closeUnsubscribed=true"
+                + " uniqueDemand repeated/limits/order/counters/replay=true");
     }
 
     private static void verifySources(GlPaintPlanRenderer renderer, TextLayout text, FontRenderContext shown,
@@ -202,16 +203,46 @@ public final class PreparedVisibilityScenario {
             expectChecks(renderer, anchored(oversized, 0), shown, 1, "超大单项被缓存");
             expectChecks(renderer, anchored(repeated, 0), shown, 0, "超大单项污染已有memo");
         } finally { owner.releasePlanRenderer(renderer); }
-        // 小需求预算仍逐次重放原顺序/overflow，不从memo直接返回旧demand集合。
-        try (GlPaintPlanRenderer limited = new GlPaintPlanRenderer(owner.gl(), owner.rasterizer(), owner.atlas(), 32,
-                1, GlProgramProvider.NONE, null, null, fonts)) {
-            TextLayout pair = owner.layout("MW", one.style, width, TextPolicy.SINGLE_LINE);
-            Set<GlyphKey> first = limited.collectVisibleDemand(plain(pair, width, height), shown);
-            long overflow = limited.demandOverflow(), before = limited.visibilityChecks;
-            Set<GlyphKey> second = limited.collectVisibleDemand(plain(pair, width, height), shown);
-            require(first.size() == 1 && new ArrayList<>(first).equals(new ArrayList<>(second)) && overflow > 0
-                    && limited.demandOverflow() == overflow * 2 && limited.visibilityChecks == before,
-                    "memo改变需求预算、顺序或demandOverflow计数");
+        // 同key的不同glyph身份及大量重复行，需求仍按首次出现排序；拒绝仍逐occurrence累计。
+        TextLayout sequence = owner.layout("WMMWIM", one.style, width, TextPolicy.SINGLE_LINE);
+        List<TextLayout.Glyph> glyphs = sequence.lines().get(0).glyphs();
+        require(glyphs.size() == 6, "重复需求探针字形数无效");
+        List<GlyphKey> order = java.util.Arrays.asList(GlyphKey.of(glyphs.get(0)), GlyphKey.of(glyphs.get(1)), GlyphKey.of(glyphs.get(4)));
+        require(new java.util.HashSet<>(order).size() == 3, "重复需求探针没有三个不同key");
+        int repetitions = 257;
+        TextLayout repeated = new TextLayout(sequence.width, sequence.height, sequence.style,
+                Collections.nCopies(repetitions, sequence.lines().get(0)));
+        LayoutBox box = new LayoutBox(20, 50, width, height), clip = new LayoutBox(0, 0, width, height);
+        PaintPlan single = plain(repeated, width, height);
+        PaintPlan multiple = new PaintPlanBuilder().add(PaintCommand.text(box, clip, repeated))
+                .add(PaintCommand.text(box, clip, repeated)).build();
+        for (int limit : new int[] {1, 2, 3, 4}) {
+            try (GlPaintPlanRenderer limited = new GlPaintPlanRenderer(owner.gl(), owner.rasterizer(), owner.atlas(), 32,
+                    limit, GlProgramProvider.NONE, null, null, fonts)) {
+                for (PaintPlan candidate : new PaintPlan[] {single, multiple}) {
+                    List<GlyphKey> expected = order.subList(0, Math.min(limit, order.size()));
+                    long rejected = (limit == 1 ? 4L * repetitions : limit == 2 ? repetitions : 0) * candidate.commands().size();
+                    long overflow = limited.demandOverflow();
+                    Set<GlyphKey> first = limited.collectVisibleDemand(candidate, shown);
+                    long before = limited.visibilityChecks;
+                    require(expected.equals(new ArrayList<>(first)) && limited.demandOverflow() - overflow == rejected,
+                            "唯一需求改变首次出现顺序或逐occurrence拒绝计数");
+                    boolean immutable = false;
+                    try { first.clear(); } catch (UnsupportedOperationException expectedFailure) { immutable = true; }
+                    require(immutable, "需求快照可被调用方修改");
+                    Set<GlyphKey> second = limited.collectVisibleDemand(candidate, shown);
+                    require(expected.equals(new ArrayList<>(second)) && limited.visibilityChecks == before
+                            && limited.demandOverflow() - overflow == rejected * 2, "memo命中改变需求或拒绝计数");
+                    try (GlPaintPlanRenderer.Prepared prepared = limited.prepareDemandContext(candidate, shown,
+                            new GlGlyphAtlas.UploadBudget(0, 0, 0), second, null)) {
+                        require(prepared.demandCount() == expected.size(), "唯一需求分层改变已接纳集合");
+                        long emitted = limited.drawnGlyphs() + limited.blankGlyphs();
+                        prepared.render(shown);
+                        require(limited.drawnGlyphs() + limited.blankGlyphs() - emitted
+                                == (long) glyphs.size() * repetitions * candidate.commands().size(), "唯一需求去掉了回放occurrence");
+                    }
+                }
+            }
         }
         try (GlPaintPlanRenderer standalone = new GlPaintPlanRenderer(owner.gl(), owner.rasterizer(), owner.atlas(), 32, 32, GlProgramProvider.NONE)) {
             expectChecks(standalone, plain(one, width, height), shown, 1, "旧构造不可用");

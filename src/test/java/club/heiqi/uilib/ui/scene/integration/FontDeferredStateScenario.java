@@ -8,6 +8,8 @@ import club.heiqi.uilib.host.client.gl.Lwjgl3GlApi;
 
 import java.util.Arrays;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
@@ -298,6 +300,56 @@ public final class FontDeferredStateScenario extends TestApplication {
         }
     }
 
+    /** 只计数并转发真实 GL；异常在真实调用完成后单次抛出，不模拟驱动状态。 */
+    private static final class GlCalls implements InvocationHandler {
+        private static final int[] QUERIES = {GL14.GL_BLEND_SRC_RGB, GL14.GL_BLEND_DST_RGB,
+                GL14.GL_BLEND_SRC_ALPHA, GL14.GL_BLEND_DST_ALPHA, GL20.GL_BLEND_EQUATION_RGB,
+                GL20.GL_BLEND_EQUATION_ALPHA, GL11.GL_BLEND, GL11.GL_CULL_FACE};
+        private final GlApi actual = new Lwjgl3GlApi();
+        final GlApi gl = (GlApi) Proxy.newProxyInstance(GlApi.class.getClassLoader(),
+                new Class<?>[] {GlApi.class}, this);
+        final int[] queries = new int[QUERIES.length], writes = new int[4];
+        int uniforms;
+        String failMethod;
+        int failName;
+
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            String name = method.getName();
+            if (name.equals("glGetUniformLocation")) uniforms++;
+            if (name.equals("glGetInteger") || name.equals("glIsEnabled"))
+                for (int i = 0; i < QUERIES.length; i++)
+                    if ((Integer) args[0] == QUERIES[i]) queries[i]++;
+            if (name.equals("glBlendEquationSeparate")) writes[0]++;
+            if (name.equals("glBlendFuncSeparate")) writes[1]++;
+            if (name.equals("glEnable") || name.equals("glDisable")) {
+                if ((Integer) args[0] == GL11.GL_BLEND) writes[2]++;
+                if ((Integer) args[0] == GL11.GL_CULL_FACE) writes[3]++;
+            }
+            Object result;
+            try { result = method.invoke(actual, args); }
+            catch (InvocationTargetException failure) { throw failure.getCause(); }
+            if (name.equals(failMethod) && (failName == 0 || (Integer) args[0] == failName)) {
+                failMethod = null;
+                throw new IllegalStateException("真实GL异常探针:" + name);
+            }
+            return result;
+        }
+
+        void reset() { Arrays.fill(queries, 0); Arrays.fill(writes, 0); }
+
+        void captured(boolean ui) {
+            for (int count : queries) require(count == 1,
+                    (ui ? "UI" : "world") + " 重复或遗漏 actual blend/cull 捕获: " + Arrays.toString(queries));
+        }
+
+        void verified(boolean ui) {
+            captured(ui);
+            // 一次建立绘制态、一次恢复；旧 world 在 Scope.close 和 world.close 重复恢复。
+            for (int count : writes) require(count == 2,
+                    "blend/cull 恢复 owner 重复或遗漏: " + Arrays.toString(writes));
+        }
+    }
+
     private static final int WIDTH = 480, HEIGHT = 96;
 
     private static int[] pixels(int fbo) {
@@ -349,6 +401,11 @@ public final class FontDeferredStateScenario extends TestApplication {
     private static int[] render(
             ClientFontServices owner, GlPaintPlanRenderer renderer, PaintPlan plan,
             FontRenderContext context, boolean opaque, boolean ui) throws Exception {
+        return render(owner, renderer, plan, context, opaque, ui, null);
+    }
+
+    private static int[] render(ClientFontServices owner, GlPaintPlanRenderer renderer, PaintPlan plan,
+            FontRenderContext context, boolean opaque, boolean ui, GlCalls calls) throws Exception {
         long end = System.nanoTime() + 20000000000L;
         int entryFramebuffer = ui ? context.drawFramebuffer : 0;
         int[] entryViewport = ui ? new int[] {0, 0, WIDTH, HEIGHT} : new int[] {2, 4, 30, 40};
@@ -370,8 +427,10 @@ public final class FontDeferredStateScenario extends TestApplication {
                     ? owner.prepare(renderer, plan, new LayoutBox(0, 0, WIDTH, HEIGHT))
                     : owner.prepare(renderer, plan, context)) {
                 ready = prepared.readyCount() == prepared.demandCount();
+                if (calls != null) calls.reset();
                 if (ui) prepared.render(context.projection.mvp(), HEIGHT, false);
                 else prepared.render(context);
+                if (calls != null) calls.verified(ui);
             } finally {
                 owner.endPresentation();
             }
@@ -412,7 +471,7 @@ public final class FontDeferredStateScenario extends TestApplication {
 
     /** 同一真实 renderer 交替消费 world/UI；位置复用不能冻结灯光、alpha、lightmap 或污染进入态。 */
     private static void uniformScopes(ClientFontServices owner, GlPaintPlanRenderer renderer,
-            FontRenderContext base, PaintPlan text, int[] textPixels, boolean compatibility) throws Exception {
+            FontRenderContext base, PaintPlan text, int[] textPixels, boolean compatibility, GlCalls calls) throws Exception {
         int sample = 3;
         for (int i = 7; i < textPixels.length; i += 4)
             if (textPixels[i] > textPixels[sample]) sample = i;
@@ -461,10 +520,10 @@ public final class FontDeferredStateScenario extends TestApplication {
             double[][] expected = {firstColor, secondColor, new double[4], secondColor, firstColor};
             int marker = ((HEIGHT - 1 - 2) * WIDTH + 2) * 4;
             for (int i = 0; i < contexts.length; i++) {
-                int[] world = render(owner, renderer, plan, contexts[i]);
+                int[] world = render(owner, renderer, plan, contexts[i], false, false, calls);
                 uniformPixel(world, marker, expected[i], 1);
                 uniformPixel(world, sample - 3, expected[i], coverage);
-                int[] ui = render(owner, renderer, plan, base, false, true);
+                int[] ui = render(owner, renderer, plan, base, false, true, calls);
                 uniformPixel(ui, marker, new double[] {128, 128, 128, 128}, 1);
                 uniformPixel(ui, sample - 3, new double[] {128, 128, 128, 128}, coverage);
                 require(GL11.glIsEnabled(GL11.GL_DEPTH_TEST) && !GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
@@ -490,6 +549,63 @@ public final class FontDeferredStateScenario extends TestApplication {
                 + owner.settings().mode);
     }
 
+    /** 同一真实 prepared 在构造、应用与上传失败后仍恢复任意 actual 进入态，并可再次回放。 */
+    private static void exceptionScopes(ClientFontServices owner, GlPaintPlanRenderer renderer,
+            FontRenderContext base, PaintPlan plan, int[] expected, GlCalls calls) throws Exception {
+        GlApi actual = new Lwjgl3GlApi();
+        LwjglFontContextCapture capture = new LwjglFontContextCapture(actual,
+                LwjglFontContextCapture.explicit(actual, base.state));
+        FontRenderContext legacy = new FontRenderContext(base.projection, base.drawFramebuffer,
+                base.sourceFramebufferHeight, base.depthTest, base.depthFunction, base.depthWrite,
+                base.scissorEnabled, base.scissor(), base.state, base.contextIdentity, base.revision, base.passKey);
+        for (FontRenderContext context : new FontRenderContext[] {base, legacy}) {
+            owner.beginPresentation(0);
+            try (GlPaintPlanRenderer.Prepared prepared = owner.prepare(renderer, plan, context)) {
+                require(prepared.readyCount() == prepared.demandCount(), "异常反例字形尚未热");
+                for (String method : new String[] {"glGetInteger", "glDepthMask", "glBufferSubData"}) {
+                    stateA(0);
+                    GL13.glActiveTexture(GL13.GL_TEXTURE3);
+                    calls.reset();
+                    calls.failMethod = method;
+                    calls.failName = method.equals("glGetInteger") ? GL30.GL_TEXTURE_BINDING_2D_ARRAY : 0;
+                    try {
+                        prepared.render(context);
+                        throw new AssertionError("异常探针未触发:" + method);
+                    } catch (IllegalStateException failure) {
+                        require(failure.getMessage().equals("真实GL异常探针:" + method), "丢失原始GL异常");
+                    } finally { calls.failMethod = null; }
+                    calls.captured(false);
+                    verifyA(capture.capture(HEIGHT, 1, 0), 0);
+                    require(GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE) == GL13.GL_TEXTURE3,
+                            "world 未挂 Scope 或回放异常时泄漏纹理单元");
+                }
+                GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, base.drawFramebuffer);
+                GL11.glDisable(GL11.GL_SCISSOR_TEST);
+                GL11.glColorMask(true, true, true, true);
+                GL11.glClearColor(0, 0, 0, 0);
+                GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
+                stateA(0);
+                prepared.render(context);
+                verifyA(capture.capture(HEIGHT, 1, 0), 0);
+                if (context.rasterState != null)
+                    require(Arrays.equals(expected, pixels(base.drawFramebuffer)), "异常后 typed world 像素未恢复");
+                calls.reset();
+                calls.failMethod = "glBufferSubData";
+                calls.failName = 0;
+                try {
+                    prepared.render(base.projection.mvp(), HEIGHT, false);
+                    throw new AssertionError("UI异常探针未触发");
+                } catch (IllegalStateException failure) {
+                    require(failure.getMessage().equals("真实GL异常探针:glBufferSubData"), "丢失UI原始异常");
+                } finally { calls.failMethod = null; }
+                calls.verified(true);
+                verifyA(capture.capture(HEIGHT, 1, 0), 0);
+            } finally { owner.endPresentation(); }
+        }
+        System.out.println("SCOPE_RASTER_REAL_GL queriesPerScope=" + Arrays.toString(calls.queries)
+                + " singleRestoreOwner=true constructorApplyUploadFailure=true actualEntryRestored=true");
+    }
+
     private void coverage(GlfwTestEnvironment environment, boolean compatibility) throws Exception {
         own(
                 environment.window(
@@ -498,15 +614,8 @@ public final class FontDeferredStateScenario extends TestApplication {
                         "standard-font-coverage",
                         compatibility ? Profile.COMPATIBILITY : Profile.CORE,
                         compatibility ? 3 : 2));
-        GlApi actual = new Lwjgl3GlApi();
-        int[] uniformQueries = {0};
-        GlApi gl = (GlApi) Proxy.newProxyInstance(
-                GlApi.class.getClassLoader(), new Class<?>[] {GlApi.class},
-                (proxy, method, args) -> {
-                    if (method.getName().equals("glGetUniformLocation")) uniformQueries[0]++;
-                    try { return method.invoke(actual, args); }
-                    catch (InvocationTargetException failure) { throw failure.getCause(); }
-                });
+        GlCalls calls = new GlCalls();
+        GlApi gl = calls.gl;
         ClientFontServices.Settings defaults = ClientFontServices.Settings.defaults();
         ClientFontServices.Settings settings = new ClientFontServices.Settings(
                 defaults.cpu, compatibility ? GlGlyphAtlas.Mode.TEXTURE_ARRAY : GlGlyphAtlas.Mode.TEXTURE_2D,
@@ -525,7 +634,7 @@ public final class FontDeferredStateScenario extends TestApplication {
                     require(owner.awaitRasterizerClose(10000), "worker关闭失败");
                 });
         GlPaintPlanRenderer renderer = owner.sharedPlanRenderer();
-        int resolvedUniforms = uniformQueries[0];
+        int resolvedUniforms = calls.uniforms;
         require(resolvedUniforms > 0, "真实 program 未解析 uniform");
         int texture = GL11.glGenTextures(), fbo = GL30.glGenFramebuffers();
         onClose(
@@ -678,8 +787,9 @@ public final class FontDeferredStateScenario extends TestApplication {
                     "半透明文字被双乘alpha或丢alpha");
         }
         require(maximum >= 127 && grayPixels(halfPixels) > 0, "半透明真实文字未绘制");
-        uniformScopes(owner, renderer, standard, half, halfPixels, compatibility);
-        require(uniformQueries[0] == resolvedUniforms, "重复 world/UI scope 重新查询 uniform 位置");
+        uniformScopes(owner, renderer, standard, half, halfPixels, compatibility, calls);
+        exceptionScopes(owner, renderer, standard, half, halfPixels, calls);
+        require(calls.uniforms == resolvedUniforms, "重复 world/UI scope 重新查询 uniform 位置");
         require(GL11.glGetError() == GL11.GL_NO_ERROR, "coverage GL错误");
         System.out.println(
                 profile

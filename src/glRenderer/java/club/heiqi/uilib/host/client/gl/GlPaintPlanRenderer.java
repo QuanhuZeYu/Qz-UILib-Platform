@@ -150,13 +150,24 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
     }
     private java.util.Set<GlyphKey> collectVisibleDemand(Preparation preparation) {
         pendingPreparation = preparation;
+        if (preparation.commands.size() == 1) {
+            CommandFacts facts = preparation.command(preparation.commands.get(0));
+            if (facts.visibleDemand.size() <= maxDemand) {
+                clippedGlyphs += facts.clipped;
+                return facts.visibleDemand;
+            }
+        }
         LinkedHashSet<GlyphKey> demand = new LinkedHashSet<>();
         for (PaintCommand command : preparation.commands) {
             CommandFacts facts = preparation.command(command);
             clippedGlyphs += facts.clipped;
-            for (GlyphKey key : facts.visibleKeys)
-                if (demand.size() < maxDemand || demand.contains(key)) demand.add(key);
-                else demandOverflow++;
+            if (facts.visibleDemand.size() <= maxDemand - demand.size()) demand.addAll(facts.visibleDemand);
+            else {
+                // 可能拒绝时仍逐occurrence计数，已接纳key的重复出现不算overflow。
+                for (GlyphKey key : facts.visibleKeys)
+                    if (demand.size() < maxDemand || demand.contains(key)) demand.add(key);
+                    else demandOverflow++;
+            }
         }
         return java.util.Collections.unmodifiableSet(demand);
     }
@@ -408,7 +419,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 for (PaintCommand command : commands) {
                     CommandFacts facts = command(command);
                     if (facts.visible.empty()) continue;
-                    for (GlyphKey key : facts.visibleKeys) if (remaining.remove(key)) layer.add(key);
+                    for (GlyphKey key : facts.visibleDemand) if (remaining.remove(key)) layer.add(key);
                 }
                 if (!layer.isEmpty()) result.add(layer);
             }
@@ -420,6 +431,8 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         final SceneClipRegion clip, visible;
         final java.util.Map<TextLayout.Glyph, GlyphKey> glyphs;
         final java.util.List<GlyphKey> visibleKeys;
+        // 唯一需求保持首次出现顺序；visibleKeys仍逐occurrence承担memo预算和拒绝计数。
+        private final java.util.Set<GlyphKey> visibleDemand;
         final long clipped;
         CommandFacts(Preparation preparation, PaintCommand command) {
             visible = command.effectiveClip().intersect(preparation.viewportClip);
@@ -455,6 +468,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             }
             this.glyphs = java.util.Collections.unmodifiableMap(glyphs);
             this.visibleKeys = java.util.Collections.unmodifiableList(visibleKeys);
+            this.visibleDemand = java.util.Collections.unmodifiableSet(new LinkedHashSet<>(visibleKeys));
             this.clipped = clipped;
         }
     }
