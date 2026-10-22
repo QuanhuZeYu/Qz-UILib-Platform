@@ -124,26 +124,31 @@ jobs:
         with:
           name: platform-release
           path: release-assets
+      - name: 检出本次工作流的发布工具与静态文案
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: |
+            tools/release.mjs
+            .changelogs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - name: 创建或更新同一 Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           VERSION: ${{ needs.build.outputs.version }}
-          COMMIT: ${{ needs.build.outputs.commit }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          node tools/release.mjs \
+          node .release-tools/tools/release.mjs \
             --repo "$GITHUB_REPOSITORY" \
             --tag "$TAG" \
             --version "$VERSION" \
             --title "Qz-UILib Platform $VERSION" \
             --asset "release-assets/qz-uilib-platform-$VERSION-maven.zip" \
-            --changelog ".changelogs/$TAG.md" \
-            --commit "$COMMIT" \
-            --run-url "$RUN_URL" \
-            --scope "Platform 完整 build：Java8/Java21 双目标适配、桌面发行、独立验证消费者；依赖同 tag Core Maven ZIP，Maven ZIP 根目录为 asia/quanhuzeyu/uilib。"
+            --changelog ".release-tools/.changelogs/$TAG.md"
       - name: 记录发布失败
         if: failure()
         shell: bash

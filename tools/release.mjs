@@ -33,9 +33,7 @@ const version = option('version');
 const title = option('title');
 const asset = option('asset');
 const changelog = option('changelog');
-const commit = option('commit');
-const runUrl = option('run-url');
-const scope = option('scope');
+
 
 const tagPattern = /^v?\d+\.\d+\.\d+(?:[.-](alpha|beta|rc)[.-]?\d+)?$/;
 const tagMatch = tagPattern.exec(tag);
@@ -45,22 +43,7 @@ if (!existsSync(asset)) fail('构建资产不存在：' + asset);
 if (!existsSync(changelog)) fail('静态说明不存在：' + changelog);
 
 const prerelease = Boolean(tagMatch[1]);
-const tick = String.fromCharCode(96);
-const releaseBody = [
-    readFileSync(changelog, 'utf8').trim(),
-    '',
-    '---',
-    '',
-    '## 构建证据',
-    '',
-    '- tag：' + tick + tag + tick,
-    '- 版本：' + tick + version + tick,
-    '- 提交：' + tick + commit + tick,
-    '- Actions 运行：' + runUrl,
-    '- 构建范围：' + scope,
-    '- 发布资产：' + tick + basename(asset) + tick + '（Maven 仓库布局，ZIP 根目录为本次发布的 Maven group 路径）',
-    ''
-].join('\n');
+const releaseBody = readFileSync(changelog, 'utf8').trim() + '\n';
 
 const bodyPath = join(tmpdir(), 'qz-uilib-release-' + process.pid + '.md');
 writeFileSync(bodyPath, releaseBody, 'utf8');
