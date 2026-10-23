@@ -9,6 +9,9 @@ import club.heiqi.uilib.host.client.gl.GlApi;
 import java.lang.reflect.Proxy;
 import java.lang.reflect.InvocationTargetException;
 import club.heiqi.uilib.host.client.gl.GlProgramProvider;
+import club.heiqi.uilib.host.client.gl.GlProgramScope;
+import club.heiqi.uilib.host.client.font.context.FontProjection;
+import club.heiqi.uilib.host.client.font.context.FontRenderContext;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -461,7 +464,14 @@ public final class PresentationEpochScenario extends TestApplication {
                         new GlGlyphAtlas.UploadBudget(1024 * 1024, 1000000000, 8), 64, 8),
                 IsolatedFontEngine.shared(), new Lwjgl3GlApi(), GlProgramProvider.NONE);
         onClose(() -> close(owner));
-        GlPaintPlanRenderer a = owner.createPlanRenderer(), b = owner.createPlanRenderer();
+        GlPaintPlanRenderer a = owner.sharedPlanRenderer(), b = owner.createPlanRenderer();
+        float[] projection = FramebufferCoordinates.orthographic(W, H);
+        float[] identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        FontRenderContext context = new FontRenderContext(
+                new FontProjection(projection, identity, new int[] {0, 0, W, H}),
+                glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING), H, false, GL_LESS, false, false,
+                new int[] {0, 0, W, H}, FontRenderContext.MatrixState.ui(projection, identity),
+                owner.gl().capabilities().contextIdentity, 1, 0);
         PaintPlan pa = text(owner, "A", 4), pb = text(owner, "😀", 94);
         if (glyphs(pa).size() != 1 || glyphs(pb).size() != 1)
             throw new AssertionError("紧预算夹具须各含一个实际字形");
@@ -481,6 +491,7 @@ public final class PresentationEpochScenario extends TestApplication {
             throw new AssertionError("mono/color须已CPUready且均可独立装入单页");
         long rasterized = owner.rasterizer().stats().rasterized;
         long firstResource = -1, firstGeneration = -1, firstUploads = -1, firstBytes = -1;
+        int[] firstPixels = null;
         boolean stable = true;
         boolean[] ready = new boolean[9];
         long[] uploads = new long[9], evictions = new long[9];
@@ -492,7 +503,7 @@ public final class PresentationEpochScenario extends TestApplication {
                     unbindGlyphPages();
                     PaintPlan plan = draw == 1 ? pb : pa;
                     int index = epoch * 3 + draw;
-                    try (GlPaintPlanRenderer.Prepared p = owner.prepare(draw == 1 ? b : a, plan, VIEW)) {
+                    try (GlPaintPlanRenderer.Prepared p = owner.prepare(draw == 1 ? b : a, plan, context)) {
                         GlGlyphAtlas.Resident r = p.resident(glyphs(plan).get(0));
                         ready[index] = r != null;
                         if (index == 0 && r != null) {
@@ -506,9 +517,10 @@ public final class PresentationEpochScenario extends TestApplication {
                         if (p.demandCount() != 1) throw new AssertionError("短Frame重复准备累计需求");
                         glClearColor(0, 0, 0, 0);
                         glClear(GL_COLOR_BUFFER_BIT);
-                        p.render(FramebufferCoordinates.orthographic(W, H), H, false);
+                        p.render(context);
                         boolean ink = false;
                         int[] image = pixels();
+                        if (index == 0) firstPixels = image;
                         for (int i = 3; i < image.length; i += 4) if (image[i] != 0) ink = true;
                         if (ink != ready[index]) throw new AssertionError("紧预算ready与真实像素不符");
                     }
@@ -532,20 +544,33 @@ public final class PresentationEpochScenario extends TestApplication {
         owner.beginPresentation(3);
         try {
             unbindGlyphPages();
-            try (GlPaintPlanRenderer.Prepared p = owner.prepare(b, pb, VIEW)) {
+            try (GlPaintPlanRenderer.Prepared p = owner.prepare(b, pb, context)) {
                 GlGlyphAtlas.Resident r = p.resident(glyphs(pb).get(0));
                 if (r == null || !r.color || owner.atlas().stats().evictedGroups != 1
                         || owner.atlas().stats().uploadCalls <= firstUploads)
                     throw new AssertionError("下一epoch仅B需求未释放A并前进");
-                p.render(FramebufferCoordinates.orthographic(W, H), H, false);
+                p.render(context);
             }
         } finally {
             owner.endPresentation();
         }
+        // 同一个memo曾保存A的UV；B已淘汰其组，再回A必须重建且保留原像素。
+        owner.beginPresentation(4);
+        try {
+            unbindGlyphPages();
+            try (GlPaintPlanRenderer.Prepared p = owner.prepare(a, pa, context)) {
+                GlGlyphAtlas.Resident r = p.resident(glyphs(pa).get(0));
+                if (r == null || r.resource == firstResource || owner.atlas().stats().evictedGroups != 2)
+                    throw new AssertionError("缓存A没有随旧图集组淘汰重建");
+                glClear(GL_COLOR_BUFFER_BIT);
+                p.render(context);
+                if (!Arrays.equals(firstPixels, pixels())) throw new AssertionError("缓存A复用了已淘汰的UV");
+            }
+        } finally { owner.endPresentation(); }
         if (owner.rasterizer().stats().rasterized != rasterized || owner.atlas().stats().groups != 1)
             throw new AssertionError("紧预算重复光栅或组数越界");
         long beforeStandalone = owner.atlas().stats().evictedGroups;
-        PaintPlan[] standalone = {pa, pb};
+        PaintPlan[] standalone = {pb, pa};
         for (PaintPlan plan : standalone) {
             unbindGlyphPages();
             try (GlPaintPlanRenderer.Prepared p = a.prepare(plan, VIEW, owner.settings().upload)) {
@@ -557,6 +582,121 @@ public final class PresentationEpochScenario extends TestApplication {
             throw new AssertionError("standalone未按当前需求释放旧组");
         System.out.println("tightVisibleGroups firstAStable=true budgetBBlank=true nextEpochBReady=true"
                 + " releasedA=true standaloneReclaims=true nativeRasterized=" + rasterized);
+    }
+
+    /** CPU位图已逐出但GPU仍驻留时，延期登记不应再次排队；view变化与淘汰仍须重查。
+     * 使用真实worker和GL图集，只选择view而不回放宿主shader pass。 */
+    private void deferredResidentDemand() throws Exception {
+        boolean[] straight = {false};
+        GlProgramProvider views = new GlProgramProvider() {
+            public boolean preview(FontRenderContext context) { return straight[0]; }
+            public GlProgramScope open(FontRenderContext context) { return null; }
+        };
+        ClientFontServices owner = new ClientFontServices(
+                PresentationEpochScenario.class.getClassLoader(), 1,
+                new ClientFontServices.Settings(
+                        new AsyncGlyphRasterizer.Budget(1, 1, 1, 1024 * 1024, 4, 96 * 1024 * 1024, 16, 96),
+                        GlGlyphAtlas.Mode.TEXTURE_2D,
+                        new GlGlyphAtlas.Budget(64, 1, 1, 8, 8, 64L * 64 * 4),
+                        new GlGlyphAtlas.UploadBudget(65536, 1000000000, 16), 64, 8),
+                IsolatedFontEngine.shared(), new Lwjgl3GlApi(), views);
+        onClose(() -> close(owner));
+        GlPaintPlanRenderer renderer = owner.createPlanRenderer();
+        PaintPlan pa = text(owner, "A", 4), pb = text(owner, "B", 4), pc = text(owner, "C", 4);
+        GlyphKey a = GlyphKey.of(glyphs(pa).get(0)), b = GlyphKey.of(glyphs(pb).get(0)),
+                c = GlyphKey.of(glyphs(pc).get(0));
+        if (a.equals(b) || a.equals(c) || b.equals(c)) throw new AssertionError("重试夹具未生成独立GlyphKey");
+        float[] projection = FramebufferCoordinates.orthographic(W, H),
+                identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        FontRenderContext context = new FontRenderContext(
+                new FontProjection(projection, identity, new int[] {0, 0, W, H}),
+                glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING), H, false, GL_LEQUAL, false, false,
+                new int[] {0, 0, W, H}, FontRenderContext.MatrixState.ui(projection, identity),
+                owner.gl().capabilities().contextIdentity, 1, 0);
+        GlGlyphAtlas atlas = owner.atlas();
+        owner.beginPresentation(20000);
+        try {
+            owner.registerVisibleDemand(renderer, pa, context);
+            awaitCpu(owner, a);
+            try (GlPaintPlanRenderer.Prepared p = owner.prepare(renderer, pa, VIEW)) {
+                if (p.readyCount() != 1) throw new AssertionError("A未真实上传");
+            }
+        } finally { owner.endPresentation(); }
+        owner.beginPresentation(20001);
+        try {
+            owner.registerVisibleDemand(renderer, pb, context);
+            awaitCpu(owner, b);
+            if (owner.rasterizer().peek(a) != null
+                    || !atlas.isResident(a, GlGlyphAtlas.SamplingView.PREMULT_RGBA)
+                    || atlas.isResident(a, GlGlyphAtlas.SamplingView.STRAIGHT_RGBA))
+                throw new AssertionError("CPU冷/GPU热或分view夹具未命中");
+            long requests = owner.rasterizer().stats().requests,
+                    rasterized = owner.rasterizer().stats().rasterized;
+            for (int i = 0; i < 16; i++) owner.registerVisibleDemand(renderer, pa, context);
+            if (owner.rasterizer().stats().requests != requests
+                    || owner.rasterizer().stats().rasterized != rasterized
+                    || owner.presentationStats().activePrepared != 0)
+                throw new AssertionError("热延期登记重复request/光栅或建立Frame");
+            straight[0] = true;
+            owner.registerVisibleDemand(renderer, pa, context);
+            if (owner.rasterizer().stats().requests != requests + 1)
+                throw new AssertionError("错误view驻留使冷请求被跳过");
+            awaitCpu(owner, a);
+            // 登记只查询不能pin旧mono页；单组预算下straight必须能够淘汰它。
+            unbindGlyphPages();
+            try (GlPaintPlanRenderer.Prepared p = owner.prepare(renderer, pa, context)) {
+                if (p.readyCount() != 1 || p.resident(glyphs(pa).get(0)).samplingView
+                        != GlGlyphAtlas.SamplingView.STRAIGHT_RGBA)
+                    throw new AssertionError("驻留查询提前pin或阻断view上传");
+            }
+            if (atlas.isResident(a, GlGlyphAtlas.SamplingView.PREMULT_RGBA)
+                    || !atlas.isResident(a, GlGlyphAtlas.SamplingView.STRAIGHT_RGBA)
+                    || atlas.stats().evictedGroups != 1)
+                throw new AssertionError("旧view未被淘汰或查询未及时失效");
+            requests = owner.rasterizer().stats().requests;
+            owner.registerVisibleDemand(renderer, pa, context);
+            if (owner.rasterizer().stats().requests != requests)
+                throw new AssertionError("正确straight view仍重复请求");
+            straight[0] = false;
+            owner.registerVisibleDemand(renderer, pa, context);
+            if (owner.rasterizer().stats().requests != requests + 1)
+                throw new AssertionError("已淘汰view没有重新request");
+        } finally { owner.endPresentation(); }
+        owner.beginPresentation(20002);
+        try {
+            owner.registerVisibleDemand(renderer, pb, context);
+            awaitCpu(owner, b); // ready=1的真实背压使下一项保留在pending。
+            owner.registerVisibleDemand(renderer, pc, context);
+            long rejected = owner.rasterizer().stats().rejected,
+                    requests = owner.rasterizer().stats().requests;
+            owner.registerVisibleDemand(renderer, pa, context);
+            owner.registerVisibleDemand(renderer, pa, context);
+            if (owner.rasterizer().stats().requests != requests + 2
+                    || owner.rasterizer().stats().rejected != rejected + 2)
+                throw new AssertionError("pending预算拒绝被错误记作已请求");
+            awaitCpu(owner, c);
+            rejected = owner.rasterizer().stats().rejected;
+            owner.registerVisibleDemand(renderer, pa, context);
+            awaitCpu(owner, a);
+            if (owner.rasterizer().stats().rejected != rejected)
+                throw new AssertionError("pending释放后同key仍未前进");
+        } finally { owner.endPresentation(); }
+        System.out.println("deferredResidentDemand CPUevictedGPUready=true hotRequests=0 viewMissRequests=true"
+                + " queryDoesNotPin=true evictedViewRetries=true pendingRejectedRetries=true");
+    }
+
+    /** 等待真实worker的发布通知；推进ready背压，不以sleep猜测字形完成。 */
+    private static void awaitCpu(ClientFontServices owner, GlyphKey key) throws InterruptedException {
+        AsyncGlyphRasterizer worker = owner.rasterizer();
+        long deadline = System.nanoTime() + 10000000000L;
+        synchronized (worker) {
+            while (worker.peek(key) == null) {
+                owner.pumpReady();
+                long left = deadline - System.nanoTime();
+                if (left <= 0) throw new AssertionError("CPU字形未就绪：" + key);
+                worker.wait(Math.max(1, left / 1000000L));
+            }
+        }
     }
 
     private static void unbindGlyphPages() {
@@ -626,6 +766,7 @@ public final class PresentationEpochScenario extends TestApplication {
             glDisable(GL_FRAMEBUFFER_SRGB);
             scenario("紧预算可见组", this::tightVisibleGroups);
             scenario("热字形多consumer", this::warmConsumers);
+            scenario("延期驻留需求与重试", this::deferredResidentDemand);
             scenario("冷启动与取消", this::coldAndCancellation);
             scenario("多consumer共享预算", this::sharedBudget);
             scenario("需求并集与时间预算", this::unionAndTime);

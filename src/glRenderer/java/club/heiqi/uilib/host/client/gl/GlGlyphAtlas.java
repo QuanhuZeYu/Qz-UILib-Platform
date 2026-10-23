@@ -350,6 +350,14 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         return new Stats(this);
     }
 
+    /** 只查询该采样view已完整发布的驻留项，不pin、创建Frame或返回UV。
+     * 登记与回放之间仍可能淘汰；真正prepare须重新取得本Frame的资源保护。 */
+    public boolean isResident(GlyphKey key, SamplingView view) {
+        check();
+        return residents.containsKey(new ViewKey(
+                Objects.requireNonNull(key, "key"), Objects.requireNonNull(view, "view")));
+    }
+
     public Frame beginFrame(Collection<GlyphKey> demand) {
         return beginFrame(demand, false);
     }

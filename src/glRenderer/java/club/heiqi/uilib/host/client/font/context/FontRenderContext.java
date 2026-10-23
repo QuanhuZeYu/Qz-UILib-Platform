@@ -82,6 +82,23 @@ public final class FontRenderContext {
         this.passKey = passKey;
     }
 
+    /** 同包派生只复用已冻结的私有载荷；公开数组入口与 getter 仍防御复制。 */
+    FontRenderContext(FontRenderContext source, MatrixState state, RasterState rasterState) {
+        projection = source.projection;
+        drawFramebuffer = source.drawFramebuffer;
+        sourceFramebufferHeight = source.sourceFramebufferHeight;
+        depthTest = source.depthTest;
+        depthFunction = source.depthFunction;
+        depthWrite = source.depthWrite;
+        scissorEnabled = source.scissorEnabled;
+        scissor = source.scissor;
+        this.state = Objects.requireNonNull(state, "state");
+        contextIdentity = source.contextIdentity;
+        revision = source.revision;
+        passKey = source.passKey;
+        this.rasterState = rasterState;
+    }
+
     /** 延期提交的光栅状态值；数组只能通过防御拷贝读取，不在构造中查询GL。
      * FBO/viewport/depth/scissor仍由外层context保存。延期consumer应用本载荷后须恢复回放入口状态。
      */
@@ -143,6 +160,36 @@ public final class FontRenderContext {
             this.polygonOffsetFill = polygonOffsetFill;
             polygonOffsetFactor = factor;
             polygonOffsetUnits = units;
+        }
+
+        /** 标准字体仅覆盖混合规则，其余 caller 光栅载荷保持不可变共享。 */
+        RasterState(
+                RasterState source,
+                int srcRgb,
+                int dstRgb,
+                int srcAlpha,
+                int dstAlpha,
+                int equationRgb,
+                int equationAlpha) {
+            blendEnabled = true;
+            blendSrcRgb = srcRgb;
+            blendDstRgb = dstRgb;
+            blendSrcAlpha = srcAlpha;
+            blendDstAlpha = dstAlpha;
+            blendEquationRgb = equationRgb;
+            blendEquationAlpha = equationAlpha;
+            blendColor = source.blendColor;
+            depthRange = source.depthRange;
+            colorMask = source.colorMask;
+            stencilEnabled = source.stencilEnabled;
+            frontStencil = source.frontStencil;
+            backStencil = source.backStencil;
+            cullEnabled = source.cullEnabled;
+            cullFace = source.cullFace;
+            frontFace = source.frontFace;
+            polygonOffsetFill = source.polygonOffsetFill;
+            polygonOffsetFactor = source.polygonOffsetFactor;
+            polygonOffsetUnits = source.polygonOffsetUnits;
         }
 
         private static float[] vector(float[] value, int size) {
@@ -242,8 +289,9 @@ public final class FontRenderContext {
         return projection.samplingAt(x, y, logicalEm, policy, revision);
     }
 
-    /** effective固定管线/可选宿主状态；所有向量和矩阵均复制，绝不保留JOML stack引用。 */
+    /** effective固定管线/可选宿主状态；公开构造复制向量和矩阵，绝不保留JOML stack引用。 */
     public static final class MatrixState {
+        private static final float[] WHITE = {1, 1, 1, 1};
         private final float[] p, mv, color, normal, lighting;
         public final boolean alphaTest, lightmapActive;
         public final int alphaFunction, lightmapTexture, packedLight, blockEntityId;
@@ -282,6 +330,24 @@ public final class FontRenderContext {
             this.lightmapV = lightmapV;
             this.packedLight = packedLight;
             this.blockEntityId = blockEntityId;
+        }
+
+        /** 显式字体颜色已在布局中；只将 currentColor 归白，不重拷贝 caller 矩阵与光照。 */
+        MatrixState(MatrixState source) {
+            p = source.p;
+            mv = source.mv;
+            color = WHITE;
+            normal = source.normal;
+            lighting = source.lighting;
+            alphaTest = source.alphaTest;
+            alphaFunction = source.alphaFunction;
+            alphaReference = source.alphaReference;
+            lightmapActive = source.lightmapActive;
+            lightmapTexture = source.lightmapTexture;
+            lightmapU = source.lightmapU;
+            lightmapV = source.lightmapV;
+            packedLight = source.packedLight;
+            blockEntityId = source.blockEntityId;
         }
 
         private static float[] copy(float[] v, int size) {

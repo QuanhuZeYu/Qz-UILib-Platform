@@ -433,6 +433,8 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         final java.util.List<GlyphKey> visibleKeys;
         // 唯一需求保持首次出现顺序；visibleKeys仍逐occurrence承担memo预算和拒绝计数。
         private final java.util.Set<GlyphKey> visibleDemand;
+        private TextQuads textQuads;
+        final boolean plainText;
         final long clipped;
         CommandFacts(Preparation preparation, PaintCommand command) {
             visible = command.effectiveClip().intersect(preparation.viewportClip);
@@ -442,10 +444,15 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                     && !visible.unbounded()) drawClip = SceneClipRegion.of(visible.mesh());
             clip = drawClip;
             int glyphCount = 0;
+            boolean plain = true;
             if (command.kind == PaintCommand.Kind.TEXT && command.text != null
                     && (preparation.context != null || !visible.empty()))
-                for (TextLayout.Line line : command.text.lines())
+                for (TextLayout.Line line : command.text.lines()) {
                     glyphCount = Math.addExact(glyphCount, line.glyphs().size());
+                    if (!line.decorations().isEmpty()) plain = false;
+                    for (TextLayout.Glyph glyph : line.glyphs()) if (glyph.xExtension != null) plain = false;
+                }
+            plainText = plain;
             if (glyphCount == 0) {
                 glyphs = java.util.Collections.emptyMap();
                 visibleKeys = java.util.Collections.emptyList();
@@ -493,6 +500,24 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                     bounds.right - bounds.left, bounds.bottom - bounds.top).transformed(command.transform));
         }
         return shown;
+    }
+
+    /** 只缓存已就绪的普通文字值载荷；不保留Frame、Resident或资源租约。
+     * 原CommandFacts的条目/字形预算和字体失效负责释放；publish或淘汰后重建UV。 */
+    private static final class TextQuads {
+        final long version, evictions;
+        final GlGlyphAtlas.SamplingView view;
+        final int color;
+        final java.util.List<State> states = new java.util.ArrayList<>();
+        final java.util.List<Quad> quads = new java.util.ArrayList<>();
+        TextQuads(GlGlyphAtlas.Stats atlas, GlGlyphAtlas.SamplingView view, int color) {
+            version = atlas.version; evictions = atlas.evictedGroups;
+            this.view = view; this.color = color;
+        }
+        boolean matches(GlGlyphAtlas.Stats atlas, GlGlyphAtlas.SamplingView view, int color) {
+            return version == atlas.version && evictions == atlas.evictedGroups
+                    && this.view == view && this.color == color;
+        }
     }
 
     public final class Prepared implements AutoCloseable {
@@ -650,6 +675,8 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         private PaintCommand geometryCommand;
         private SceneClipRegion geometryClip, geometryVisible;
         private CommandFacts geometryFacts;
+        private TextQuads collectingText;
+        private GlGlyphAtlas.Stats glyphResources;
         private club.heiqi.uilib.ui.media.MediaFrameKey videoSubmitting;
         private boolean closed;
 
@@ -679,6 +706,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 throw new IllegalStateException("prepare/replay atlas采样view与activepass不一致");
             scope = context == null ? quads.begin(mvp, height, depth) : quads.begin(context);
             replaying = prepared;
+            glyphResources = atlas.stats();
             collector = new OrderedQuadCollector(capacity, this::submitBatch, prepared.allowReordering);
         }
 
@@ -860,6 +888,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
 
         private void drawText(PaintCommand command, LayoutBox clip) {
             if (command.text == null) return;
+            if (cachedText(command, clip)) return;
             // 显式小行高允许墨迹溢出：所有行的背景先输出，后行高亮不覆盖前行字形。
             for (TextLayout.Line line : command.text.lines())
                 for (TextLayout.Decoration decoration : line.decorations())
@@ -879,6 +908,34 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                             clip);
                 }
             }
+        }
+
+        private boolean cachedText(PaintCommand command, LayoutBox clip) {
+            // 仅沿已有world可见性memo复用；复杂装饰/伸缩仍走完整有序路径。
+            if (commandFactsMemo == null || context == null || command.sceneGeometry
+                    || !command.transform.identity() || !command.shapeClip.unbounded()) return false;
+            if (!geometryFacts.plainText) return false;
+            TextQuads known = geometryFacts.textQuads;
+            if (known != null && known.matches(glyphResources, prepared.frame.view, command.color)) {
+                // 需求被接纳不等于freeze时已驻留：嵌套委托可能刚上传同key。
+                // 按唯一字形核对本Frame正项，不能借另一Frame的就绪结果越过原冻结快照。
+                for (GlyphKey key : geometryFacts.visibleDemand)
+                    if (prepared.frame.lookup(key) == null) return false;
+                for (int i = 0; i < known.quads.size(); i++)
+                    collector.add(known.states.get(i), known.quads.get(i));
+                drawnGlyphs += known.quads.size();
+                return true;
+            }
+            TextQuads pending = new TextQuads(glyphResources, prepared.frame.view, command.color);
+            long blanksBefore = blankGlyphs;
+            collectingText = pending;
+            try {
+                for (TextLayout.Line line : command.text.lines())
+                    for (TextLayout.Glyph glyph : line.glyphs()) drawGlyph(command, glyph, clip);
+            } finally { collectingText = null; }
+            // 未ready不能把暂时空白固化；发布新字形或淘汰任意组也使旧缓存stamp失效。
+            if (blankGlyphs == blanksBefore) geometryFacts.textQuads = pending;
+            return true;
         }
 
         private void drawGlyph(PaintCommand command, TextLayout.Glyph glyph, LayoutBox clip) {
@@ -932,9 +989,12 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                             r.generation,
                             clip);
             if (glyph.xExtension == null) {
-                collector.add(
-                        state,
-                        new Quad(x, y, width, height, u0, v0, u1, v1, r.layer, color));
+                Quad quad = new Quad(x, y, width, height, u0, v0, u1, v1, r.layer, color);
+                collector.add(state, quad);
+                if (collectingText != null) {
+                    collectingText.states.add(state);
+                    collectingText.quads.add(quad);
+                }
             } else {
                 // 三片目标域互斥，共享原atlas资源及Y采样；中片固定原覆盖度列，hook/stem不横向变形。
                 float cut = command.box.x + glyph.x + glyph.xExtension.splitX;

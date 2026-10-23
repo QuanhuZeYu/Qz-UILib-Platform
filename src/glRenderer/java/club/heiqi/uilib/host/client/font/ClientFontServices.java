@@ -175,7 +175,12 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
             throw new IllegalStateException("延期consumer需要显式presentation或真实present边界");
         if (!presenting) beginPresentation(--autoEpoch);
         Set<GlyphKey> admitted = admitDemand(renderer.collectVisibleDemand(plan, context));
-        for (GlyphKey key : admitted) rasterizer.request(key);
+        if (admitted.isEmpty()) return admitted;
+        GlGlyphAtlas.SamplingView view = atlas == null ? null : renderer.resolveSamplingView(context);
+        // GPU驻留不依赖CPU位图仍在LRU；不能为已可画字形重复排队光栅。这里只读现有atlas，
+        // 不缓存未驻留/预算拒绝结果；被淘汰或另一view仍沿原request重试，回放再取得短Frame。
+        for (GlyphKey key : admitted)
+            if (atlas == null || !atlas.isResident(key, view)) rasterizer.request(key);
         return admitted;
     }
 

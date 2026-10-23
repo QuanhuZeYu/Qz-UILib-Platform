@@ -96,6 +96,7 @@ public final class PreparedVisibilityScenario {
                     "等值新context/new PaintCommand跨register、prepare、replay或epoch重复检查");
             verifySources(renderer, text, shown, width, height, identity);
             verifyReload(owner, renderer, text, shown, width, height);
+            verifyNestedFreeze(owner, renderer, shown, width, height);
         } finally { owner.releasePlanRenderer(renderer); }
         renderer.close();
         require(listenerCount(fonts) == listeners, "renderer.close没有退订或重复关闭重新访问字体");
@@ -169,6 +170,46 @@ public final class PreparedVisibilityScenario {
         }
         expectChecks(renderer, plain(text, width, height), shown, 0, "旧代plan不允许重新缓存重放");
         try (GlPaintPlanRenderer.Prepared next = owner.prepare(renderer, plain(text, width, height), shown)) { next.render(shown); }
+    }
+
+    /** 子consumer发布同key并建立几何缓存，仍不能改变父Frame在freeze时的空白快照。 */
+    private static void verifyNestedFreeze(ClientFontServices owner, GlPaintPlanRenderer renderer,
+            FontRenderContext context, int width, int height) {
+        TextLayout text = owner.layout("Ж", new club.heiqi.uilib.ui.scene.text.TextStyle("default", 31, 0xffffffff), width);
+        PaintPlan plan = plain(text, width, height);
+        Set<GlyphKey> demand = renderer.collectVisibleDemand(plan, context);
+        require(demand.size() == 1, "嵌套freeze探针须为单字形");
+        GlyphKey key = demand.iterator().next();
+        require(!owner.atlas().isResident(key, GlGlyphAtlas.SamplingView.PREMULT_RGBA), "嵌套freeze探针已经GPU热");
+        owner.rasterizer().request(key);
+        synchronized (owner.rasterizer()) {
+            long deadline = System.nanoTime() + 10000000000L;
+            while (owner.rasterizer().peek(key) == null) {
+                owner.rasterizer().drainReady(128);
+                if (owner.rasterizer().peek(key) != null) break;
+                long remaining = deadline - System.nanoTime();
+                require(remaining > 0, "嵌套freeze真实CPU字形未就绪");
+                try { owner.rasterizer().wait(Math.max(1, remaining / 1000000L)); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new AssertionError(interrupted); }
+            }
+        }
+        try (GlPaintPlanRenderer.Prepared parent = renderer.prepareDemandContext(plan, context,
+                new GlGlyphAtlas.UploadBudget(0, 0, 0), demand, null);
+                GlPaintPlanRenderer.Replay replay = parent.begin(context)) {
+            require(parent.readyCount() == 0, "零上传预算未保持父freeze空白");
+            replay.delegate(() -> owner.atlas().borrowFrozenFrame(() -> {
+                try (GlPaintPlanRenderer.Prepared nested = renderer.prepareDemandContext(plan, context,
+                        new GlGlyphAtlas.UploadBudget(1024 * 1024, 1000000000, 128), demand, null)) {
+                    require(nested.readyCount() == 1, "子consumer没有上传字形");
+                    nested.render(context);
+                }
+            }));
+            long drawn = renderer.drawnGlyphs(), blank = renderer.blankGlyphs();
+            replay.draw(plan.commands().get(0));
+            require(parent.readyCount() == 0 && renderer.drawnGlyphs() == drawn
+                    && renderer.blankGlyphs() == blank + 1, "子consumer的新缓存越过父Frame冻结快照");
+        }
+        System.out.println("preparedVisibility nestedUpload=true parentFrozenBlank=true cachedLeaseChecked=true");
     }
 
     private static void verifyBounds(ClientFontServices owner, TextLayout text, int width, int height, Object identity) {

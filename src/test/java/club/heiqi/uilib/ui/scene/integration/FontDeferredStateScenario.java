@@ -7,6 +7,8 @@ import club.heiqi.uilib.host.client.gl.GlApi;
 import club.heiqi.uilib.host.client.gl.Lwjgl3GlApi;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -24,7 +26,12 @@ import club.heiqi.uilib.host.client.font.ClientFontServices;
 import club.heiqi.uilib.host.client.font.context.StandardFontContext;
 import club.heiqi.uilib.host.client.gl.GlPaintPlanRenderer;
 import club.heiqi.uilib.host.client.gl.GlProgramProvider;
+import club.heiqi.uilib.host.client.gl.GlProgramScope;
+import club.heiqi.uilib.host.client.gl.GlQuadRenderer;
 import club.heiqi.uilib.host.client.gl.GlGlyphAtlas;
+import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.Quad;
+import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.State;
+import club.heiqi.uilib.ui.render.batch.OrderedQuadCollector;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
@@ -38,6 +45,7 @@ import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL33;
 import club.heiqi.uilib.host.client.font.context.FontRenderContext;
 import club.heiqi.uilib.host.client.font.context.LwjglFontContextCapture;
 
@@ -304,19 +312,23 @@ public final class FontDeferredStateScenario extends TestApplication {
     private static final class GlCalls implements InvocationHandler {
         private static final int[] QUERIES = {GL14.GL_BLEND_SRC_RGB, GL14.GL_BLEND_DST_RGB,
                 GL14.GL_BLEND_SRC_ALPHA, GL14.GL_BLEND_DST_ALPHA, GL20.GL_BLEND_EQUATION_RGB,
-                GL20.GL_BLEND_EQUATION_ALPHA, GL11.GL_BLEND, GL11.GL_CULL_FACE};
+                GL20.GL_BLEND_EQUATION_ALPHA, GL11.GL_BLEND, GL11.GL_CULL_FACE,
+                GL13.GL_ACTIVE_TEXTURE, GL11.GL_DEPTH_TEST, GL11.GL_SCISSOR_TEST, GL11.GL_SCISSOR_BOX};
         private final GlApi actual = new Lwjgl3GlApi();
         final GlApi gl = (GlApi) Proxy.newProxyInstance(GlApi.class.getClassLoader(),
                 new Class<?>[] {GlApi.class}, this);
         final int[] queries = new int[QUERIES.length], writes = new int[4];
-        int uniforms;
+        final Map<String, Integer> stateWrites = new LinkedHashMap<>();
+        int activeTexture, uniforms, failUnit = -1, programLinks, programDeletes;
+        boolean failThirdProgram;
         String failMethod;
         int failName;
 
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             String name = method.getName();
             if (name.equals("glGetUniformLocation")) uniforms++;
-            if (name.equals("glGetInteger") || name.equals("glIsEnabled"))
+            if (name.equals("glDeleteProgram")) programDeletes++;
+            if (name.equals("glGetInteger") || name.equals("glIsEnabled") || name.equals("glGetIntegerv"))
                 for (int i = 0; i < QUERIES.length; i++)
                     if ((Integer) args[0] == QUERIES[i]) queries[i]++;
             if (name.equals("glBlendEquationSeparate")) writes[0]++;
@@ -325,27 +337,50 @@ public final class FontDeferredStateScenario extends TestApplication {
                 if ((Integer) args[0] == GL11.GL_BLEND) writes[2]++;
                 if ((Integer) args[0] == GL11.GL_CULL_FACE) writes[3]++;
             }
+            if (name.equals("glActiveTexture")) activeTexture = (Integer) args[0];
+            String stateWrite = null;
+            if (name.startsWith("glBlend") || name.startsWith("glStencil") || name.equals("glColorMask")
+                    || name.equals("glDepthRange") || name.equals("glCullFace") || name.equals("glFrontFace")
+                    || name.equals("glPolygonOffset") || name.equals("glBindFramebuffer") || name.equals("glViewport")
+                    || name.equals("glDepthFunc") || name.equals("glDepthMask")) stateWrite = name;
+            if (name.equals("glEnable") || name.equals("glDisable")) {
+                int capability = (Integer) args[0];
+                if (capability == GL11.GL_BLEND || capability == GL11.GL_STENCIL_TEST
+                        || capability == GL11.GL_CULL_FACE || capability == GL11.GL_POLYGON_OFFSET_FILL
+                        || capability == GL11.GL_DEPTH_TEST) stateWrite = "enable:" + capability;
+            }
+            if (name.equals("glBindTexture") && activeTexture == GL13.GL_TEXTURE1) stateWrite = "lightmapTexture";
+            if (name.equals("glBindSampler") && (Integer) args[0] == 1) stateWrite = "lightmapSampler";
+            if (stateWrite != null) stateWrites.merge(stateWrite, 1, Integer::sum);
             Object result;
             try { result = method.invoke(actual, args); }
             catch (InvocationTargetException failure) { throw failure.getCause(); }
-            if (name.equals(failMethod) && (failName == 0 || (Integer) args[0] == failName)) {
+            if (name.equals("glLinkProgram") && ++programLinks == 3 && failThirdProgram)
+                throw new IllegalStateException("真实GL异常探针:glLinkProgram");
+            if (name.equals(failMethod) && (failName == 0 || (Integer) args[0] == failName)
+                    && (failUnit < 0 || activeTexture == failUnit)) {
                 failMethod = null;
                 throw new IllegalStateException("真实GL异常探针:" + name);
             }
             return result;
         }
 
-        void reset() { Arrays.fill(queries, 0); Arrays.fill(writes, 0); }
+        void reset() {
+            Arrays.fill(queries, 0);
+            Arrays.fill(writes, 0);
+            stateWrites.clear();
+            activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        }
 
         void captured(boolean ui) {
             for (int count : queries) require(count == 1,
-                    (ui ? "UI" : "world") + " 重复或遗漏 actual blend/cull 捕获: " + Arrays.toString(queries));
+                    (ui ? "UI" : "world") + " 重复或遗漏 actual 进入态捕获: " + Arrays.toString(queries));
         }
 
         void verified(boolean ui) {
             captured(ui);
-            // 一次建立绘制态、一次恢复；旧 world 在 Scope.close 和 world.close 重复恢复。
-            for (int count : writes) require(count == 2,
+            // typed world 相同项无需设置；实际变化由像素及完整进入态检查，计数阻止重复恢复。
+            for (int count : writes) require(count == 2 || !ui && count == 0,
                     "blend/cull 恢复 owner 重复或遗漏: " + Arrays.toString(writes));
         }
     }
@@ -606,6 +641,278 @@ public final class FontDeferredStateScenario extends TestApplication {
                 + " singleRestoreOwner=true constructorApplyUploadFailure=true actualEntryRestored=true");
     }
 
+    /** 真实 driver 上覆盖无变化、单组变化、任意 apply 前缀失败，以及 preview/open 的外部写入。 */
+    private static void differenceScopes(FontRenderContext base) {
+        GlCalls calls = new GlCalls();
+        GlApi actual = new Lwjgl3GlApi();
+        int entryTexture = GL11.glGenTextures(), targetTexture = GL11.glGenTextures();
+        boolean samplers = actual.capabilities().samplerObjects;
+        int entrySampler = samplers ? GL33.glGenSamplers() : 0;
+        LwjglFontContextCapture entryCapture = new LwjglFontContextCapture(actual,
+                LwjglFontContextCapture.explicit(actual,
+                        uniformContext(base, 1, new float[] {1, 1, 1}, entryTexture, .5f,
+                                false, GL11.GL_ALWAYS, 0, true).state));
+        LwjglFontContextCapture targetCapture = new LwjglFontContextCapture(actual,
+                LwjglFontContextCapture.explicit(actual,
+                        uniformContext(base, 1, new float[] {1, 1, 1}, targetTexture, .5f,
+                                false, GL11.GL_ALWAYS, 0, true).state));
+        try {
+            stateA(0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE1);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, entryTexture);
+            if (samplers) GL33.glBindSampler(1, 0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE3);
+            FontRenderContext entry = entryCapture.capture(HEIGHT, 1, 0);
+            try (GlQuadRenderer quads = new GlQuadRenderer(calls.gl, 4, (resource, generation) -> null,
+                    GlProgramProvider.NONE)) {
+                calls.reset();
+                try (GlQuadRenderer.Scope scope = quads.begin(entry)) {
+                    verifyA(entryCapture.capture(HEIGHT, 1, 0), 0);
+                }
+                calls.captured(false);
+                require(calls.stateWrites.isEmpty(), "相同 typed 进入态仍重复设置 raster/target/depth/lightmap: " + calls.stateWrites);
+                require(entry.sameDrawState(entryCapture.capture(HEIGHT, 1, 0)), "相同 typed scope 污染进入态");
+
+                GL20.glStencilFuncSeparate(GL11.GL_FRONT, GL11.GL_EQUAL, 4, 0x35);
+                FontRenderContext partial = entryCapture.capture(HEIGHT, 1, 0);
+                stateA(0);
+                calls.reset();
+                try (GlQuadRenderer.Scope scope = quads.begin(partial)) {
+                    require(partial.sameDrawState(entryCapture.capture(HEIGHT, 1, 0)), "单项 stencil 目标未应用");
+                }
+                calls.captured(false);
+                require(calls.stateWrites.equals(Collections.singletonMap("glStencilFuncSeparate", 2)),
+                        "单项变化扩大为其他 setter: " + calls.stateWrites);
+                require(entry.sameDrawState(entryCapture.capture(HEIGHT, 1, 0)), "单项 stencil 未恢复");
+
+                stateB(base.drawFramebuffer);
+                // 普通 world 的 scissor 由 draw 应用；本段只验证 begin/close 拥有的状态。
+                GL11.glEnable(GL11.GL_SCISSOR_TEST);
+                GL11.glScissor(7, 9, 11, 13);
+                GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, targetTexture);
+                FontRenderContext target = targetCapture.capture(HEIGHT, 1, 0);
+                stateA(0);
+                GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, entryTexture);
+                if (samplers) GL33.glBindSampler(1, entrySampler);
+                GL13.glActiveTexture(GL13.GL_TEXTURE3);
+                String[] failures = samplers
+                        ? new String[] {null, "glDisable", "glDepthMask", "glStencilFuncSeparate", "glBindTexture", "glBindSampler"}
+                        : new String[] {null, "glDisable", "glDepthMask", "glStencilFuncSeparate", "glBindTexture"};
+                for (String failureMethod : failures) {
+                    calls.reset();
+                    calls.failMethod = failureMethod;
+                    calls.failName = "glBindSampler".equals(failureMethod) ? 1
+                            : "glDisable".equals(failureMethod) ? GL11.GL_DEPTH_TEST : 0;
+                    try (GlQuadRenderer.Scope scope = quads.begin(target)) {
+                        require(failureMethod == null, "异常探针未触发: " + failureMethod);
+                        require(target.sameDrawState(targetCapture.capture(HEIGHT, 1, 0)), "typed 历史光栅未完整应用");
+                        GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                        require(GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D) == targetTexture
+                                        && (!samplers || GL11.glGetInteger(GL33.GL_SAMPLER_BINDING) == 0),
+                                "历史 lightmap 未应用");
+                        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+                    } catch (IllegalStateException failure) {
+                        require(failureMethod != null && failure.getMessage().equals("真实GL异常探针:" + failureMethod),
+                                "丢失差异 apply 原始异常");
+                    } finally { calls.failMethod = null; }
+                    calls.captured(false);
+                    require(entry.sameDrawState(entryCapture.capture(HEIGHT, 1, 0)), "差异 apply 前缀失败未恢复全部进入态");
+                    require(GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE) == GL13.GL_TEXTURE3, "差异 scope 泄漏活动单元");
+                    GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                    require(GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D) == entryTexture
+                                    && (!samplers || GL11.glGetInteger(GL33.GL_SAMPLER_BINDING) == entrySampler),
+                            "差异 scope 未恢复 lightmap 绑定");
+                    GL13.glActiveTexture(GL13.GL_TEXTURE3);
+                }
+            }
+            GlProgramProvider failedOpen = new GlProgramProvider() {
+                public boolean preview(FontRenderContext context) { return true; }
+                public GlProgramScope open(FontRenderContext context) {
+                    stateB(base.drawFramebuffer);
+                    GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                    GL11.glBindTexture(GL11.GL_TEXTURE_2D, targetTexture);
+                    if (samplers) GL33.glBindSampler(1, 0);
+                    throw new IllegalStateException("真实pass打开失败");
+                }
+            };
+            try (GlQuadRenderer quads = new GlQuadRenderer(calls.gl, 4, (resource, generation) -> null, failedOpen)) {
+                calls.reset();
+                try {
+                    quads.begin(entry);
+                    throw new AssertionError("preview/open 异常未触发");
+                } catch (IllegalStateException failure) {
+                    require("真实pass打开失败".equals(failure.getMessage()), "丢失 pass 原始异常");
+                }
+                calls.captured(false);
+                require(entry.sameDrawState(entryCapture.capture(HEIGHT, 1, 0)), "preview/open 写入后未完整恢复");
+                require(GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE) == GL13.GL_TEXTURE3, "preview/open 泄漏活动单元");
+                GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                require(GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D) == entryTexture
+                                && (!samplers || GL11.glGetInteger(GL33.GL_SAMPLER_BINDING) == entrySampler),
+                        "preview/open 未完整恢复 lightmap");
+                GL13.glActiveTexture(GL13.GL_TEXTURE3);
+            }
+        } finally {
+            if (samplers) GL33.glDeleteSamplers(entrySampler);
+            GL11.glDeleteTextures(entryTexture);
+            GL11.glDeleteTextures(targetTexture);
+        }
+        System.out.println("SCOPE_DIFFERENCE_REAL_GL unchangedSettersSkipped=true partialStencil=true applyPrefixFailureRestored=true previewOpenFullRestore=true");
+    }
+
+    private static int dualTexture(int format, byte[] rgba) {
+        int texture = GL11.glGenTextures();
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+        ByteBuffer data = BufferUtils.createByteBuffer(rgba.length);
+        data.put(rgba).flip();
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, format, 1, 1, 0,
+                format == GL30.GL_R8 ? GL11.GL_RED : GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, data);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        return texture;
+    }
+
+    private static int[] dualFrame(GlQuadRenderer renderer, FontRenderContext context, State[] states,
+            Quad[] quads, boolean split, GlCalls calls) {
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, context.drawFramebuffer);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glColorMask(true, true, true, true);
+        GL11.glClearColor(0, 0, 0, 0);
+        GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
+        stateA(0);
+        GL13.glActiveTexture(GL13.GL_TEXTURE3);
+        calls.reset();
+        try (GlQuadRenderer.Scope scope = renderer.begin(context)) {
+            OrderedQuadCollector collector = new OrderedQuadCollector(8, scope::consumeBatch);
+            for (int i = 0; i < states.length; i++) {
+                collector.add(states[i], quads[i]);
+                // 独立旧路径参考：相同 quad/index 原次序，单 Draw 逐段消费，不能命中双纹理。
+                if (split) collector.flush();
+            }
+            collector.flush();
+        }
+        return pixels(context.drawFramebuffer);
+    }
+
+    private static void dualRestored(GlCalls calls, int texture, int sampler, boolean samplers) {
+        require(GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE) == GL13.GL_TEXTURE3, "dual 活动纹理单元未恢复");
+        GL13.glActiveTexture(GL13.GL_TEXTURE2);
+        require(GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D) == texture
+                        && (!samplers || GL11.glGetInteger(GL33.GL_SAMPLER_BINDING) == sampler),
+                "dual 未恢复 unit2 实际 texture/sampler");
+        GL13.glActiveTexture(GL13.GL_TEXTURE3);
+        calls.captured(false);
+    }
+
+    /** 同真实 typed world 的独立逐 Draw 旧路径核像素，不排序，含新增纹理单元的异常恢复。 */
+    private static void dualScopes(FontRenderContext base) {
+        GlCalls calls = new GlCalls();
+        int mono = dualTexture(GL30.GL_R8, new byte[] {(byte) 160});
+        int color = dualTexture(GL11.GL_RGBA8, new byte[] {64, 32, 96, (byte) 128});
+        int third = dualTexture(GL11.GL_RGBA8, new byte[] {0, 0, 0, (byte) 192});
+        int light = dualTexture(GL11.GL_RGBA8, new byte[] {(byte) 128, (byte) 192, (byte) 255, (byte) 255});
+        int entry = dualTexture(GL11.GL_RGBA8, new byte[] {7, 11, 13, (byte) 255});
+        boolean samplers = calls.actual.capabilities().samplerObjects;
+        int sampler = samplers ? GL33.glGenSamplers() : 0;
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE2);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, entry);
+            if (samplers) {
+                GL33.glSamplerParameteri(sampler, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+                GL33.glBindSampler(2, sampler);
+            }
+            FontRenderContext value = uniformContext(base, .75f, new float[] {.5f, .75f, 1}, light, .5f,
+                    true, GL11.GL_GREATER, .05f, true);
+            FontRenderContext context = new FontRenderContext(value.projection, value.drawFramebuffer, HEIGHT,
+                    false, value.depthFunction, false, true, new int[] {16, 16, 100, 48}, value.state,
+                    value.contextIdentity, value.revision, value.passKey, value.rasterState);
+            State[] states = {new State(1, 1, 7, null), new State(2, 2, 7, null),
+                    new State(1, 1, 7, null), new State(2, 2, 7, null)};
+            Quad[] quads = {new Quad(8, 20, 64, 38, 0, 0, 1, 1, 0, 0xb0ff4000),
+                    new Quad(24, 24, 64, 38, 0, 0, 1, 1, 0, 0x90ffffff),
+                    new Quad(40, 28, 64, 38, 0, 0, 1, 1, 0, 0x8000ff40),
+                    new Quad(56, 32, 64, 38, 0, 0, 1, 1, 0, 0xc0ffffff)};
+            try (GlQuadRenderer renderer = new GlQuadRenderer(calls.gl, 8, (resource, generation) -> {
+                if (generation != 7) throw new IllegalArgumentException("dual 资源代际失配");
+                return new GlQuadRenderer.Texture(GL11.GL_TEXTURE_2D,
+                        resource == 1 ? mono : resource == 2 ? color : third,
+                        resource == 1 ? GlQuadRenderer.CoverageChannel.RED : GlQuadRenderer.CoverageChannel.ALPHA);
+            }, GlProgramProvider.NONE)) {
+                long draws = renderer.counters().draws;
+                long uploads;
+                int[] reference = dualFrame(renderer, context, states, quads, true, calls);
+                require(renderer.counters().draws - draws == states.length, "dual 旧路径参考未逐 Draw 提交");
+                dualRestored(calls, entry, sampler, samplers);
+                draws = renderer.counters().draws;
+                uploads = renderer.counters().vertexUploads;
+                int[] actual = dualFrame(renderer, context, states, quads, false, calls);
+                require(Arrays.equals(reference, actual) && grayPixels(actual) > 0,
+                        "双纹理与独立旧路径原顺序像素不一致");
+                require(renderer.counters().draws - draws == 1 && renderer.counters().vertexUploads - uploads == 1,
+                        "dual 未保持一次上传/一次保序 draw");
+                dualRestored(calls, entry, sampler, samplers);
+                State[] reversed = {states[1], states[0], states[3], states[2]};
+                reference = dualFrame(renderer, context, reversed, quads, true, calls);
+                actual = dualFrame(renderer, context, reversed, quads, false, calls);
+                require(Arrays.equals(reference, actual), "dual slot/material 反转改变覆盖次序");
+                dualRestored(calls, entry, sampler, samplers);
+                // 第三资源与不同 clip 均须走原多 Draw 路径，不能局部拼接或跨状态合并。
+                for (int fallback = 0; fallback < 2; fallback++) {
+                    State[] changed = states.clone();
+                    changed[2] = new State(1, fallback == 0 ? 3 : 1, 7,
+                            fallback == 0 ? null : new LayoutBox(0, 0, WIDTH, HEIGHT));
+                    reference = dualFrame(renderer, context, changed, quads, true, calls);
+                    draws = renderer.counters().draws;
+                    actual = dualFrame(renderer, context, changed, quads, false, calls);
+                    require(Arrays.equals(reference, actual) && renderer.counters().draws - draws == changed.length,
+                            "dual fallback 改变原路径像素或 draw");
+                    dualRestored(calls, entry, sampler, samplers);
+                }
+                String[] failures = samplers
+                        ? new String[] {"glActiveTexture", "glGetInteger", "glBindTexture", "glBindSampler", "glUseProgram", "glDrawElements"}
+                        : new String[] {"glActiveTexture", "glGetInteger", "glBindTexture", "glUseProgram", "glDrawElements"};
+                for (String failureMethod : failures) {
+                    calls.failMethod = failureMethod;
+                    calls.failName = failureMethod.equals("glActiveTexture") ? GL13.GL_TEXTURE2
+                            : failureMethod.equals("glGetInteger") ? GL11.GL_TEXTURE_BINDING_2D
+                            : failureMethod.equals("glBindTexture") ? GL11.GL_TEXTURE_2D
+                            : failureMethod.equals("glBindSampler") ? 2 : 0;
+                    calls.failUnit = failureMethod.equals("glGetInteger") || failureMethod.equals("glBindTexture")
+                            ? GL13.GL_TEXTURE2 : -1;
+                    try {
+                        dualFrame(renderer, context, states, quads, false, calls);
+                        throw new AssertionError("dual 异常探针未触发:" + failureMethod);
+                    } catch (IllegalStateException failure) {
+                        require(failure.getMessage().equals("真实GL异常探针:" + failureMethod), "dual 丢失原始异常");
+                    } finally { calls.failMethod = null; calls.failUnit = -1; }
+                    dualRestored(calls, entry, sampler, samplers);
+                }
+                actual = dualFrame(renderer, context, states, quads, false, calls);
+                reference = dualFrame(renderer, context, states, quads, true, calls);
+                require(Arrays.equals(reference, actual), "dual 异常后再次回放不一致");
+                dualRestored(calls, entry, sampler, samplers);
+            }
+            require(calls.programLinks == 3 && calls.programDeletes == 3, "dual 第三个 program 未完整释放");
+            GlCalls failed = new GlCalls();
+            failed.failThirdProgram = true;
+            try {
+                new GlQuadRenderer(failed.gl, 8, (resource, generation) -> null, GlProgramProvider.NONE);
+                throw new AssertionError("dual 第三 program 构造异常未触发");
+            } catch (IllegalStateException failure) {
+                require("真实GL异常探针:glLinkProgram".equals(failure.getMessage())
+                                && failed.programLinks == 3 && failed.programDeletes == 3,
+                        "dual program 中途构造失败未完整释放");
+            }
+            System.out.println("DUAL_2D_REAL_GL orderedReference=true oneDraw=true typedWorldOnly=true unit2Restored=true failureRestored=true");
+        } finally {
+            if (samplers) { GL33.glBindSampler(2, 0); GL33.glDeleteSamplers(sampler); }
+            for (int texture : new int[] {mono, color, third, light, entry}) GL11.glDeleteTextures(texture);
+        }
+    }
+
     private void coverage(GlfwTestEnvironment environment, boolean compatibility) throws Exception {
         own(
                 environment.window(
@@ -790,6 +1097,8 @@ public final class FontDeferredStateScenario extends TestApplication {
         uniformScopes(owner, renderer, standard, half, halfPixels, compatibility, calls);
         exceptionScopes(owner, renderer, standard, half, halfPixels, calls);
         require(calls.uniforms == resolvedUniforms, "重复 world/UI scope 重新查询 uniform 位置");
+        differenceScopes(standard);
+        dualScopes(standard);
         require(GL11.glGetError() == GL11.GL_NO_ERROR, "coverage GL错误");
         System.out.println(
                 profile

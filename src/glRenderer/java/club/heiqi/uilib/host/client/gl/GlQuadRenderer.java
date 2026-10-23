@@ -6,6 +6,7 @@ import club.heiqi.uilib.host.client.font.context.FontRenderContext;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.Draw;
 import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.Quad;
+import club.heiqi.uilib.ui.render.batch.OrderedQuadBatch.State;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 
 import java.nio.ByteBuffer;
@@ -73,12 +74,13 @@ public final class GlQuadRenderer implements AutoCloseable {
     private final ResourceProvider resources;
     private ByteBuffer staging;
     private int vao, vbo, ebo;
-    private final int[] programs = new int[2];
-    private final ProgramUniforms[] uniforms = new ProgramUniforms[2];
+    private static final int DUAL_2D = 2;
+    private final int[] programs = new int[3];
+    private final ProgramUniforms[] uniforms = new ProgramUniforms[3];
 
     /** 位置只属于本 renderer 创建且不再重链的 program；动态宿主值仍在每个 Scope 应用。 */
     private static final class ProgramUniforms {
-        final int mvp, material, image, coverageRed;
+        final int mvp, material, image, image2, coverageRed;
         final int hostLighting, hostAlpha, outputStraight, alphaEnabled, alphaFunction, alphaReference;
         final int lightmapEnabled, lightmapImage, lightmapUv;
 
@@ -86,6 +88,7 @@ public final class GlQuadRenderer implements AutoCloseable {
             mvp = gl.glGetUniformLocation(program, "mvp");
             material = gl.glGetUniformLocation(program, "material");
             image = gl.glGetUniformLocation(program, "image");
+            image2 = gl.glGetUniformLocation(program, "image2");
             coverageRed = gl.glGetUniformLocation(program, "coverageRed");
             hostLighting = gl.glGetUniformLocation(program, "hostLighting");
             hostAlpha = gl.glGetUniformLocation(program, "hostAlpha");
@@ -130,11 +133,14 @@ public final class GlQuadRenderer implements AutoCloseable {
                     + " out vec2 texUv; flat out float texLayer; out vec4 tint; void"
                     + " main(){gl_Position=mvp*vec4(position,0,1);texUv=uv;texLayer=layer;tint=color;}";
 
-    private static String fragment(boolean array) {
+    private static String fragment(int variant) {
+        boolean array = variant == 1, dual = variant == DUAL_2D;
         return "#version 150\n"
                 + "uniform "
                 + (array ? "sampler2DArray" : "sampler2D")
-                + " image; uniform int material,coverageRed; uniform vec3 hostLighting; uniform float"
+                + " image; "
+                + (dual ? "uniform sampler2D image2; " : "uniform int material,coverageRed; ")
+                + "uniform vec3 hostLighting; uniform float"
                 + " hostAlpha; uniform int"
                 + " alphaEnabled,alphaFunction,lightmapEnabled,outputStraight; uniform float"
                 + " alphaReference; uniform sampler2D lightmapImage; uniform vec2 lightmapUv; in"
@@ -146,10 +152,12 @@ public final class GlQuadRenderer implements AutoCloseable {
                 + " a<=alphaReference;if(alphaFunction==516)return"
                 + " a>alphaReference;if(alphaFunction==517)return"
                 + " a!=alphaReference;if(alphaFunction==518)return a>=alphaReference;return true;}"
-                + " void main(){if(material==0){result=vec4(tint.rgb*tint.a,tint.a);}else{vec4"
-                + " s=texture(image,"
-                + (array ? "vec3(texUv,texLayer)" : "texUv")
-                + ");if(material==1){float"
+                + " void main(){"
+                + (dual ? "int selector=int(texLayer);int material=1+(selector/2)%2;int coverageRed=selector%2;" : "")
+                + "if(material==0){result=vec4(tint.rgb*tint.a,tint.a);}else{vec4 s="
+                + (dual ? "(selector<4?texture(image,texUv):texture(image2,texUv))"
+                        : "texture(image," + (array ? "vec3(texUv,texLayer)" : "texUv") + ")")
+                + ";if(material==1){float"
                 + " a=(coverageRed!=0?s.r:s.a)*tint.a;result=vec4(tint.rgb*a,a);}else{result=s*tint.a;}}"
                 + "result*=hostAlpha;result.rgb*=hostLighting;if(lightmapEnabled!=0)result.rgb*=texture(lightmapImage,lightmapUv).rgb;if(alphaEnabled!=0&&!alphaPass(result.a))discard;if(outputStraight!=0){if(material==0||material==1){result.rgb=tint.rgb*hostLighting;if(lightmapEnabled!=0)result.rgb*=texture(lightmapImage,lightmapUv).rgb;}else"
                 + " result.rgb=result.a>0.0?result.rgb/result.a:vec3(0.0);}}";
@@ -170,8 +178,8 @@ public final class GlQuadRenderer implements AutoCloseable {
         try {
             staging =
                     ByteBuffer.allocateDirect(capacity * 4 * STRIDE).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < 2; i++) {
-                programs[i] = program(fragment(i == 1));
+            for (int i = 0; i < programs.length; i++) {
+                programs[i] = program(fragment(i));
                 uniforms[i] = new ProgramUniforms(gl, programs[i]);
             }
             vao = gl.glGenVertexArrays();
@@ -253,12 +261,12 @@ public final class GlQuadRenderer implements AutoCloseable {
     }
 
     private Scope begin(float[] mvp, int framebufferHeight, boolean depthEnabled,
-            FontRenderContext.RasterState worldEntryRaster) {
+            GlFontWorldState worldEntry) {
         if (closed || active != null) throw new IllegalStateException("backend 已关闭或范围重入");
         if (mvp == null || mvp.length != 16 || framebufferHeight < 0)
             throw new IllegalArgumentException("无效宿主范围");
         for (float f : mvp) if (!Float.isFinite(f)) throw new IllegalArgumentException("无效 MVP");
-        Scope scope = new Scope(mvp.clone(), framebufferHeight, worldEntryRaster);
+        Scope scope = new Scope(mvp.clone(), framebufferHeight, worldEntry);
         active = scope;
         try {
             scope.selectTextureUnit();
@@ -314,7 +322,7 @@ public final class GlQuadRenderer implements AutoCloseable {
         Scope scope = null;
         try {
             if (programProvider.preview(context)) {
-                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight, world.entryRaster);
+                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight, world);
                 active = scope;
                 scope.world = world;
                 scope.iris = programProvider.open(context);
@@ -337,17 +345,17 @@ public final class GlQuadRenderer implements AutoCloseable {
                                 context.projection.mvp(),
                                 context.sourceFramebufferHeight,
                                 context.depthTest,
-                                world.entryRaster);
+                                world);
                 scope.world = world;
             } else {
                 // typed world 直接应用捕获状态，避免先建立 UI blend/cull 与通用 EBO 后再覆盖。
-                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight, world.entryRaster);
+                scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight, world);
                 active = scope;
                 scope.world = world;
                 scope.selectTextureUnit();
                 gl.glBindVertexArray(vao);
                 gl.glBindBuffer(GL_ARRAY_BUFFER, vbo);
-                enable(GL_DEPTH_TEST, context.depthTest);
+                if (scope.depth != context.depthTest) enable(GL_DEPTH_TEST, context.depthTest);
                 if (scope.compatibility) enable(GL_ALPHA_TEST, false);
             }
             world.apply();
@@ -371,13 +379,12 @@ public final class GlQuadRenderer implements AutoCloseable {
         private final int height,
                 program = gl.glGetInteger(GL_CURRENT_PROGRAM),
                 oldVao = gl.glGetInteger(GL_VERTEX_ARRAY_BINDING),
-                oldVbo = gl.glGetInteger(GL_ARRAY_BUFFER_BINDING),
-                unit = gl.glGetInteger(GL_ACTIVE_TEXTURE);
+                oldVbo = gl.glGetInteger(GL_ARRAY_BUFFER_BINDING);
+        private final int unit;
         private final int eqRgb, eqAlpha, srcRgb, dstRgb, srcAlpha, dstAlpha;
         private final boolean blend, cull, restoreBlendCull;
-        private final boolean scissor = gl.glIsEnabled(GL_SCISSOR_TEST),
-                depth = gl.glIsEnabled(GL_DEPTH_TEST);
-        private final int[] box = new int[4];
+        private final boolean scissor, depth;
+        private final int[] box;
         private final int texture2d, textureArray, sampler;
         private final boolean compatibility =
                 (gl.glGetInteger(GL_CONTEXT_PROFILE_MASK) & GL_CONTEXT_COMPATIBILITY_PROFILE_BIT)
@@ -386,12 +393,19 @@ public final class GlQuadRenderer implements AutoCloseable {
         private final boolean samplerObjects = gl.capabilities().samplerObjects;
         private boolean done;
         private int currentProgram = -1, bound2d, boundArray;
+        private boolean secondCaptured;
+        private int secondTexture, secondSampler, boundSecond;
 
-        private Scope(float[] mvp, int height, FontRenderContext.RasterState worldEntryRaster) {
+        private Scope(float[] mvp, int height, GlFontWorldState worldEntry) {
             this.mvp = mvp;
             this.height = height;
-            // preview 只读；world 在它之前捕获的同一 actual 进入态拥有 blend/cull 的恢复。
-            restoreBlendCull = worldEntryRaster == null;
+            // preview 只读；与 world 共用同一 actual 进入态，不能用历史 context 代替。
+            unit = worldEntry == null ? gl.glGetInteger(GL_ACTIVE_TEXTURE) : worldEntry.unit;
+            scissor = worldEntry == null ? gl.glIsEnabled(GL_SCISSOR_TEST) : worldEntry.scissor;
+            depth = worldEntry == null ? gl.glIsEnabled(GL_DEPTH_TEST) : worldEntry.depth;
+            box = worldEntry == null ? new int[4] : worldEntry.box;
+            FontRenderContext.RasterState worldEntryRaster = worldEntry == null ? null : worldEntry.entryRaster;
+            restoreBlendCull = worldEntry == null;
             eqRgb = restoreBlendCull ? gl.glGetInteger(GL_BLEND_EQUATION_RGB) : worldEntryRaster.blendEquationRgb;
             eqAlpha = restoreBlendCull ? gl.glGetInteger(GL_BLEND_EQUATION_ALPHA) : worldEntryRaster.blendEquationAlpha;
             srcRgb = restoreBlendCull ? gl.glGetInteger(GL_BLEND_SRC_RGB) : worldEntryRaster.blendSrcRgb;
@@ -400,15 +414,18 @@ public final class GlQuadRenderer implements AutoCloseable {
             dstAlpha = restoreBlendCull ? gl.glGetInteger(GL_BLEND_DST_ALPHA) : worldEntryRaster.blendDstAlpha;
             blend = restoreBlendCull ? gl.glIsEnabled(GL_BLEND) : worldEntryRaster.blendEnabled;
             cull = restoreBlendCull ? gl.glIsEnabled(GL_CULL_FACE) : worldEntryRaster.cullEnabled;
-            gl.glGetIntegerv(GL_SCISSOR_BOX, box);
-            gl.glActiveTexture(GL_TEXTURE0);
-            texture2d = gl.glGetInteger(GL_TEXTURE_BINDING_2D);
-            textureArray = gl.glGetInteger(GL_TEXTURE_BINDING_2D_ARRAY);
-            bound2d = texture2d;
-            boundArray = textureArray;
-            // 外部sampler会覆盖图集过滤，范围内使用资源纹理参数，并还原unit0的sampler。
-            sampler = samplerObjects ? gl.glGetInteger(GL_SAMPLER_BINDING) : 0;
-            gl.glActiveTexture(unit);
+            if (worldEntry == null) gl.glGetIntegerv(GL_SCISSOR_BOX, box);
+            try {
+                if (unit != GL_TEXTURE0) gl.glActiveTexture(GL_TEXTURE0);
+                texture2d = gl.glGetInteger(GL_TEXTURE_BINDING_2D);
+                textureArray = gl.glGetInteger(GL_TEXTURE_BINDING_2D_ARRAY);
+                bound2d = texture2d;
+                boundArray = textureArray;
+                // 外部sampler会覆盖图集过滤，范围内使用资源纹理参数，并还原unit0的sampler。
+                sampler = samplerObjects ? gl.glGetInteger(GL_SAMPLER_BINDING) : 0;
+            } finally {
+                if (unit != GL_TEXTURE0) gl.glActiveTexture(unit);
+            }
         }
 
         private void selectTextureUnit() {
@@ -416,7 +433,7 @@ public final class GlQuadRenderer implements AutoCloseable {
             if (samplerObjects) gl.glBindSampler(0, 0);
         }
 
-        /** 一段恰好一次顶点上传；逐 Draw 使用原 firstQuad/quadCount，不合并或排序。 */
+        /** 一段恰好一次顶点上传；双2D只按原索引连续提交，其余逐 Draw 消费，不排序。 */
         public void consumeBatch(OrderedQuadBatch batch) {
             if (done || active != this) throw new IllegalStateException("范围已结束");
             Objects.requireNonNull(batch, "batch");
@@ -429,13 +446,9 @@ public final class GlQuadRenderer implements AutoCloseable {
                 draws += batch.draws().size();
                 return;
             }
+            if (consumeDual2d(batch)) return;
             staging.clear();
-            for (Quad q : batch.quads()) {
-                vertex(q, q.x0, q.y0, q.s0, q.t0);
-                vertex(q, q.x1, q.y1, q.s1, q.t1);
-                vertex(q, q.x2, q.y2, q.s2, q.t2);
-                vertex(q, q.x3, q.y3, q.s3, q.t3);
-            }
+            for (Quad q : batch.quads()) quad(q, q.layer);
             staging.flip();
             gl.glBufferSubData(GL_ARRAY_BUFFER, 0, staging);
             uploads++;
@@ -470,42 +483,7 @@ public final class GlQuadRenderer implements AutoCloseable {
                     else boundArray = t.id;
                     bindings++;
                 }
-                LayoutBox clip =
-                        world == null ? draw.state.clip : GlFontVisibility.viewport(world.context);
-                if (world != null && world.context.scissorEnabled) {
-                    int[] s = world.context.scissor();
-                    LayoutBox hostClip =
-                            new LayoutBox(
-                                    s[0], Math.toIntExact((long) height - s[1] - s[3]), s[2], s[3]);
-                    if (clip == null) clip = hostClip;
-                    else {
-                        long l = Math.max((long) clip.x, hostClip.x),
-                                top = Math.max((long) clip.y, hostClip.y);
-                        long
-                                r =
-                                        Math.min(
-                                                (long) clip.x + clip.width,
-                                                (long) hostClip.x + hostClip.width),
-                                bottom =
-                                        Math.min(
-                                                (long) clip.y + clip.height,
-                                                (long) hostClip.y + hostClip.height);
-                        clip =
-                                new LayoutBox(
-                                        Math.toIntExact(l),
-                                        Math.toIntExact(top),
-                                        Math.toIntExact(Math.max(0, r - l)),
-                                        Math.toIntExact(Math.max(0, bottom - top)));
-                    }
-                }
-
-                enable(GL_SCISSOR_TEST, clip != null);
-                if (clip != null)
-                    gl.glScissor(
-                            clip.x,
-                            Math.toIntExact((long) height - clip.y - clip.height),
-                            clip.width,
-                            clip.height);
+                applyClip(draw.state.clip);
                 gl.glDrawElements(
                         GL_TRIANGLES,
                         draw.quadCount * 6,
@@ -513,6 +491,147 @@ public final class GlQuadRenderer implements AutoCloseable {
                         (long) draw.firstQuad * 6 * 4);
                 draws++;
             }
+        }
+
+        /** 只消费同一封闭 typed world 批次；按原 Draw/quad 顺序打包，不排序或延长资源引用。 */
+        private boolean consumeDual2d(OrderedQuadBatch batch) {
+            if (world == null || world.context.rasterState == null || batch.draws().size() < 2) return false;
+            State first = batch.draws().get(0).state;
+            long resource0 = first.resource, generation0 = first.generation, resource1 = 0, generation1 = 0;
+            int count = 0;
+            for (Draw draw : batch.draws()) {
+                State s = draw.state;
+                if ((s.material != MONOCHROME_COVERAGE && s.material != COLOR_PREMULT) || s.resource <= 0
+                        || !sameGeometry(first, s) || draw.firstQuad != count || draw.quadCount <= 0
+                        || draw.quadCount > batch.quads().size() - count) return false;
+                count += draw.quadCount;
+                if (s.resource == resource0 && s.generation == generation0) continue;
+                if (resource1 == 0) { resource1 = s.resource; generation1 = s.generation; }
+                else if (s.resource != resource1 || s.generation != generation1) return false;
+            }
+            if (resource1 == 0 || count != batch.quads().size()) return false;
+            // provider 只解析本 Frame 已 pin 的资源；解析失败原样上抛，不吞错重试或跨 Frame 缓存。
+            Texture firstTexture = Objects.requireNonNull(resources.resolve(resource0, generation0), "texture");
+            Texture second = Objects.requireNonNull(resources.resolve(resource1, generation1), "texture");
+            if (firstTexture.target != GL_TEXTURE_2D || second.target != GL_TEXTURE_2D || firstTexture.id == second.id)
+                return false;
+            staging.clear();
+            for (Draw draw : batch.draws()) {
+                boolean firstSlot = draw.state.resource == resource0 && draw.state.generation == generation0;
+                Texture texture = firstSlot ? firstTexture : second;
+                // 2D 不读数组层；复用原 layer 槽的三个局部位：texture slot/material/coverage channel。
+                int selector = (firstSlot ? 0 : 4) + (draw.state.material - 1) * 2
+                        + (texture.coverageChannel == CoverageChannel.RED ? 1 : 0);
+                for (int i = draw.firstQuad; i < draw.firstQuad + draw.quadCount; i++)
+                    quad(batch.quads().get(i), selector);
+            }
+            staging.flip();
+            gl.glBufferSubData(GL_ARRAY_BUFFER, 0, staging);
+            uploads++;
+            bytes += staging.remaining();
+            bindSecondTexture(second.id);
+            ProgramUniforms binding = uniforms[DUAL_2D];
+            if (currentProgram != DUAL_2D) {
+                gl.glUseProgram(programs[DUAL_2D]);
+                gl.glUniformMatrix4fv(binding.mvp, false, mvp);
+                gl.glUniform1i(binding.image, 0);
+                gl.glUniform1i(binding.image2, 2);
+                binding.world(gl, world.context);
+                currentProgram = DUAL_2D;
+            }
+            if (bound2d != firstTexture.id) {
+                bound2d = -1;
+                gl.glBindTexture(GL_TEXTURE_2D, firstTexture.id);
+                bound2d = firstTexture.id;
+                bindings++;
+            }
+            applyClip(first.clip);
+            gl.glDrawElements(GL_TRIANGLES, count * 6, GL_UNSIGNED_INT, 0);
+            draws++;
+            return true;
+        }
+
+        private boolean sameGeometry(State a, State b) {
+            LayoutBox x = a.clip, y = b.clip;
+            return a.transform.equals(b.transform) && a.shapeClip.equals(b.shapeClip)
+                    && (x == y || x != null && y != null && x.x == y.x && x.y == y.y
+                            && x.width == y.width && x.height == y.height);
+        }
+
+        private void bindSecondTexture(int texture) {
+            try {
+                gl.glActiveTexture(GL_TEXTURE0 + 2);
+                if (!secondCaptured) {
+                    int binding = gl.glGetInteger(GL_TEXTURE_BINDING_2D);
+                    int samplerBinding = samplerObjects ? gl.glGetInteger(GL_SAMPLER_BINDING) : 0;
+                    secondTexture = boundSecond = binding;
+                    secondSampler = samplerBinding;
+                    secondCaptured = true;
+                }
+                if (samplerObjects) gl.glBindSampler(2, 0);
+                if (boundSecond != texture) {
+                    boundSecond = -1;
+                    gl.glBindTexture(GL_TEXTURE_2D, texture);
+                    boundSecond = texture;
+                    bindings++;
+                }
+            } finally {
+                gl.glActiveTexture(GL_TEXTURE0);
+            }
+        }
+
+        private void restoreSecondTexture() {
+            Throwable failure = null;
+            try {
+                gl.glActiveTexture(GL_TEXTURE0 + 2);
+                gl.glBindTexture(GL_TEXTURE_2D, secondTexture);
+            } catch (RuntimeException | Error error) { failure = error; }
+            try {
+                if (samplerObjects) gl.glBindSampler(2, secondSampler);
+            } catch (RuntimeException | Error error) { failure = cleanupFailure(failure, error); }
+            try {
+                gl.glActiveTexture(unit);
+            } catch (RuntimeException | Error error) { failure = cleanupFailure(failure, error); }
+            if (failure instanceof Error) throw (Error) failure;
+            if (failure != null) throw (RuntimeException) failure;
+        }
+
+        private void applyClip(LayoutBox clip) {
+            if (world != null) clip = GlFontVisibility.viewport(world.context);
+            if (world != null && world.context.scissorEnabled) {
+                int[] s = world.context.scissor();
+                LayoutBox hostClip =
+                        new LayoutBox(
+                                s[0], Math.toIntExact((long) height - s[1] - s[3]), s[2], s[3]);
+                if (clip == null) clip = hostClip;
+                else {
+                    long l = Math.max((long) clip.x, hostClip.x),
+                            top = Math.max((long) clip.y, hostClip.y);
+                    long
+                            r =
+                                    Math.min(
+                                            (long) clip.x + clip.width,
+                                            (long) hostClip.x + hostClip.width),
+                            bottom =
+                                    Math.min(
+                                            (long) clip.y + clip.height,
+                                            (long) hostClip.y + hostClip.height);
+                    clip =
+                            new LayoutBox(
+                                    Math.toIntExact(l),
+                                    Math.toIntExact(top),
+                                    Math.toIntExact(Math.max(0, r - l)),
+                                    Math.toIntExact(Math.max(0, bottom - top)));
+                }
+            }
+
+            enable(GL_SCISSOR_TEST, clip != null);
+            if (clip != null)
+                gl.glScissor(
+                        clip.x,
+                        Math.toIntExact((long) height - clip.y - clip.height),
+                        clip.width,
+                        clip.height);
         }
 
         @Override
@@ -536,11 +655,17 @@ public final class GlQuadRenderer implements AutoCloseable {
                 }
                 gl.glScissor(box[0], box[1], box[2], box[3]);
                 enable(GL_SCISSOR_TEST, scissor);
-                enable(GL_DEPTH_TEST, depth);
+                if (world == null || !world.differential() || depth != world.context.depthTest)
+                    enable(GL_DEPTH_TEST, depth);
                 if (compatibility) enable(GL_ALPHA_TEST, alphaTest);
                 if (samplerObjects) gl.glBindSampler(0, sampler);
             } catch (RuntimeException | Error error) {
                 failure = error;
+            }
+            try {
+                if (secondCaptured) restoreSecondTexture();
+            } catch (RuntimeException | Error error) {
+                failure = cleanupFailure(failure, error);
             }
             try {
                 if (world != null) world.close();
@@ -562,8 +687,15 @@ public final class GlQuadRenderer implements AutoCloseable {
         }
     }
 
-    private void vertex(Quad q, float x, float y, float u, float v) {
-        staging.putFloat(x).putFloat(y).putFloat(u).putFloat(v).putFloat(q.layer);
+    private void quad(Quad q, float layer) {
+        vertex(q, q.x0, q.y0, q.s0, q.t0, layer);
+        vertex(q, q.x1, q.y1, q.s1, q.t1, layer);
+        vertex(q, q.x2, q.y2, q.s2, q.t2, layer);
+        vertex(q, q.x3, q.y3, q.s3, q.t3, layer);
+    }
+
+    private void vertex(Quad q, float x, float y, float u, float v, float layer) {
+        staging.putFloat(x).putFloat(y).putFloat(u).putFloat(v).putFloat(layer);
         staging.putFloat((q.color >>> 16 & 255) / 255f)
                 .putFloat((q.color >>> 8 & 255) / 255f)
                 .putFloat((q.color & 255) / 255f)
