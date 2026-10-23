@@ -191,7 +191,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         final boolean color;
         final Page[] pages;
         long lastUsed;
-        boolean pinned, whiteReady;
+        boolean pinned, whiteReady, presentationPinned;
         final SamplingView view;
         final List<ViewKey> keys = new ArrayList<ViewKey>();
 
@@ -350,11 +350,19 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         return new Stats(this);
     }
 
+    /** 只查询该采样view已完整发布的驻留项，不pin、创建Frame或返回UV。
+     * 登记与回放之间仍可能淘汰；真正prepare须重新取得本Frame的资源保护。 */
+    public boolean isResident(GlyphKey key, SamplingView view) {
+        check();
+        return residents.containsKey(new ViewKey(
+                Objects.requireNonNull(key, "key"), Objects.requireNonNull(view, "view")));
+    }
+
     public Frame beginFrame(Collection<GlyphKey> demand) {
         return beginFrame(demand, false);
     }
 
-    /** managed consumer保留此前consumer的分帧upload，epoch结束时才裁决过期。 */
+    /** managed consumer保留此前consumer的分帧upload及实际使用组，epoch结束时才裁决过期。 */
     public Frame beginFrame(Collection<GlyphKey> demand, boolean preserveUpload) {
         return beginFrame(demand, preserveUpload, SamplingView.PREMULT_RGBA);
     }
@@ -383,7 +391,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             boolean needsSolid) {
         check();
         if (active != null) throw new IllegalStateException("先结束上一个图集范围");
-        Frame frame = new Frame(view, needsSolid);
+        Frame frame = new Frame(view, needsSolid, preserveUpload);
         for (Collection<GlyphKey> layer : layers) {
             List<GlyphKey> admitted = new ArrayList<>();
             for (GlyphKey key : layer) {
@@ -406,15 +414,16 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 && !preserveUpload
                 && (frame.priorityLayers.isEmpty()
                         || !frame.priorityLayers.get(0).contains(uploading.key))) uploading = null;
-        if (uploading != null) uploading.resident.group.pinned = true;
+        if (uploading != null) frame.pinGroup(uploading.resident.group);
         active = frame;
         return frame;
     }
 
-    /** 不持Frame/UV的epoch结束裁决，仅丢弃不再可见的未完成upload。 */
+    /** 不持Frame/UV的epoch结束裁决；释放组保护，只丢弃不再可见的未完成upload。 */
     public void retainUploadDemand(Collection<GlyphKey> demand) {
         check();
         if (active != null) throw new IllegalStateException("先关闭Frame再结束epoch");
+        for (Group group : groups.values()) group.presentationPinned = false;
         if (uploading != null && !demand.contains(uploading.key)) uploading = null;
         java.util.Iterator<Upload> pending = partials.values().iterator();
         while (pending.hasNext()) if (!demand.contains(pending.next().key)) pending.remove();
@@ -422,12 +431,19 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
 
     public final class Frame implements AutoCloseable {
         public final SamplingView view;
-        private final boolean needsSolid;
+        private final boolean needsSolid, preserveUpload;
         private Resident white;
 
-        private Frame(SamplingView view, boolean needsSolid) {
+        private Frame(SamplingView view, boolean needsSolid, boolean preserveUpload) {
             this.view = view;
             this.needsSolid = needsSolid;
+            this.preserveUpload = preserveUpload;
+        }
+
+        private void pinGroup(Group group) {
+            group.pinned = true;
+            // 保护位只随现有组存在，至多maxGroups；短Frame仍只持本consumer的可见资源。
+            if (preserveUpload) group.presentationPinned = true;
         }
 
         public Resident solid() {
@@ -438,18 +454,23 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
 
         private final LinkedHashSet<GlyphKey> demand = new LinkedHashSet<GlyphKey>();
         private final List<List<GlyphKey>> priorityLayers = new ArrayList<>();
+        // 仅复用已发布且本Frame已pin的正项：close前evict不能移除其组，Resident因而保持有效。
+        // 备用层仍到原pinLayer时机才加入；未命中和未完整上传的partial不进入此映射。
+        private final Map<GlyphKey, Resident> visible = new HashMap<GlyphKey, Resident>();
 
         private void pinLayer(Collection<GlyphKey> layer) {
             for (GlyphKey key : layer) {
-                Resident r = residents.get(new ViewKey(key, view));
+                Resident r = visible.get(key);
+                boolean known = r != null;
+                if (!known) r = residents.get(new ViewKey(key, view));
                 if (r != null) {
-                    r.group.pinned = true;
+                    pinGroup(r.group);
                     r.group.lastUsed = ++clock;
+                    if (!known) visible.put(key, r);
                 }
             }
         }
 
-        private final Map<GlyphKey, Resident> visible = new HashMap<GlyphKey, Resident>();
         private boolean frozen, done;
 
         public Collection<GlyphKey> demand() {
@@ -481,18 +502,24 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 cpu.drainReady(budget.maxDemand);
             } else if (!demand.isEmpty())
                 throw new IllegalArgumentException("非empty glyph需求须提供CPUworker");
+            // #81 visible只含本Frame已经pin的已发布正项；全驻留时不建立上传游标或重复扫描需求。
+            // 直色solid仍须沿原路径准备，CPU队列维护与参数失败也必须先完成。
+            if (visible.size() == demand.size() && !(needsSolid && view == SamplingView.STRAIGHT_RGBA)) {
+                java.util.Objects.requireNonNull(uploadBudget, "uploadBudget");
+                return;
+            }
             for (GlyphKey key : demand)
-                if (!residents.containsKey(new ViewKey(key, view))) cpu.request(key);
+                if (!visible.containsKey(key) && !residents.containsKey(new ViewKey(key, view))) cpu.request(key);
             UploadProgress progress = new UploadProgress(uploadBudget);
             int uploadTarget = view == SamplingView.STRAIGHT_RGBA ? GL_TEXTURE_2D : target;
-            try (GlCpuUploadScope state = new GlCpuUploadScope(gl, uploadTarget)) {
+            try (GlCpuUploadScope state = GlCpuUploadScope.deferred(gl, uploadTarget)) {
                 preparingState = state;
                 if (needsSolid && view == SamplingView.STRAIGHT_RGBA) prepareSolid(progress);
                 for (List<GlyphKey> layer : priorityLayers) {
                     pinLayer(layer);
                     for (GlyphKey key : layer) {
                         if (!progress.canSubmit(1)) break;
-                        if (residents.containsKey(new ViewKey(key, view))) continue;
+                        if (visible.containsKey(key) || residents.containsKey(new ViewKey(key, view))) continue;
                         if (uploading != null
                                 && (!uploading.key.equals(key)
                                         || uploading.resident.samplingView != view)) continue;
@@ -503,7 +530,9 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                             if (uploading == null) continue;
                         }
                         if (!uploadRows(uploading, progress)) break;
-                        publish(uploading);
+                        Upload completed = uploading;
+                        publish(completed);
+                        visible.put(key, completed.resident);
                     }
                 }
             } finally {
@@ -521,12 +550,13 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             if (whiteGroup == null && progress.canSubmit(36))
                 whiteGroup = createGroup(false, view);
             if (whiteGroup == null) return;
-            whiteGroup.pinned = true;
+            pinGroup(whiteGroup);
             whiteGroup.lastUsed = ++clock;
             if (!whiteGroup.whiteReady && progress.canSubmit(36)) {
                 whiteScratch.clear();
                 for (int i = 0; i < 36; i++) whiteScratch.put((byte) 255);
                 whiteScratch.flip();
+                preparingState.prepare();
                 gl.glBindTexture(whiteGroup.target, whiteGroup.texture);
                 gl.glTexSubImage2D(
                         whiteGroup.target, 0, 0, 0, 3, 3, GL_RGBA, GL_UNSIGNED_BYTE, whiteScratch);
@@ -539,19 +569,24 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         public void freeze() {
             checkFrame();
             if (frozen) return;
+            if (visible.size() == demand.size()) {
+                frozen = true;
+                return;
+            }
             for (GlyphKey key : demand) {
+                if (visible.containsKey(key)) continue;
                 Resident r = residents.get(new ViewKey(key, view));
                 if (r != null) {
+                    pinGroup(r.group);
                     visible.put(key, r);
-                    r.group.pinned = true;
                 }
             }
             frozen = true;
         }
 
         private void pin() {
-            for (Resident resident : visible.values()) resident.group.pinned = true;
-            if (white != null) white.group.pinned = true;
+            for (Resident resident : visible.values()) pinGroup(resident.group);
+            if (white != null) pinGroup(white.group);
         }
 
         @Override
@@ -614,6 +649,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             // 复用小块提交，单次 staging 不超过64KiB；宽行本身是最小预算单位。
             rows = Math.min(rows, Math.max(1, 65536 / rowBytes));
             ByteBuffer data = glyphBlock(job, rows, rowBytes);
+            preparingState.prepare();
             gl.glBindTexture(job.resident.group.target, job.resident.group.texture);
             if (job.resident.group.target == GL_TEXTURE_2D_ARRAY)
                 gl.glTexSubImage3D(
@@ -711,6 +747,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 rejected++;
                 return null;
             }
+        preparingState.prepare();
         int texture = gl.glGenTextures();
         try {
             gl.glBindTexture(groupTarget, texture);
@@ -766,7 +803,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
 
     private Upload place(GlyphKey key, GlyphBitmap bitmap, Group group, int layer, int w, int h) {
         int[] pos = group.pages[layer].allocate(w, h, budget.pageSize);
-        group.pinned = true;
+        active.pinGroup(group);
         group.lastUsed = ++clock;
         return new Upload(
                 key,
@@ -803,6 +840,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         Group candidate = null;
         for (Group group : groups.values())
             if (!group.pinned
+                    && !group.presentationPinned
                     && !bound.contains(group.texture)
                     && !hasPartial(group)
                     && (candidate == null || group.lastUsed < candidate.lastUsed))
@@ -816,7 +854,6 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         return true;
     }
 
-    /** 只读取已 freeze 的 pin 范围，不上传、不创建、不推测资源代际。 */
     /** 单atlas可复用scratch，最大为64KiB或一行；每上传清零padding而不分配native行buffer。 */
     private ByteBuffer uploadScratch(int bytes) {
         if (uploadScratch == null || uploadScratch.capacity() < bytes)

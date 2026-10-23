@@ -370,6 +370,11 @@ public final class GlBatchScenario extends TestApplication {
 
     private static int[] route(boolean array, File output, List<Item> items, int[] expected)
             throws Exception {
+        return route(array, output, items, expected, false);
+    }
+
+    private static int[] route(boolean array, File output, List<Item> items, int[] expected, boolean grouped)
+            throws Exception {
         int[] ids = new int[array ? 2 : 4];
         final int[] seeds = new int[4];
         try (AutoCloseable cleanup =
@@ -406,7 +411,7 @@ public final class GlBatchScenario extends TestApplication {
             glScissor(3, 5, 7, 11);
             glActiveTexture(GL_TEXTURE3);
             int[] before = state();
-            String name = array ? "array" : "2d";
+            String name = (array ? "array" : "2d") + (grouped ? "-grouped" : "");
             try (GlQuadRenderer renderer =
                     new GlQuadRenderer(
                             new Lwjgl3GlApi(),
@@ -433,7 +438,7 @@ public final class GlBatchScenario extends TestApplication {
                                     batch -> {
                                         segments.add(batch);
                                         scope.consumeBatch(batch);
-                                    });
+                                    }, grouped);
                     for (Item item : items) {
                         long resource =
                                 item.material == 0
@@ -466,8 +471,8 @@ public final class GlBatchScenario extends TestApplication {
                         || c.indexUploads != 1
                         || c.vertexBytes != 7 * 4 * 36
                         || segments.size() != 2
-                        || c.draws != (array ? 5 : 7)
-                        || c.textureBindings != (array ? 2 : 6))
+                        || c.draws != (grouped ? (array ? 4 : 5) : (array ? 5 : 7))
+                        || c.textureBindings != (array ? 2 : (grouped ? 4 : 6)))
                     throw new AssertionError("容量/上传合同失败");
                 System.out.println(
                         name
@@ -584,6 +589,18 @@ public final class GlBatchScenario extends TestApplication {
             scenario("2D原序像素与状态恢复", () -> routes[0] = route(false, output, items, expected));
             scenario("array原序像素与状态恢复", () -> routes[1] = route(true, output, items, expected));
             scenario("2D与array参考一致", () -> compare("2d-vs-array", routes[0], routes[1]));
+            // 独立字面次序：capacity首段4个；2D为A1,A2,B,solid，array首段原本已相邻同资源。
+            List<Item> grouped2d = new ArrayList<>(), groupedArray = new ArrayList<>();
+            for (int index : new int[] {0,2,1,3,4,6,5,7}) grouped2d.add(items.get(index));
+            for (int index : new int[] {0,1,2,3,4,6,5,7}) groupedArray.add(items.get(index));
+            scenario("2D激进模式实际像素及draw下降", () -> {
+                int[] actual = route(false, output, items, reference(grouped2d), true);
+                require(!java.util.Arrays.equals(actual,routes[0]), "激进模式未改变透明覆盖次序");
+            });
+            scenario("array激进模式保容量和状态且合并同页", () -> {
+                int[] actual = route(true, output, items, reference(groupedArray), true);
+                require(!java.util.Arrays.equals(actual,routes[1]), "不同clip仍应作为独立状态分组");
+            });
             System.out.println(
                     "GL_BATCH_SCENARIO_PASS stateRestore=normal+exception capacity=4 segments=2");
         }

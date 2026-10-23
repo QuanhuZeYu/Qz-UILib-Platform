@@ -7,24 +7,8 @@ public final class StandardFontContext {
     private StandardFontContext() {}
 
     public static FontRenderContext from(FontRenderContext context) {
-        FontRenderContext.MatrixState state = context.state;
-        // 显式文字颜色替换current color，格式颜色已由布局保存。
-        FontRenderContext.MatrixState fontState =
-                new FontRenderContext.MatrixState(
-                        state.projection(),
-                        state.modelView(),
-                        new float[] {1, 1, 1, 1},
-                        state.alphaTest,
-                        state.alphaFunction,
-                        state.alphaReference,
-                        state.lightmapActive,
-                        state.lightmapTexture,
-                        state.lightmapU,
-                        state.lightmapV,
-                        state.packedLight,
-                        state.normal(),
-                        state.lighting(),
-                        state.blockEntityId);
+        // 显式文字颜色替换current color，格式颜色已由布局保存；其余已冻结载荷同包共享。
+        FontRenderContext.MatrixState fontState = new FontRenderContext.MatrixState(context.state);
         FontRenderContext.RasterState raster = context.rasterState;
         // 单色atlas存coverage（字体spec 5.2）；标准文字拥有coverage混合，不能继承caller的关闭blend。
         // typed replay输出直色，因此RGB乘一次源alpha，目标alpha采用覆盖率合成。其余历史限制仍来自caller。
@@ -33,38 +17,13 @@ public final class StandardFontContext {
                 raster == null
                         ? null
                         : new FontRenderContext.RasterState(
-                                true,
+                                raster,
                                 GL_SRC_ALPHA,
                                 GL_ONE_MINUS_SRC_ALPHA,
                                 GL_ONE,
                                 GL_ONE_MINUS_SRC_ALPHA,
                                 GL_FUNC_ADD,
-                                GL_FUNC_ADD,
-                                raster.blendColor(),
-                                raster.stencilEnabled,
-                                raster.frontStencil,
-                                raster.backStencil,
-                                raster.colorMask(),
-                                raster.depthRange(),
-                                raster.cullEnabled,
-                                raster.cullFace,
-                                raster.frontFace,
-                                raster.polygonOffsetFill,
-                                raster.polygonOffsetFactor,
-                                raster.polygonOffsetUnits);
-        return new FontRenderContext(
-                context.projection,
-                context.drawFramebuffer,
-                context.sourceFramebufferHeight,
-                context.depthTest,
-                context.depthFunction,
-                context.depthWrite,
-                context.scissorEnabled,
-                context.scissor(),
-                fontState,
-                context.contextIdentity,
-                context.revision,
-                context.passKey,
-                fontRaster);
+                                GL_FUNC_ADD);
+        return new FontRenderContext(context, fontState, fontRaster);
     }
 }

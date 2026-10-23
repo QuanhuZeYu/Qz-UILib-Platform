@@ -30,7 +30,7 @@ DesktopWindow.semantic(request) 与 EmbeddedSceneInputs.semantic(request) 直接
 
 ## 4. 配置与资源
 
-桌面调用核心[对象配置能力](<../../../Qz-UILib-Core/specs/config/2026-10-11-uilib-config-spec.md>)，显式路径读取或首次生成 YAML。桌面操作可触发重载，变化沿配置状态订阅更新窗口标题、页面内容或主题及字体来源；页面无需关闭重开。重载事件属于桌面宿主，不将桌面按键或窗口类型引入核心。字体沿既有来源与代际更新机制，完整候选列表及显式空值行为不另定义。
+桌面沿核心[配置会话](<../../../Qz-UILib-Core/specs/config/2026-10-11-uilib-config-spec.md>)读取或首次生成 YAML，显式重载并订阅发布；标题、主题、页面、字体代际和合批策略动态更新，无需重开页面。窗口将合批选项交给现有渲染 owner，后续新 Prepared 采用新策略；共享语义见[字体规格 §5.2](<../../../Qz-UILib-Core/specs/content/2026-10-07-uilib-font-renderer-spec.md#52-按需增量与效率>)。桌面按键与窗口类型止于宿主边界，字体候选与空值语义不另定义。
 
 ## 5. 生命周期与失败
 

@@ -35,6 +35,13 @@ public final class FontProjection {
         return result;
     }
 
+    boolean sameState(FontProjection other) {
+        return this == other || other != null
+                && FontRenderContext.sameFloats(projection, other.projection)
+                && FontRenderContext.sameFloats(modelView, other.modelView)
+                && java.util.Arrays.equals(viewport, other.viewport);
+    }
+
     public float[] projection() {
         return projection.clone();
     }
@@ -55,33 +62,60 @@ public final class FontProjection {
         if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z))
             throw new IllegalArgumentException("非有限anchor");
         double[] q = new double[4];
-        for (int r = 0; r < 4; r++)
-            q[r] = mvp[r] * x + mvp[4 + r] * y + mvp[8 + r] * z + mvp[12 + r];
+        fillClip(x, y, z, q);
         return q;
+    }
+
+    /** 同包采样已校验锚点；缓冲只属于本次command，不保留相机或跨帧结果。 */
+    void fillClip(double x, double y, double z, double[] target) {
+        for (int r = 0; r < 4; r++)
+            target[r] = mvp[r] * x + mvp[4 + r] * y + mvp[8 + r] * z + mvp[12 + r];
+    }
+
+    boolean parallelXY() {
+        return mvp[3] == 0 && mvp[7] == 0;
     }
 
     /** local x/y平面的屏幕像素微分，largest singular value覆盖旋转/shear/非等比。
      * anchor在eye后或w接近0时拒绝采样；裁剪由caller/backend另管。 */
     public double pixelsPerUnitAt(double x, double y, double z) {
-        double[] q = clipAt(x, y, z);
-        double w = q[3];
+        if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z))
+            throw new IllegalArgumentException("非有限anchor");
+        double qx = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12];
+        double qy = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13];
+        double w = mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15];
+        return densityClip(qx, qy, w, true);
+    }
+
+    /** 已投影角点复用同一Jacobian；失败由采样策略区分behind与保守顶档，不构造异常。 */
+    double densityClip(double qx, double qy, double w) {
+        return densityClip(qx, qy, w, false);
+    }
+
+    private double densityClip(double qx, double qy, double w, boolean strict) {
         if (!Double.isFinite(w) || w <= 1e-9)
-            throw new IllegalArgumentException("anchor不在可采样的正clip-w区域");
-        double a = (mvp[0] - q[0] / w * mvp[3]) / w * viewport[2] / 2.0;
-        double b = (mvp[4] - q[0] / w * mvp[7]) / w * viewport[2] / 2.0;
-        double c = (mvp[1] - q[1] / w * mvp[3]) / w * viewport[3] / 2.0;
-        double d = (mvp[5] - q[1] / w * mvp[7]) / w * viewport[3] / 2.0;
+            return invalidDensity(strict, "anchor不在可采样的正clip-w区域");
+        // 保持原乘除及hypot顺序，临界采样值不能因代数重排跨到另一档。
+        double a = (mvp[0] - qx / w * mvp[3]) / w * viewport[2] / 2.0;
+        double b = (mvp[4] - qx / w * mvp[7]) / w * viewport[2] / 2.0;
+        double c = (mvp[1] - qy / w * mvp[3]) / w * viewport[3] / 2.0;
+        double d = (mvp[5] - qy / w * mvp[7]) / w * viewport[3] / 2.0;
         double scale =
                 Math.max(Math.max(Math.abs(a), Math.abs(b)), Math.max(Math.abs(c), Math.abs(d)));
-        if (!Double.isFinite(scale) || scale == 0) throw new IllegalArgumentException("投影平面退化");
+        if (!Double.isFinite(scale) || scale == 0) return invalidDensity(strict, "投影平面退化");
         a /= scale;
         b /= scale;
         c /= scale;
         d /= scale;
         double xx = a * a + c * c, xy = a * b + c * d, yy = b * b + d * d;
         double sigma = scale * Math.sqrt((xx + yy + Math.hypot(xx - yy, 2 * xy)) / 2);
-        if (!Double.isFinite(sigma) || sigma <= 0) throw new IllegalArgumentException("投影采样溢出");
+        if (!Double.isFinite(sigma) || sigma <= 0) return invalidDensity(strict, "投影采样溢出");
         return sigma;
+    }
+
+    private static double invalidDensity(boolean strict, String message) {
+        if (strict) throw new IllegalArgumentException(message);
+        return Double.NaN;
     }
 
     /** actualRasterEm是policy档位，不保证Atlas能容纳；capped明确表示采样需求受限。 */

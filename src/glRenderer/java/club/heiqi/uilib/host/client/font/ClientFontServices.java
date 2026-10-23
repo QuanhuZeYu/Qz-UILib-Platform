@@ -87,6 +87,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
             usedNanos,
             rejectedDemand;
     private int remainingCalls, usedCalls, preparedCount;
+    private boolean allowBatchReordering;
     private final LinkedHashSet<GlyphKey> presentationDemand = new LinkedHashSet<GlyphKey>();
 
     public static final class PresentationStats {
@@ -144,19 +145,27 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         if (!presenting) throw new IllegalStateException("没有活动presentation");
         if (preparedCount != 0) throw new IllegalStateException("先关闭所有Prepared再结束presentation");
         try {
-            rasterizer.retainPending(presentationDemand);
-            if (atlas != null) atlas.retainUploadDemand(presentationDemand);
+            Throwable failure = null;
+            try {
+                rasterizer.retainPending(presentationDemand);
+            } catch (RuntimeException | Error error) {
+                failure = error;
+            }
+            // CPU清理失败也须归还GPU组保护；保留原始主错与后续清理错误。
+            try {
+                if (atlas != null) atlas.retainUploadDemand(presentationDemand);
+            } catch (RuntimeException | Error error) {
+                if (failure == null) failure = error;
+                else if (failure != error) failure.addSuppressed(error);
+            }
+            if (failure instanceof Error) throw (Error) failure;
+            if (failure != null) throw (RuntimeException) failure;
             pumpReady();
         } finally {
             presenting = false;
         }
     }
 
-    /** 所有共享consumer必须走此入口；无显式epoch时懒建立范围。默认构造模式在Prepared.close结束，
-     * 有真实present边界的宿主模式保留到endPresentation。
-     * nanos扣atlas prepare耗时（不含需求收集、布局、回放和consumer间空闲），比仅驱动耗时保守；
-     * GL调用不可抢占，单调用可超过剩余时间，但后续消费不会重新获取预算。
-     */
     /** 延期consumer只注册投影可见key并启动有界worker，不创建Frame、图集或冻结UV。
      * 与scene/immediate consumer共用完整呈现需求；真正回放时才取得短Prepared。 */
     public Set<GlyphKey> registerVisibleDemand(
@@ -166,7 +175,12 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
             throw new IllegalStateException("延期consumer需要显式presentation或真实present边界");
         if (!presenting) beginPresentation(--autoEpoch);
         Set<GlyphKey> admitted = admitDemand(renderer.collectVisibleDemand(plan, context));
-        for (GlyphKey key : admitted) rasterizer.request(key);
+        if (admitted.isEmpty()) return admitted;
+        GlGlyphAtlas.SamplingView view = atlas == null ? null : renderer.resolveSamplingView(context);
+        // GPU驻留不依赖CPU位图仍在LRU；不能为已可画字形重复排队光栅。这里只读现有atlas，
+        // 不缓存未驻留/预算拒绝结果；被淘汰或另一view仍沿原request重试，回放再取得短Frame。
+        for (GlyphKey key : admitted)
+            if (atlas == null || !atlas.isResident(key, view)) rasterizer.request(key);
         return admitted;
     }
 
@@ -188,17 +202,24 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     }
 
     private Set<GlyphKey> admitDemand(Collection<GlyphKey> incoming) {
-        LinkedHashSet<GlyphKey> admitted = new LinkedHashSet<GlyphKey>();
+        // 两处调用均传入collectVisibleDemand的独立只读有序Set；容量足够时复用该快照，不能返回整帧可变并集。
+        boolean reuseIncoming = incoming instanceof Set
+                && incoming.size() <= settings.maxDemand - presentationDemand.size();
+        Set<GlyphKey> admitted = reuseIncoming ? (Set<GlyphKey>) incoming : new LinkedHashSet<GlyphKey>();
         for (GlyphKey key : incoming) {
             if (presentationDemand.size() < settings.maxDemand
                     || presentationDemand.contains(key)) {
                 presentationDemand.add(key);
-                admitted.add(key);
-            } else rejectedDemand++;
+                if (!reuseIncoming) admitted.add(key);
+            } else {
+                rejectedDemand++;
+            }
         }
-        return Collections.unmodifiableSet(admitted);
+        return reuseIncoming ? admitted : Collections.unmodifiableSet(admitted);
     }
 
+    /** consumer 共享呈现预算；自动范围在 Prepared 关闭时结束，显式范围由宿主结束。
+     * 预算扣除 atlas prepare 时间，包含提交边界，不能抢占单次驱动调用。 */
     public GlPaintPlanRenderer.Prepared prepare(
             GlPaintPlanRenderer renderer, PaintPlan plan, LayoutBox viewport) {
         return prepare(renderer, plan, viewport, null);
@@ -219,15 +240,17 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         if (preparedCount != 0) throw new IllegalStateException("共享atlas只允许即时短Prepared");
         boolean automatic = !presenting && !presentationBoundaryRequired;
         if (!presenting) beginPresentation(--autoEpoch);
-        long start = System.nanoTime();
         try {
-            admitDemand(
+            // owner保留整帧并集负责预算/取消；短Prepared只准备当前consumer，避免逐行扫描累计前缀。
+            Set<GlyphKey> admitted = admitDemand(
                     context == null
                             ? renderer.collectVisibleDemand(plan, viewport)
                             : renderer.collectVisibleDemand(plan, context));
             GlGlyphAtlas sharedAtlas = atlas();
             GlGlyphAtlas.Stats before = sharedAtlas.stats();
-            long availableNanos = Math.max(0, remainingNanos - (System.nanoTime() - start));
+            // 需求收集不扣上传限时；大计划若先耗尽额度，新增字形会每帧都无法上传。
+            long start = System.nanoTime();
+            long availableNanos = remainingNanos;
             try {
                 GlGlyphAtlas.UploadBudget budget =
                         new GlGlyphAtlas.UploadBudget(
@@ -237,12 +260,13 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
                             preparedCount--;
                             if (automatic) endPresentation();
                         };
+                renderer.allowBatchReordering(allowBatchReordering);
                 GlPaintPlanRenderer.Prepared prepared =
                         context == null
                                 ? renderer.prepareDemand(
-                                        plan, viewport, budget, presentationDemand, false, onClose)
+                                        plan, viewport, budget, admitted, false, onClose)
                                 : renderer.prepareDemandContext(
-                                        plan, context, budget, presentationDemand, onClose);
+                                        plan, context, budget, admitted, onClose);
                 preparedCount++;
                 return prepared;
             } finally {
@@ -358,6 +382,12 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         return rasterizer;
     }
 
+    /** 宿主配置在owner线程发布，所有共享consumer的下一次Prepared使用同一策略。 */
+    public void allowBatchReordering(boolean enabled) {
+        check();
+        allowBatchReordering = enabled;
+    }
+
     public Settings settings() {
         return settings;
     }
@@ -436,7 +466,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
                         settings.quadCapacity,
                         settings.maxDemand,
                         programs,
-                        images, videos);
+                        images, videos, fonts);
         renderers.add(renderer);
         return renderer;
     }

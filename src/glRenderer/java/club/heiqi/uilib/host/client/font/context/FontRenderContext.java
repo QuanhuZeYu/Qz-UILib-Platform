@@ -82,6 +82,23 @@ public final class FontRenderContext {
         this.passKey = passKey;
     }
 
+    /** 同包派生只复用已冻结的私有载荷；公开数组入口与 getter 仍防御复制。 */
+    FontRenderContext(FontRenderContext source, MatrixState state, RasterState rasterState) {
+        projection = source.projection;
+        drawFramebuffer = source.drawFramebuffer;
+        sourceFramebufferHeight = source.sourceFramebufferHeight;
+        depthTest = source.depthTest;
+        depthFunction = source.depthFunction;
+        depthWrite = source.depthWrite;
+        scissorEnabled = source.scissorEnabled;
+        scissor = source.scissor;
+        this.state = Objects.requireNonNull(state, "state");
+        contextIdentity = source.contextIdentity;
+        revision = source.revision;
+        passKey = source.passKey;
+        this.rasterState = rasterState;
+    }
+
     /** 延期提交的光栅状态值；数组只能通过防御拷贝读取，不在构造中查询GL。
      * FBO/viewport/depth/scissor仍由外层context保存。延期consumer应用本载荷后须恢复回放入口状态。
      */
@@ -145,11 +162,57 @@ public final class FontRenderContext {
             polygonOffsetUnits = units;
         }
 
+        /** 标准字体仅覆盖混合规则，其余 caller 光栅载荷保持不可变共享。 */
+        RasterState(
+                RasterState source,
+                int srcRgb,
+                int dstRgb,
+                int srcAlpha,
+                int dstAlpha,
+                int equationRgb,
+                int equationAlpha) {
+            blendEnabled = true;
+            blendSrcRgb = srcRgb;
+            blendDstRgb = dstRgb;
+            blendSrcAlpha = srcAlpha;
+            blendDstAlpha = dstAlpha;
+            blendEquationRgb = equationRgb;
+            blendEquationAlpha = equationAlpha;
+            blendColor = source.blendColor;
+            depthRange = source.depthRange;
+            colorMask = source.colorMask;
+            stencilEnabled = source.stencilEnabled;
+            frontStencil = source.frontStencil;
+            backStencil = source.backStencil;
+            cullEnabled = source.cullEnabled;
+            cullFace = source.cullFace;
+            frontFace = source.frontFace;
+            polygonOffsetFill = source.polygonOffsetFill;
+            polygonOffsetFactor = source.polygonOffsetFactor;
+            polygonOffsetUnits = source.polygonOffsetUnits;
+        }
+
         private static float[] vector(float[] value, int size) {
             if (value == null || value.length != size) throw new IllegalArgumentException("无效光栅向量");
             for (float f : value)
                 if (!Float.isFinite(f)) throw new IllegalArgumentException("非有限光栅状态");
             return value.clone();
+        }
+
+        private boolean sameState(RasterState other) {
+            return this == other || other != null
+                    && blendEnabled == other.blendEnabled
+                    && blendSrcRgb == other.blendSrcRgb && blendDstRgb == other.blendDstRgb
+                    && blendSrcAlpha == other.blendSrcAlpha && blendDstAlpha == other.blendDstAlpha
+                    && blendEquationRgb == other.blendEquationRgb && blendEquationAlpha == other.blendEquationAlpha
+                    && stencilEnabled == other.stencilEnabled
+                    && cullEnabled == other.cullEnabled && cullFace == other.cullFace && frontFace == other.frontFace
+                    && polygonOffsetFill == other.polygonOffsetFill
+                    && sameFloat(polygonOffsetFactor, other.polygonOffsetFactor)
+                    && sameFloat(polygonOffsetUnits, other.polygonOffsetUnits)
+                    && frontStencil.sameState(other.frontStencil) && backStencil.sameState(other.backStencil)
+                    && sameFloats(blendColor, other.blendColor) && sameFloats(depthRange, other.depthRange)
+                    && java.util.Arrays.equals(colorMask, other.colorMask);
         }
 
         public float[] blendColor() {
@@ -184,6 +247,38 @@ public final class FontRenderContext {
             this.depthFail = depthFail;
             this.depthPass = depthPass;
         }
+
+        private boolean sameState(StencilFace other) {
+            return this == other || other != null
+                    && function == other.function && reference == other.reference
+                    && valueMask == other.valueMask && writeMask == other.writeMask
+                    && fail == other.fail && depthFail == other.depthFail && depthPass == other.depthPass;
+        }
+    }
+
+    /** 同一绘制来源的完整值比较；直接读取不可变快照，保留 P/MV 及浮点原始位身份。 */
+    public boolean sameDrawState(FontRenderContext other) {
+        return this == other || other != null
+                && contextIdentity == other.contextIdentity && revision == other.revision
+                && passKey == other.passKey && drawFramebuffer == other.drawFramebuffer
+                && sourceFramebufferHeight == other.sourceFramebufferHeight
+                && depthTest == other.depthTest && depthFunction == other.depthFunction
+                && depthWrite == other.depthWrite && scissorEnabled == other.scissorEnabled
+                && java.util.Arrays.equals(scissor, other.scissor)
+                && projection.sameState(other.projection) && state.sameState(other.state)
+                && (rasterState == other.rasterState
+                        || rasterState != null && rasterState.sameState(other.rasterState));
+    }
+
+    static boolean sameFloat(float a, float b) {
+        return Float.floatToRawIntBits(a) == Float.floatToRawIntBits(b);
+    }
+
+    static boolean sameFloats(float[] a, float[] b) {
+        if (a == b) return true;
+        if (a.length != b.length) return false;
+        for (int i = 0; i < a.length; i++) if (!sameFloat(a[i], b[i])) return false;
+        return true;
     }
 
     public int[] scissor() {
@@ -194,8 +289,9 @@ public final class FontRenderContext {
         return projection.samplingAt(x, y, logicalEm, policy, revision);
     }
 
-    /** effective固定管线/可选宿主状态；所有向量和矩阵均复制，绝不保留JOML stack引用。 */
+    /** effective固定管线/可选宿主状态；公开构造复制向量和矩阵，绝不保留JOML stack引用。 */
     public static final class MatrixState {
+        private static final float[] WHITE = {1, 1, 1, 1};
         private final float[] p, mv, color, normal, lighting;
         public final boolean alphaTest, lightmapActive;
         public final int alphaFunction, lightmapTexture, packedLight, blockEntityId;
@@ -236,11 +332,40 @@ public final class FontRenderContext {
             this.blockEntityId = blockEntityId;
         }
 
+        /** 显式字体颜色已在布局中；只将 currentColor 归白，不重拷贝 caller 矩阵与光照。 */
+        MatrixState(MatrixState source) {
+            p = source.p;
+            mv = source.mv;
+            color = WHITE;
+            normal = source.normal;
+            lighting = source.lighting;
+            alphaTest = source.alphaTest;
+            alphaFunction = source.alphaFunction;
+            alphaReference = source.alphaReference;
+            lightmapActive = source.lightmapActive;
+            lightmapTexture = source.lightmapTexture;
+            lightmapU = source.lightmapU;
+            lightmapV = source.lightmapV;
+            packedLight = source.packedLight;
+            blockEntityId = source.blockEntityId;
+        }
+
         private static float[] copy(float[] v, int size) {
             if (v == null || v.length != size) throw new IllegalArgumentException("无效向量长度");
             float[] c = v.clone();
             for (float x : c) if (!Float.isFinite(x)) throw new IllegalArgumentException("非有限状态");
             return c;
+        }
+
+        private boolean sameState(MatrixState other) {
+            return this == other || other != null
+                    && alphaTest == other.alphaTest && alphaFunction == other.alphaFunction
+                    && sameFloat(alphaReference, other.alphaReference)
+                    && lightmapActive == other.lightmapActive && lightmapTexture == other.lightmapTexture
+                    && sameFloat(lightmapU, other.lightmapU) && sameFloat(lightmapV, other.lightmapV)
+                    && packedLight == other.packedLight && blockEntityId == other.blockEntityId
+                    && sameFloats(p, other.p) && sameFloats(mv, other.mv) && sameFloats(color, other.color)
+                    && sameFloats(normal, other.normal) && sameFloats(lighting, other.lighting);
         }
 
         public float[] projection() {

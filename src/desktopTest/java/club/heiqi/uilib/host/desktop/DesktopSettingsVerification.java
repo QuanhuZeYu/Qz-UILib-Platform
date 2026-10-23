@@ -2,7 +2,6 @@ package club.heiqi.uilib.host.desktop;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
-import static club.heiqi.uilib.host.desktop.DesktopTestFrames.settle;
 import static club.heiqi.uilib.host.desktop.DesktopTestInput.geometry;
 import static club.heiqi.uilib.host.desktop.DesktopTestInput.hit;
 import java.awt.image.BufferedImage;
@@ -21,6 +20,11 @@ import club.heiqi.uilib.ui.scene.control.ThemeConfiguration;
 import club.heiqi.uilib.ui.scene.control.ThemeMode;
 import club.heiqi.uilib.ui.scene.layout.SceneGeometryView;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
+import club.heiqi.uilib.ui.scene.paint.PaintPlan;
+import club.heiqi.uilib.ui.scene.paint.PaintPlanBuilder;
+import club.heiqi.uilib.ui.render.batch.BatchingConfiguration;
+import club.heiqi.uilib.host.client.font.FramebufferCoordinates;
+import club.heiqi.uilib.host.client.gl.GlPaintPlanRenderer;
 
 import club.heiqi.uilib.testing.TestApplication;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
@@ -59,6 +63,7 @@ public final class DesktopSettingsVerification extends TestApplication {
 
     @Override
     protected void runTests() throws Exception {
+        scenario("性能开关真实点击应用保存重载及非文字draw", this::performanceSettings);
         scenario("字体浏览回填、嵌套ESC与显式添加应用保存", this::fontPicker);
         w = own(DesktopWindow.openSettings(path));
         glfwSetWindowSize(w.handle(), 1440, 1000);
@@ -134,7 +139,8 @@ public final class DesktopSettingsVerification extends TestApplication {
                                         "取消选择覆盖了原路径草稿"));
                 keys.click("浏览字体文件");
                 settle(window);
-                SceneNode pickerField = activeFields(window).get(0);
+                // 文件选择器同时含搜索与路径字段；按正式名称定位，不能假定树序。
+                SceneNode pickerField = namedField(window, "输入目录或文件路径");
                 typeInto(window, keys, pickerField, directory.toString(), true);
                 long until = System.nanoTime() + 5_000_000_000L;
                 while (!hasText(window, font.getFileName().toString())
@@ -167,16 +173,18 @@ public final class DesktopSettingsVerification extends TestApplication {
                                                 .equals(font.toString()),
                                         "选择结果未回填路径草稿"));
                 keys.click("添加到末尾");
+                awaitCondition(window,()->hasText(window,"完成字体编辑"),"异步字体校验后未回到来源列表");
                 require(current(window).equals(initial) && hasText(window, "有未应用的更改"), "显式追加提前应用");
                 keys.click("完成字体编辑");
                 keys.click("应用全部更改");
+                awaitCondition(window,()->current(window).contains("file:"+font),"异步字体应用未完成");
                 settle(window);
                 require(
                         current(window).contains("file:" + font)
                                 && java.util.Arrays.equals(saved, Files.readAllBytes(config)),
                         "应用未发布字体或自动保存");
                 keys.click("保存到文件");
-                settle(window);
+                awaitSettingsFile(window);
                 require(!java.util.Arrays.equals(saved, Files.readAllBytes(config)), "显式保存未写真实文件");
                 screenshot(window, output.resolve("font-picker-applied.png"));
             }
@@ -206,6 +214,16 @@ public final class DesktopSettingsVerification extends TestApplication {
         return nodes;
     }
 
+    private static SceneNode namedField(DesktopWindow window,String name) {
+        List<SceneNode> fields=activeFields(window);
+        SceneNode[] result={null};
+        window.domain.execute(()-> {
+            for(SceneNode field:fields)
+                if(name.equals(field.control().semantics(field).values.description)) result[0]=field;
+        });
+        return java.util.Objects.requireNonNull(result[0],"缺少正式输入字段："+name);
+    }
+
     private static void typeInto(
             DesktopWindow window,
             DesktopTestInput input,
@@ -219,6 +237,115 @@ public final class DesktopSettingsVerification extends TestApplication {
         value.codePoints().forEach(cp -> input.character.invoke(window.handle(), cp));
         if (enter) input.key.invoke(window.handle(), GLFW_KEY_ENTER, 0, GLFW_PRESS, 0);
         window.frame();
+    }
+
+    private void performanceSettings() throws Exception {
+        Path config=output.resolve("performance-settings.yaml");
+        Files.deleteIfExists(config);
+        try(DesktopWindow window=DesktopWindow.openSettings(config)) {
+            glfwSetWindowSize(window.handle(),1100,760); settle(window);
+            DesktopTestInput keys=new DesktopTestInput(window);
+            byte[] savedFalse=Files.readAllBytes(config);
+            requireBatch(window,false,3,0xff0000ff);
+            keys.click("性能");
+            DesktopTestFrames.finitePresentations(window);
+            screenshot(window,output.resolve("settings-performance-default.png"));
+            keys.click("激进合批");
+            requireBatch(window,false,3,0xff0000ff);
+            keys.click("应用全部更改"); awaitBatch(window,true);
+            requireBatch(window,true,2,0xff00ff00);
+            require(java.util.Arrays.equals(savedFalse,Files.readAllBytes(config)),"性能应用误写文件");
+            keys.click("保存到文件"); awaitSettingsFile(window);
+            byte[] savedTrue=Files.readAllBytes(config);
+            require(!java.util.Arrays.equals(savedFalse,savedTrue),"性能保存未写文件");
+            screenshot(window,output.resolve("settings-performance-enabled.png"));
+            keys.click("激进合批"); keys.click("应用全部更改"); awaitBatch(window,false);
+            requireBatch(window,false,3,0xff0000ff);
+            require(java.util.Arrays.equals(savedTrue,Files.readAllBytes(config)),"关闭性能开关的应用误写文件");
+            keys.click("配置文件"); keys.click("从文件重新加载");
+            keys.click("放弃更改并加载"); awaitBatch(window,true);
+            requireBatch(window,true,2,0xff00ff00);
+            System.out.println("SETTINGS_BATCH_POLICY_PASS realSwitch=true draftUnapplied=true fileRoundtrip=true nonTextDraws=3,2,3,2 actualOverlap=blue,green,blue,green");
+        }
+    }
+
+    /** 此页含文件与字体后台工作，字形队列稳定不能代表配置资源已经发布。 */
+    private static void settle(DesktopWindow window) {
+        DesktopTestFrames.ready(window);
+        try {
+            java.lang.reflect.Field requests=DesktopWindow.class.getDeclaredField("fontUpdates");
+            requests.setAccessible(true);
+            awaitCondition(window,()-> {
+                boolean[] idle={false};
+                window.domain.execute(()-> {
+                    try { idle[0]=!window.applicationConfiguration.settings.persisting().get()
+                            &&((java.util.Set<?>)requests.get(window)).isEmpty(); }
+                    catch(IllegalAccessException failure) { throw new AssertionError("无法观察既有字体资源工作",failure); }
+                });
+                return idle[0];
+            },"设置文件或字体资源工作未在时限内结束");
+        } catch(NoSuchFieldException failure) { throw new AssertionError("字体资源工作观察字段已变化",failure); }
+        DesktopTestFrames.settle(window);
+    }
+
+    private static void awaitCondition(DesktopWindow window,java.util.function.BooleanSupplier condition,String reason) {
+        long end=System.nanoTime()+5_000_000_000L;
+        do { window.frame(); if(condition.getAsBoolean()) return; } while(System.nanoTime()<end);
+        throw new AssertionError(reason);
+    }
+
+    // 字形稳定与配置worker完成是两个事实，须等待原信号而不是固定帧数。
+    private static void awaitSettingsFile(DesktopWindow window) {
+        long end=System.nanoTime()+5_000_000_000L;
+        boolean[] pending={true};
+        do {
+            window.frame();
+            window.domain.execute(()->pending[0]=window.applicationConfiguration.settings.persisting().get());
+        } while(pending[0]&&System.nanoTime()<end);
+        require(!pending[0],"正式文件操作未在时限内结束");
+        settle(window);
+    }
+
+    private static void awaitBatch(DesktopWindow window,boolean expected) {
+        long end=System.nanoTime()+5_000_000_000L;
+        boolean[] done={false};
+        do {
+            window.frame();
+            window.domain.execute(()->done[0]=window.configuration.get(BatchingConfiguration.KEY)==expected
+                    &&!window.applicationConfiguration.settings.persisting().get());
+        } while(!done[0]&&System.nanoTime()<end);
+        require(done[0],"正式合批配置未在时限内发布");
+        settle(window);
+    }
+
+    /** 不调用策略setter：真实窗口配置必须沿原Effect影响同一font owner。 */
+    private static void requireBatch(DesktopWindow window,boolean expected,int draws,int color) {
+        boolean[] actual={false};
+        window.domain.execute(()->actual[0]=window.configuration.get(BatchingConfiguration.KEY));
+        require(actual[0]==expected,"页面与正式性能配置不同步");
+        PaintPlan plan=new PaintPlanBuilder()
+                .add(PaintCommand.rect(new LayoutBox(0,0,32,32),null,0xffff0000))
+                .add(PaintCommand.rect(new LayoutBox(0,0,32,32),new LayoutBox(0,0,20,20),0xff00ff00))
+                .add(PaintCommand.rect(new LayoutBox(0,0,32,32),null,0xff0000ff)).build();
+        GlPaintPlanRenderer renderer=window.fonts.sharedPlanRenderer();
+        int[] viewport=new int[4]; glGetIntegerv(GL_VIEWPORT,viewport);
+        boolean scissor=glIsEnabled(GL_SCISSOR_TEST);
+        long before=renderer.counters().draws;
+        window.fonts.beginPresentation(Long.MIN_VALUE);
+        try {
+            glViewport(0,0,window.width(),window.height()); glDisable(GL_SCISSOR_TEST);
+            try(GlPaintPlanRenderer.Prepared prepared=window.fonts.prepare(renderer,plan,new LayoutBox(0,0,window.width(),window.height()))) {
+                prepared.render(FramebufferCoordinates.orthographic(window.width(),window.height()),window.height(),false);
+                require(DesktopTestReadback.readBack(window).getRGB(10,10)==color,"性能设置未改变实际非文字覆盖次序");
+            }
+            require(renderer.counters().draws-before==draws,"性能设置未改变实际非文字draw数");
+        } finally {
+            try { window.fonts.endPresentation(); }
+            finally {
+                glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);
+                if(scissor)glEnable(GL_SCISSOR_TEST);else glDisable(GL_SCISSOR_TEST);
+            }
+        }
     }
 
     private void appearanceDraft() throws Exception {
@@ -529,6 +656,7 @@ public final class DesktopSettingsVerification extends TestApplication {
                                                 new DesktopVerificationPage(
                                                         services.configuration(),
                                                         services::reloadConfiguration)));
+        DesktopTestFrames.ready(sample);
         DesktopVerificationPage view = fixture[0];
         require(
                 view.configuration == sample.configuration && view.domain == sample.domain,
@@ -578,10 +706,7 @@ public final class DesktopSettingsVerification extends TestApplication {
                         .findFirst()
                         .orElseThrow(() -> new AssertionError("实际配置路径未进入正式文本布局"));
         TextStyle pathStyle = pathEntry.text.style;
-        require(
-                pathStyle.candidates() != null
-                        && pathStyle.candidates().get(0).id.equals(MathTextFontSources.MONO),
-                "实际路径未显式选择随包等宽族");
+        // 当前路径由本代具名字体链解析；实际来源和等宽度由下方真实字形证明。
         float advance = -1;
         for (String character : new String[] {"i", "W", "0", ":", "/"}) {
             TextLayout layout = window.fonts.layout(character, pathStyle, 4096);
@@ -611,12 +736,7 @@ public final class DesktopSettingsVerification extends TestApplication {
                                 0,
                                 0));
         require(narrow.lines().size() > normal.lines().size(), "路径换行没有响应实际可用宽度");
-        TextStyle uiOnly =
-                new TextStyle(
-                        "settings-ui",
-                        pathStyle.size,
-                        pathStyle.color,
-                        pathStyle.candidates().subList(1, pathStyle.candidates().size()));
+        TextStyle uiOnly = new TextStyle("settings-ui", pathStyle.size, pathStyle.color);
         require(
                 Math.abs(
                                 window.fonts.layout("i", uiOnly, 4096).advanceWidth

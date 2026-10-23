@@ -40,6 +40,7 @@ import club.heiqi.uilib.ui.scene.image.ImageService;
 import club.heiqi.uilib.ui.scene.image.SharedImageService;
 import club.heiqi.uilib.ui.config.ConfigKey;
 import club.heiqi.uilib.ui.config.ConfigSession;
+import club.heiqi.uilib.ui.render.batch.BatchingConfiguration;
 import club.heiqi.uilib.ui.scene.control.ThemeConfiguration;
 import club.heiqi.uilib.ui.reactive.ReactiveDomain;
 import club.heiqi.uilib.ui.reactive.Signal;
@@ -252,6 +253,8 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
                 title = applicationConfiguration.title.get();
                 glfwSetWindowTitle(window, title);
             });
+            domain.effect(applicationConfiguration.owner, () ->
+                    fonts.allowBatchReordering(configuration.get(BatchingConfiguration.KEY)));
             domain.effect(applicationConfiguration.owner, () -> {
                 reload.get();
                 List<String> declarations = configuration.get(fontCandidates);

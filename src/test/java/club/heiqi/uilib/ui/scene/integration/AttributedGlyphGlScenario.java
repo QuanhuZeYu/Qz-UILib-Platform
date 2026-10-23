@@ -369,6 +369,8 @@ public final class AttributedGlyphGlScenario extends TestApplication {
         onClose(
                 () -> {
                     owner.close();
+                    // owner已关闭字体服务；重复关闭renderer不能再次访问原订阅。
+                    if (renderer != null) renderer.close();
                     require(owner.awaitRasterizerClose(10000), "workerclose");
                 });
     }

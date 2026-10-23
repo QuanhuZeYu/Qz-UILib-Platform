@@ -17,6 +17,7 @@ import javax.imageio.ImageIO;
 import club.heiqi.uilib.host.client.font.FramebufferSceneRenderer;
 import club.heiqi.uilib.ui.config.ConfigSchema;
 import club.heiqi.uilib.ui.config.ConfigSession;
+import club.heiqi.uilib.ui.render.batch.BatchingConfiguration;
 import club.heiqi.uilib.ui.reactive.ReactiveDomain;
 import club.heiqi.uilib.ui.scene.host.ScenePageSession;
 import club.heiqi.uilib.ui.reactive.Signal;
@@ -144,7 +145,7 @@ public final class DesktopVerification {
             Path selectedFont = fixtures.resolve("selected.ttf").toAbsolutePath();
             Files.copy(systemFont, selectedFont, StandardCopyOption.REPLACE_EXISTING);
             writerDomain.execute(() -> {
-                ConfigSession writer = new ConfigSession(writerDomain, ConfigSchema.of(DesktopWindowConfiguration.PROFILE, w.fontCandidates, ThemeConfiguration.KEY));
+                ConfigSession writer = new ConfigSession(writerDomain, ConfigSchema.of(DesktopWindowConfiguration.PROFILE, w.fontCandidates, ThemeConfiguration.KEY, BatchingConfiguration.KEY));
                 try {
                     writer.load(config);
                     writer.set(DesktopWindowConfiguration.PROFILE, new DesktopWindowConfiguration.WindowProfile("Desktop reloaded", "Reloaded title 中文", false, 26));

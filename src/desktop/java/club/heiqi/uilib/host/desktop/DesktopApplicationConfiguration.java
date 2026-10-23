@@ -13,6 +13,7 @@ import club.heiqi.uilib.ui.config.ConfigDocument;
 import club.heiqi.uilib.ui.config.ConfigKey;
 import club.heiqi.uilib.ui.config.ConfigSchema;
 import club.heiqi.uilib.ui.config.ConfigSession;
+import club.heiqi.uilib.ui.render.batch.BatchingConfiguration;
 import club.heiqi.uilib.ui.reactive.Computed;
 import club.heiqi.uilib.ui.reactive.Owner;
 import club.heiqi.uilib.ui.reactive.ReactiveDomain;
@@ -44,7 +45,7 @@ final class DesktopApplicationConfiguration implements AutoCloseable {
         domain.execute(() -> {
             if (closed || schema != null) throw new IllegalStateException("桌面配置声明已安装或关闭");
             fontCandidates = FontCandidateConfiguration.key(defaults);
-            schema = ConfigSchema.of(DesktopWindowConfiguration.PROFILE, fontCandidates, ThemeConfiguration.KEY);
+            schema = ConfigSchema.of(DesktopWindowConfiguration.PROFILE, fontCandidates, ThemeConfiguration.KEY, BatchingConfiguration.KEY);
         });
     }
 
