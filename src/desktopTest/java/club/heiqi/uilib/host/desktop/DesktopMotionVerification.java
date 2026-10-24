@@ -36,6 +36,7 @@ public final class DesktopMotionVerification extends TestApplication {
         Files.createDirectories(output); new DesktopMotionVerification(output).run(args);
     }
     @Override protected void runTests() throws Exception {
+        scenario("正式内容滑入、快速反向、横纵切换与淡出", this::contentMotion);
         scenario("目录入口、主题与切页保留", this::directory);
         scenario("弹性音量两端拉伸、反向与合法提交", this::elasticSlider);
         scenario("播放队列真实拖动与弹簧让位", this::elasticSort);
@@ -69,8 +70,9 @@ public final class DesktopMotionVerification extends TestApplication {
                     Boolean.parseBoolean(System.getProperty("uilib.desktop.visible", "true")), services -> {
                         created[0] = DesktopGallery.createGallery(services, initial); return created[0];
                     });
-            gallery = created[0]; page = gallery.motionPage();
             try {
+                DesktopTestFrames.ready(window);
+                gallery = created[0]; page = gallery.motionPage();
                 input = new DesktopTestInput(window);
                 scripted = input.scriptedCursor();
                 glfwSetWindowSize(window.handle(), 1180, 920); glfwSwapInterval(1);
@@ -121,6 +123,10 @@ public final class DesktopMotionVerification extends TestApplication {
             deformation.add((int) Math.round(read(f.window, club.heiqi.uilib.ui.scene.control.SceneSlider.elasticOffset(slider)) * 10));
             double value = read(f.window, f.page.volume()); require(value >= 0 && value <= 100, "拉伸污染了真实音量");
         });
+        // 连续取证验证回弹；末端还要求速度达到阈值，不能把固定800ms当作弹簧结束合同。
+        long deadline = System.nanoTime() + 1_000_000_000L;
+        while (read(f.window, club.heiqi.uilib.ui.scene.control.SceneSlider.elasticOffset(slider)) != 0
+                && System.nanoTime() < deadline) f.window.frame();
         require(deformation.size() >= 3 && read(f.window, club.heiqi.uilib.ui.scene.control.SceneSlider.elasticOffset(slider)) == 0,
                 "滑块形变没有自然回弹并停止");
         require(read(f.window, f.page.sliderCommits()) == 1, "释放动画重复提交滑块");
@@ -512,6 +518,44 @@ public final class DesktopMotionVerification extends TestApplication {
         SceneNode root = f.page.root(); f.input.click("返回场景概览");
         require(root.runtime() == null, "离开页面没有解除挂载");
         f.input.click("打开动效"); require(read(f.window, f.page.target()), "短窗口重新进入丢失状态");
+    }
+    private void contentMotion() throws Exception {
+        Fixture f = open("content-motion");
+        f.input.click("下一个内容");
+        require(read(f.window, f.page.contentMotion().selected()) == 1, "内容操作没有立即采用最新值");
+        Set<Float> offsets = new HashSet<>();
+        long end = System.nanoTime() + 1_200_000_000L;
+        do {
+            f.window.frame();
+            f.window.domain.execute(() -> {
+                for (SceneNode child : f.page.contentMotion().content().children()) offsets.add(child.translationX());
+            });
+        } while (System.nanoTime() < end);
+        require(offsets.size() >= 3 && offsets.contains(0f), "正式广场没有可见水平中间帧或没有落定");
+        save(f.window, "content-horizontal-settled");
+        f.input.click("下一个内容"); f.input.click("上一个内容"); f.input.click("横纵切换");
+        f.input.click("下一个内容");
+        Set<Float> vertical = new HashSet<>(); end = System.nanoTime() + 1_200_000_000L;
+        do {
+            f.window.frame();
+            f.window.domain.execute(() -> {
+                for (SceneNode child : f.page.contentMotion().content().children()) vertical.add(child.translationY());
+            });
+        } while (System.nanoTime() < end);
+        require(vertical.size() >= 3 && vertical.contains(0f), "纵向切换未经过中间帧或未停止");
+        f.input.click("收起内容"); advance(f.window, 600);
+        require(f.page.contentMotion().content().children().isEmpty(), "收起后内容仍被活动集合持有");
+        save(f.window, "content-hidden");
+        f.input.click("关闭动效"); f.input.click("下一个内容");
+        f.window.domain.execute(() -> {
+            for (SceneNode child : f.page.contentMotion().content().children())
+                require(child.translationX() == 0 && child.translationY() == 0 && child.opacity() == 1, "关闭动效仍有入场中间值");
+        });
+        f.input.point(8, 8); advance(f.window, 400);
+        PaintPlan stable = f.window.lastPlan; f.window.frame(); f.window.frame();
+        require(stable == f.window.lastPlan, "内容落定后未恢复静态计划复用");
+        System.out.println("CONTENT_MOTION horizontalSamples=" + offsets.size() + " verticalSamples=" + vertical.size()
+                + " offImmediate=true staticReuse=true");
     }
     private static SceneNode row(Fixture f, String text) {
         return geometry(f.window).ordered().stream().filter(entry -> text.equals(entry.node.text()) && entry.node.clickAction() != null)
