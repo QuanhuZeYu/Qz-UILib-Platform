@@ -42,6 +42,7 @@ public final class DesktopPopupVerification extends TestApplication {
         requestedVisible = Boolean.parseBoolean(System.getProperty("uilib.desktop.visible", "true"));
     }
     @Override protected void runTests() throws Exception {
+        scenario("真实广场分类弹层的合批遮挡与 GPU 像素", () -> DesktopGalleryPopupEvidence.verify(output));
         scenario("负责人预览确认与共享保存重置菜单", this::projectWorkflow);
         scenario("屏外当前项、缩高限位、外部吞尾和空Tab", this::longListAndClosing);
         System.out.println("POPUP_DESKTOP visibleGLFW=" + actualVisible + " focusSource=installed-callback sharedProjectDetails=true publicFixture=true installedCallbacks=true");

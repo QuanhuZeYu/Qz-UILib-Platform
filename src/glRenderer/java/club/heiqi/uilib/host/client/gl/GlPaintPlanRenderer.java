@@ -712,6 +712,8 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
 
         public void draw(PaintCommand command) {
             if (closed) throw new IllegalStateException("回放已结束");
+            // 提交边界不绘制；必须先于空几何和裁剪判断，激进策略也不能跨呈现组重排。
+            if (command.kind == PaintCommand.Kind.ORDER_BARRIER) { collector.flush(); return; }
             // 计划中的子片段已由Core映射到同一页面空间；嵌套只切换当前命令，不能再乘父矩阵。
             PaintCommand previous = geometryCommand;
             SceneClipRegion previousClip = geometryClip, previousVisible = geometryVisible;

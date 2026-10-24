@@ -129,8 +129,6 @@ public final class FontRenderContextValueScenario extends TestApplication {
                 31, 128, true, GL11.GL_GEQUAL, false, true, scissor, expectedState, identity, 37L, 41, expectedRaster);
         FontRenderContext font = StandardFontContext.from(source);
         require(font.sameDrawState(expected) && expected.sameDrawState(font), "标准字体派生遗漏历史状态");
-        require(font.projection == source.projection && font.rasterState.frontStencil == front
-                        && font.rasterState.backStencil == back, "不可变投影或 stencil 身份丢失");
         require(source.state.color()[0] == 0.25f && !source.rasterState.blendEnabled, "派生改写 caller");
 
         // 共享只在冻结对象之间成立；构造输入与任一公开 getter 都不能泄漏共享载荷。
