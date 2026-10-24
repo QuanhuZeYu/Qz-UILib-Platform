@@ -7,6 +7,7 @@ import club.heiqi.uilib.testing.gallery.MotionPage;
 import club.heiqi.uilib.testing.gallery.TestGallery;
 import club.heiqi.uilib.ui.reactive.ReadableSignal;
 import club.heiqi.uilib.ui.scene.control.SceneLayer;
+import club.heiqi.uilib.ui.scene.geometry.SceneTransform;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.layout.SceneGeometryView;
@@ -521,14 +522,21 @@ public final class DesktopMotionVerification extends TestApplication {
     }
     private void contentMotion() throws Exception {
         Fixture f = open("content-motion");
+        SceneNode content = f.page.contentMotion().content();
         f.input.click("下一个内容");
         require(read(f.window, f.page.contentMotion().selected()) == 1, "内容操作没有立即采用最新值");
         Set<Float> offsets = new HashSet<>();
         long end = System.nanoTime() + 1_200_000_000L;
         do {
             f.window.frame();
+            SceneGeometryView current = geometry(f.window);
             f.window.domain.execute(() -> {
-                for (SceneNode child : f.page.contentMotion().content().children()) offsets.add(child.translationX());
+                // 入场属于独立呈现层，采样父坐标中的当前原点，不读取普通位移属性。
+                for (SceneNode child : content.children()) {
+                    SceneGeometryView.Entry entry = current.get(child);
+                    SceneTransform relative = current.get(content).inverse.multiply(entry.transform);
+                    offsets.add((float) (relative.x(entry.layoutBox.x, entry.layoutBox.y) - entry.layoutBox.x));
+                }
             });
         } while (System.nanoTime() < end);
         require(offsets.size() >= 3 && offsets.contains(0f), "正式广场没有可见水平中间帧或没有落定");
@@ -538,8 +546,13 @@ public final class DesktopMotionVerification extends TestApplication {
         Set<Float> vertical = new HashSet<>(); end = System.nanoTime() + 1_200_000_000L;
         do {
             f.window.frame();
+            SceneGeometryView current = geometry(f.window);
             f.window.domain.execute(() -> {
-                for (SceneNode child : f.page.contentMotion().content().children()) vertical.add(child.translationY());
+                for (SceneNode child : content.children()) {
+                    SceneGeometryView.Entry entry = current.get(child);
+                    SceneTransform relative = current.get(content).inverse.multiply(entry.transform);
+                    vertical.add((float) (relative.y(entry.layoutBox.x, entry.layoutBox.y) - entry.layoutBox.y));
+                }
             });
         } while (System.nanoTime() < end);
         require(vertical.size() >= 3 && vertical.contains(0f), "纵向切换未经过中间帧或未停止");
@@ -547,10 +560,18 @@ public final class DesktopMotionVerification extends TestApplication {
         require(f.page.contentMotion().content().children().isEmpty(), "收起后内容仍被活动集合持有");
         save(f.window, "content-hidden");
         f.input.click("关闭动效"); f.input.click("下一个内容");
+        SceneGeometryView current = geometry(f.window);
         f.window.domain.execute(() -> {
-            for (SceneNode child : f.page.contentMotion().content().children())
-                require(child.translationX() == 0 && child.translationY() == 0 && child.opacity() == 1, "关闭动效仍有入场中间值");
+            for (SceneNode child : content.children())
+                require(current.get(content).inverse.multiply(current.get(child).transform).identity(), "关闭动效仍有入场几何中间值");
         });
+        boolean contentPainted = false;
+        for (PaintCommand command : f.window.lastPlan.commands()) {
+            if (command.kind != PaintCommand.Kind.TEXT || !command.text.logicalText.startsWith("内容 · ")) continue;
+            contentPainted = true;
+            require((command.color >>> 24) == 255, "关闭动效的内容仍有入场透明度");
+        }
+        require(contentPainted, "关闭动效后的内容没有进入正式绘制计划");
         f.input.point(8, 8); advance(f.window, 400);
         PaintPlan stable = f.window.lastPlan; f.window.frame(); f.window.frame();
         require(stable == f.window.lastPlan, "内容落定后未恢复静态计划复用");
