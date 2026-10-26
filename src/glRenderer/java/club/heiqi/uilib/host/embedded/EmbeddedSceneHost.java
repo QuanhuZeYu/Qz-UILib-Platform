@@ -4,6 +4,7 @@ import java.util.function.IntSupplier;
 import club.heiqi.uilib.host.client.font.FramebufferSceneRenderer;
 import club.heiqi.uilib.ui.media.MediaService;
 import club.heiqi.uilib.ui.scene.control.ThemeConfiguration;
+import club.heiqi.uilib.ui.scene.control.ScrollConfiguration;
 import club.heiqi.uilib.ui.scene.host.SceneHost;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
 import club.heiqi.uilib.ui.scene.semantics.SceneSemanticSnapshot;
@@ -31,6 +32,7 @@ public final class EmbeddedSceneHost implements SceneHost, AutoCloseable {
     @Override public int height() { return height.getAsInt(); }
     @Override public long metricsRevision() { return services.fonts().fonts().generation(); }
     @Override public ThemeConfiguration themeConfiguration() { return services.themes(); }
+    @Override public ScrollConfiguration scrollConfiguration() { return services.scroll(); }
     @Override public MediaViewPump mediaViews() { return mediaViews; }
     @Override public void prepareResources() {
         services.clientImages().prepareResources();

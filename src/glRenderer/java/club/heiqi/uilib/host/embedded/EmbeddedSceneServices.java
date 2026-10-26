@@ -24,6 +24,7 @@ import club.heiqi.uilib.ui.config.ConfigSession;
 import club.heiqi.uilib.ui.reactive.Owner;
 import club.heiqi.uilib.ui.reactive.ReactiveDomain;
 import club.heiqi.uilib.ui.scene.control.ThemeConfiguration;
+import club.heiqi.uilib.ui.scene.control.ScrollConfiguration;
 import club.heiqi.uilib.ui.scene.image.ImageService;
 import club.heiqi.uilib.ui.scene.image.SharedImageService;
 import club.heiqi.uilib.ui.scene.text.font.FontCandidateConfiguration;
@@ -59,6 +60,7 @@ public final class EmbeddedSceneServices implements AutoCloseable {
     private ConfigKey<List<String>> candidates;
     private SettingsConfiguration settings;
     private ThemeConfiguration themes;
+    private ScrollConfiguration scroll;
     private long revision = 1, resourceRevision = 1, fontRequest;
     private final java.util.Set<CompletableFuture<Void>> fontUpdates = new java.util.LinkedHashSet<>();
     private volatile boolean closed;
@@ -91,7 +93,7 @@ public final class EmbeddedSceneServices implements AutoCloseable {
         sources = fontSources.capture(revision);
         List<FontSource> defaults = sources.builtins;
         candidates = FontCandidateConfiguration.key(defaults);
-        ConfigSchema schema = ConfigSchema.of(candidates, ThemeConfiguration.KEY);
+        ConfigSchema schema = ConfigSchema.of(candidates, ThemeConfiguration.KEY, ScrollConfiguration.KEY);
         // 先把捕获的 streams 移交worker，文档失败也不会遗留未消费的资源流。
         preparation.prepare(sources, FontCandidateConfiguration.defaults(defaults), Collections.emptyList());
         CompletableFuture.supplyAsync(() -> {
@@ -121,6 +123,7 @@ public final class EmbeddedSceneServices implements AutoCloseable {
                         configuration = new ConfigSession(domain, schema);
                         configuration.publish(document);
                         themes = new ThemeConfiguration(domain, configuration, owner);
+                        scroll = new ScrollConfiguration(domain, configuration, owner);
                         settings = SettingsConfiguration.withAsyncValidation(domain, configuration, candidates, null, path,
                                 FontCandidateConfiguration.defaults(defaults), this::validateFonts, this::resourcesReloaded);
                         domain.effect(owner, () -> applyFonts(configuration.get(candidates)));
@@ -154,6 +157,7 @@ public final class EmbeddedSceneServices implements AutoCloseable {
     public ClientFontServices fonts() { requireReady(); return fonts; }
     public SettingsConfiguration settings() { requireReady(); return settings; }
     public ThemeConfiguration themes() { requireReady(); return themes; }
+    public ScrollConfiguration scroll() { requireReady(); return scroll; }
     public ImageService images() { requireReady(); return images.images(); }
     ClientImageServices clientImages() { requireReady(); return images; }
     private CompletableFuture<Void> validateFonts(List<String> declarations) {

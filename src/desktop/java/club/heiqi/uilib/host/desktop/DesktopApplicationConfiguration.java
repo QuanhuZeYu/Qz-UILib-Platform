@@ -18,6 +18,7 @@ import club.heiqi.uilib.ui.reactive.Computed;
 import club.heiqi.uilib.ui.reactive.Owner;
 import club.heiqi.uilib.ui.reactive.ReactiveDomain;
 import club.heiqi.uilib.ui.scene.control.ThemeConfiguration;
+import club.heiqi.uilib.ui.scene.control.ScrollConfiguration;
 import club.heiqi.uilib.ui.scene.text.font.FontCandidateConfiguration;
 import club.heiqi.uilib.ui.scene.text.font.FontSource;
 import club.heiqi.uilib.ui.settings.SettingsConfiguration;
@@ -32,6 +33,7 @@ final class DesktopApplicationConfiguration implements AutoCloseable {
     ConfigSession session;
     ConfigKey<List<String>> fontCandidates;
     ThemeConfiguration theme;
+    ScrollConfiguration scroll;
     SettingsConfiguration settings;
     Computed<String> title;
 
@@ -45,7 +47,7 @@ final class DesktopApplicationConfiguration implements AutoCloseable {
         domain.execute(() -> {
             if (closed || schema != null) throw new IllegalStateException("桌面配置声明已安装或关闭");
             fontCandidates = FontCandidateConfiguration.key(defaults);
-            schema = ConfigSchema.of(DesktopWindowConfiguration.PROFILE, fontCandidates, ThemeConfiguration.KEY, BatchingConfiguration.KEY);
+            schema = ConfigSchema.of(DesktopWindowConfiguration.PROFILE, fontCandidates, ThemeConfiguration.KEY, BatchingConfiguration.KEY, ScrollConfiguration.KEY);
         });
     }
 
@@ -78,6 +80,7 @@ final class DesktopApplicationConfiguration implements AutoCloseable {
             session.publish(document);
             // 文档发布后才建立应用投影与真实文件基线，页面关闭不结束这些对象。
             theme = new ThemeConfiguration(domain, session, owner);
+            scroll = new ScrollConfiguration(domain, session, owner);
             settings = SettingsConfiguration.withAsyncValidation(domain, session, fontCandidates, null, path,
                     FontCandidateConfiguration.defaults(defaults), validate, () -> {
                         if (closed) throw new CancellationException("桌面配置所属窗口已关闭");

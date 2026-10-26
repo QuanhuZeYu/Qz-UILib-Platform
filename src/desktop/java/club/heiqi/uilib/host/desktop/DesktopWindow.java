@@ -42,6 +42,7 @@ import club.heiqi.uilib.ui.config.ConfigKey;
 import club.heiqi.uilib.ui.config.ConfigSession;
 import club.heiqi.uilib.ui.render.batch.BatchingConfiguration;
 import club.heiqi.uilib.ui.scene.control.ThemeConfiguration;
+import club.heiqi.uilib.ui.scene.control.ScrollConfiguration;
 import club.heiqi.uilib.ui.reactive.ReactiveDomain;
 import club.heiqi.uilib.ui.reactive.Signal;
 import club.heiqi.uilib.ui.settings.SettingsConfiguration;
@@ -537,6 +538,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         if (closed) throw new IllegalStateException("桌面窗口已关闭");
     }
     @Override public ThemeConfiguration themeConfiguration() { return themeConfiguration; }
+    @Override public ScrollConfiguration scrollConfiguration() { return applicationConfiguration.scroll; }
     @Override public int width() { return framebufferWidth; }
     @Override public int height() { return framebufferHeight; }
     // ready只改变可画资源；字体代际才改变度量，与共同字体服务的职责一致。
