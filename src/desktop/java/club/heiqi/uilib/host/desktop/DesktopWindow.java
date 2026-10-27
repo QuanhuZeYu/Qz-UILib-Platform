@@ -19,6 +19,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CompletionException;
 import org.lwjgl.system.Platform;
+import club.heiqi.uilib.host.embedded.NativeInputPolicy;
+import club.heiqi.uilib.host.embedded.ScrollAccumulator;
 import club.heiqi.uilib.host.client.font.FontResourcePreparation;
 import club.heiqi.uilib.ui.config.ConfigDocument;
 import club.heiqi.uilib.ui.scene.text.font.FontResources;
@@ -76,7 +78,8 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     private final Thread thread = Thread.currentThread();
     private final ConcurrentLinkedQueue<Runnable> ownerActions = new ConcurrentLinkedQueue<>();
     private final CompletableFuture<Void> ready = new CompletableFuture<>();
-    private final boolean mac = Platform.get() == Platform.MACOSX;
+    private final NativeInputPolicy inputPolicy = new NativeInputPolicy(Platform.get() == Platform.MACOSX);
+    private final ScrollAccumulator scroll = new ScrollAccumulator();
     private FontResourcePreparation fontPreparation;
     private FontResourcePreparation.Sources fontSources;
     private FontResources publishedFonts;
@@ -85,7 +88,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     private final Deque<AutoCloseable> resources = new ArrayDeque<>();
     private long window, revision, resourceRevision = 1;
     private int framebufferWidth, framebufferHeight, windowWidth, windowHeight;
-    private double cursorX, cursorY, scrollRemainder;
+    private double cursorX, cursorY;
     private volatile boolean closed;
     private boolean closing;
     private String title;
@@ -407,9 +410,9 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
                 : ScenePointerEvent.up(button, sceneX(), sceneY()));
     }
     void scroll(double delta) {
-        check(); if (page == null) return; scrollRemainder += delta;
-        int whole = (int)scrollRemainder;
-        if (whole != 0) { scrollRemainder -= whole; page.pointer(ScenePointerEvent.scroll(sceneX(), sceneY(), whole)); }
+        check(); if (page == null) return;
+        int whole = scroll.add(delta);
+        if (whole != 0) page.pointer(ScenePointerEvent.scroll(sceneX(), sceneY(), whole));
     }
     void character(int codepoint) {
         check();
@@ -443,9 +446,10 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         SceneKey named = namedKey(key);
         if (named == null) return;
         boolean down = action != GLFW_RELEASE;
-        SceneKeyEvent event = new SceneKeyEvent(named, (mods & (mac ? GLFW_MOD_SUPER : GLFW_MOD_CONTROL)) != 0,
+        boolean control = (mods & GLFW_MOD_CONTROL) != 0, meta = (mods & GLFW_MOD_SUPER) != 0;
+        SceneKeyEvent event = new SceneKeyEvent(named, inputPolicy.primary(control, meta),
                 (mods & GLFW_MOD_SHIFT) != 0, (mods & GLFW_MOD_ALT) != 0,
-                (mods & (mac ? GLFW_MOD_CONTROL : GLFW_MOD_SUPER)) != 0, action == GLFW_REPEAT, clipboard,
+                inputPolicy.extra(control, meta), action == GLFW_REPEAT, clipboard,
                 down ? SceneKeyEvent.Phase.DOWN : SceneKeyEvent.Phase.UP);
         specialKey = event;
         switch (key) {
