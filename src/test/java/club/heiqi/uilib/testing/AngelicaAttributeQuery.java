@@ -18,7 +18,7 @@ import org.objectweb.asm.commons.ClassRemapper;
 import org.objectweb.asm.commons.MethodRemapper;
 import org.objectweb.asm.commons.SimpleRemapper;
 
-/** 只隔离本次查询所需的真实宿主方法，保留其GL调用及缓冲区操作，不加载MC初始化。 */
+/** 隔离查询所需的真实宿主方法，保留其GL调用与缓冲区操作；覆盖范围限于属性查询。 */
 public final class AngelicaAttributeQuery extends ClassLoader {
     public static final String DESCRIPTOR =
             "(IILjava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/ByteBuffer;)V";

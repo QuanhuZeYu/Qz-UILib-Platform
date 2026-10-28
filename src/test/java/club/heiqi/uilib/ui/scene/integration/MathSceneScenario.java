@@ -43,7 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** 真 FT/HB + 正式页面/帧/input/共享CPU图像；位图提示事实不冒充 Minecraft 物品绘制。 */
+/** 以真实FT/HB、正式页面、帧、输入与共享CPU图像核验数学内容；图像输入使用位图。 */
 public final class MathSceneScenario extends TestApplication {
     private FontTextService fonts;
     private static final float EM = 32.3f;
@@ -61,7 +61,7 @@ public final class MathSceneScenario extends TestApplication {
     @Override
     protected void runTests() throws Exception {
         scenario("真实native数量装饰固定字号探针", this::quantityDecorationProbe);
-        // 旧实现可能在小盒收敛循环挂起；独立探针模式只测三个固定字号，父代理先取证再跑回归。
+        // 独立探针模式仅执行固定小字号的native数量装饰观测。
         if (java.util.Arrays.asList(arguments()).contains("--quantity-decoration-probe")) return;
         scenario("真实公式同代glyph浮点投影与分式脚本图像", this::geometry);
         scenario("数学em内容盒明确分配不自动求解节点Size", this::explicitEmbedBox);
@@ -317,7 +317,7 @@ public final class MathSceneScenario extends TestApplication {
         final Signal<MathContent>[] content = new Signal[1];
         final Signal<SceneTheme>[] theme = new Signal[1];
         StringBuilder longText = new StringBuilder();
-        // 超过字体全局文本缓存预算；未改内容的滚动应复用节点当前测量事实。
+        // 内容超过字体全局缓存预算后，滚动仍应复用节点当前测量事实。
         for (int i = 0; i < 14000; i++) longText.append(i % 2 == 0 ? 'x' : ' ');
         SceneHost host =
                 new SceneHost() {
@@ -711,7 +711,7 @@ public final class MathSceneScenario extends TestApplication {
     }
 
     private void explicitEmbedBox() throws Exception {
-        // ../Qz-UILib-Core/specs/content/uilib-math-content-spec.md 第 2 节：em 内联盒明确分配，节点声明不参与自然尺寸/min/max 求解。
+        // 以内联em分配核验节点尺寸声明的边界。
         try (Fixture f = new Fixture(tex("x^{@embed{ore}}"), MathStyle.TEXT,
                 SceneTheme.dark().textStyle.withEm(EM), "",
                 ImageOptions.defaults().size(Size.fixed(120).bounds(80, 120), Size.fixed(120).bounds(80, 120)),
@@ -824,7 +824,7 @@ public final class MathSceneScenario extends TestApplication {
     }
 
     private void quantity() throws Exception {
-        // 同一来源供多个独立身份使用；数量必须实际进入 IMAGE.readyOverlay，不能只检查样式值。
+        // 同一来源供多个独立身份使用，按IMAGE.readyOverlay实际文字核验数量。
         String formula =
                 tex(
                         "@embed{body}+@frac{@embed{frac}}{2}+@sum@limits_{@embed{lower}}^{@embed{upper}}+x^{@embed{script}}");
@@ -1003,7 +1003,7 @@ public final class MathSceneScenario extends TestApplication {
     }
 
     private void quantityDecorationProbe() {
-        // 三个固定输入直接调用真实FT/HB；不进入SceneImage，也不执行任何收敛循环。
+        // 三个固定字号直接经真实FT/HB取得数量文字度量。
         for (float em : new float[] {1.5f, .1f, .001f}) {
             TextLayout text =
                     fonts.layout(
@@ -1116,7 +1116,7 @@ public final class MathSceneScenario extends TestApplication {
                 });
     }
 
-    /** 观测正式计划的实际字形墨迹，不重写控件的字号选择、排版或锚定算法。 */
+    /** 从正式计划读取实际字形墨迹，供数量尺寸与位置断言使用。 */
     private static final class QuantityInk {
         final PaintCommand image, count;
         float left = Float.POSITIVE_INFINITY, top = Float.POSITIVE_INFINITY;
@@ -1268,7 +1268,7 @@ public final class MathSceneScenario extends TestApplication {
             QuantityInk ink = entry.getValue();
             float right = ink.image.image.x + ink.image.image.width;
             float bottom = ink.image.image.y + ink.image.image.height;
-            // 上限来自实机反馈；一像素余量只容纳场景整数原点量化，不能用font lineheight冒充墨迹。
+            // 按真实墨迹核对数量高度与盒边界，场景整数原点允许一像素量化余量。
             require(
                     ink.height() <= ink.image.image.height * .5f + .003f,
                     id
@@ -1406,7 +1406,7 @@ public final class MathSceneScenario extends TestApplication {
             require(f.layout().sourceFallback.style.color == 0xffabcdef
                     && fallback.sourceFallback.style.color == color, "fallback当前载荷或旧快照颜色错误");
         }
-        // 宏参数的两个可见使用拥有同一源区间，却分别继承与显式同色；区间/值替换无法判断。
+        // 同源区间的宏参数分别继承颜色与显式同色，更新时按各自颜色来源核验。
         try (Fixture f = new Fixture(tex("@def@foo#1{#1+@textcolor{white}{#1}}@foo{x}"), MathStyle.DISPLAY)) {
             f.frame();
             MathLayout old = f.layout();
@@ -1673,7 +1673,7 @@ public final class MathSceneScenario extends TestApplication {
         require(
                 dependents(f.content) == 0 && dependents(f.theme) == 0 && dependents(f.source) == 0,
                 "卸载没有释放来源/主题/图像订阅");
-        // 正式构造拒绝复用节点和focusable图像，避免没有placement的逻辑树获得焦点。
+        // 正式构造校验节点唯一性及图像焦点资格，使可交互目标具有有效placement。
         ReactiveDomain domain = ReactiveDomain.direct();
         SceneHost host =
                 new SceneHost() {
@@ -1826,7 +1826,7 @@ public final class MathSceneScenario extends TestApplication {
         require(Math.abs(actual - expected) < 0.003f, message + ": " + actual + " != " + expected);
     }
 
-    /** 从正式文字投影观测外层原点，不镜像生产包络算法或读取私有缓存。 */
+    /** 从正式文字投影读取外层原点偏移。 */
     private static float[] presentationShift(Fixture f) {
         int lineIndex = 0;
         TextLayout projected = f.geometry().get(f.math).text;

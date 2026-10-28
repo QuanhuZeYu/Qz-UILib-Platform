@@ -18,7 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** 点播只决定分P和实际H.264/AAC输入；HTTP和JSON语法不进入播放选择。 */
+/** 根据平台响应选择分P与实际H.264/AAC输入，网络与语法解析由HTTP/JSON协作者提供。 */
 final class BilibiliVideo {
     private BilibiliVideo() {}
 
@@ -45,7 +45,7 @@ final class BilibiliVideo {
                 parts.options, tracks.qualities, parts.selected, id(tracks.video.get("id")), "匿名观看 · 清晰度按当前访问权限提供");
     }
 
-    /** 分P列表和选中身份一起确定，避免地址序号与cid各自维护。 */
+    /** 同时解析分P列表与选中身份，统一地址序号与cid的对应关系。 */
     private static final class Parts {
         final List<Option> options = new ArrayList<>();
         final String selected;
@@ -73,7 +73,7 @@ final class BilibiliVideo {
         }
     }
 
-    /** 一次响应的实际轨道候选；只保存选中轨与可播档位，不缓存平台宣传能力。 */
+    /** 从一次响应的真实轨道候选保存选中轨与可播档位。 */
     private static final class Tracks {
         final Map<String, Object> video, audio;
         final List<Option> qualities;

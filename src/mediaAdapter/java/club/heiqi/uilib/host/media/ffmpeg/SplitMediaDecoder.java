@@ -10,7 +10,7 @@ import club.heiqi.uilib.ui.media.spi.MediaDecoded;
 import club.heiqi.uilib.ui.media.spi.MediaDecoder;
 import club.heiqi.uilib.ui.media.spi.MediaInputState;
 
-/** 两个输入按需求读取到同一会话；无第二时钟、raw队列或页面推进。 */
+/** 按会话需求读取两个输入，共用同一时间线、队列预算与生命周期。 */
 final class SplitMediaDecoder implements MediaDecoder {
     private FfmpegDecoder video,audio;
     private boolean videoDone,audioDone,preferAudio=true,closed;

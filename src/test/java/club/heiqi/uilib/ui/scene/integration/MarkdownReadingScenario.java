@@ -44,7 +44,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 固定成熟解析器的阅读语义对照；期望只消费 oracle token，不调用生产 parser。 字符投影比较阅读结果而非 AST/属性片段的切分方式；真实字体场景另验声明身份与输入。
+ * 以固定成熟解析器的oracle token生成独立期望，按字符投影比较阅读结果；真实字体场景核验声明身份与输入。
  * HTML/表格采用正式内容语义；详尽的表格来源与场景输入见 MarkdownTableHtmlScenario。
  */
 public final class MarkdownReadingScenario extends TestApplication {
@@ -97,7 +97,7 @@ public final class MarkdownReadingScenario extends TestApplication {
         int compared = 0;
         for (Map<String, Object> item : cases) {
             String id = str(item, "id"), source = str(item, "source");
-            // 正式规格明确接受此参照差异，另用正文存活场景验证，不能拿插件吞正文当期望。
+            // 此参照差异按正式正文保留合同，由正文存活场景单独核验。
             if (id.equals("unclosed-display")) continue;
             compared++;
             try {
@@ -515,7 +515,7 @@ public final class MarkdownReadingScenario extends TestApplication {
     }
 
     private void documentMacros() {
-        // macro-probe.log 的真实回归：引擎显式上下文有效，Markdown 曾为每个公式重置。
+        // 同一Markdown文档内的公式应共用显式宏上下文。
         String definition = "\\gdef\\qzmacro{x}";
         String[] pairs = {
             "$" + definition + "$ $\\qzmacro$",
@@ -784,7 +784,7 @@ public final class MarkdownReadingScenario extends TestApplication {
                 equal(1, nested.size(), "完整$$被拆成空公式/孤立正文");
                 DocumentContent.Block math = nested.get(0);
                 equal(DocumentContent.Block.Kind.MATH, math.kind, "合法容器$$未形成块公式");
-                // 固定插件在TAB容器中会吞x；正式合同保正文和完整pair，明确接受此差异。
+                // TAB容器按正式合同保留正文x与完整pair，与固定插件的吞正文行为分开核验。
                 equal(expectedFormula, math.math.source.trim(), "容器公式正文或空行丢失");
                 equal("DISPLAY", math.style.name(), "容器块公式显示样式");
                 int open = source.indexOf("$$"), end = source.lastIndexOf("$$") + 2;
@@ -1129,7 +1129,7 @@ public final class MarkdownReadingScenario extends TestApplication {
                             SceneGeometryView g = page.pipeline().current().geometry;
                             require(g.get(code[0]).box.x < origin[0], "代码横向滚轮未移动正式子几何");
                             verifyCode(g, viewport[0], code[0]);
-                            // 真正复用公开capture：宽→窄→宽，不读取control私有offset或另造几何。
+                            // 通过公开capture核验宽→窄→宽的实际滚动几何。
                             SceneLayoutEngine engine = new SceneLayoutEngine(fonts);
                             engine.layout(
                                     Collections.singletonList(root[0]),
@@ -1174,7 +1174,7 @@ public final class MarkdownReadingScenario extends TestApplication {
                                     body.x + body.width,
                                     "代码最大横向滚动未按右padding边界对齐");
                         });
-                // 变宽后范围归零，不能保持已经失效的旧横向偏移。
+                // 变宽后按新范围将横向偏移限制为零。
                 width[0] = 10000;
                 page.frame();
                 domain.execute(
@@ -1289,7 +1289,7 @@ public final class MarkdownReadingScenario extends TestApplication {
             throw new AssertionError(label + " " + difference(expected, actual, "root"));
     }
 
-    /** URL百分号编码与等价Unicode地址表示相同目标；不以表示差异要求重写声明。 */
+    /** 按同一目标处理URL百分号编码与等价Unicode地址表示。 */
     private static String uri(String target) {
         if (target == null) return null;
         try {

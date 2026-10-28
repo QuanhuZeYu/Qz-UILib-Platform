@@ -1,4 +1,4 @@
-/** 经项目 wrapper 运行 Gradle；日志由调用方指定，不启动替代服务。 */
+/** 经项目 wrapper 运行 Gradle；调用方可指定日志路径。 */
 import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import path from 'node:path';

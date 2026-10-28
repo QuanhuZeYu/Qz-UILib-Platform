@@ -46,7 +46,7 @@ public final class ImageServiceScenario extends TestApplication {
             lateRelease = new CountDownLatch(1),
             timeoutRelease = new CountDownLatch(1);
 
-    /** 普通容器扩展的真实绘制调用计数，捕获沿生产管线而非测试回放。 */
+    /** 沿生产管线计数普通容器扩展的实际绘制调用。 */
     private static final class CaptureProbe implements club.heiqi.uilib.ui.scene.control.SceneControl {
         final String name;
         final int color;
@@ -194,7 +194,7 @@ public final class ImageServiceScenario extends TestApplication {
                 exchange -> {
                     timeout.incrementAndGet();
                     try {
-                        // 客户端完成两次真实超时后才释放，故障不依赖服务端睡眠时长。
+                        // 客户端完成两次真实超时后释放服务端请求。
                         timeoutRelease.await();
                     } catch (Exception ignored) {
                     } finally {
@@ -227,7 +227,7 @@ public final class ImageServiceScenario extends TestApplication {
     }
 
     private SharedImageService service() {
-        // 成功共享沿生产默认预算；短超时只用于故障场景，避免合法重试被误判为去重失败。
+        // 成功共享使用生产默认预算，短超时预算仅用于故障场景。
         return service(JavaImageLoader.Budget.defaults());
     }
 
@@ -602,7 +602,7 @@ public final class ImageServiceScenario extends TestApplication {
                                                                         "旧代release未执行");
                                                             } catch (
                                                                     InterruptedException canceled) {
-                                                                /* 模拟原生解码不响应取消，但仍不得发布旧代。 */
+                                                                /* 让旧解码在取消后继续返回，核验发布边界丢弃旧代。 */
                                                             }
                                                         }
                                                         finished.countDown();

@@ -8,7 +8,7 @@ import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.text.TextLayout;
 
-/** 实际墨迹四角先齐次六面裁剪再除w；没有把负w伪造成正值，也不拿caller范围当framebuffer。 */
+/** 将caller空间实际墨迹投影到齐次空间，先按六面与scissor裁剪，再除w判定framebuffer可见性。 */
 final class GlFontVisibility {
     private GlFontVisibility() {}
 
@@ -31,7 +31,7 @@ final class GlFontVisibility {
         return new Query(context).visible(command, glyph, clip);
     }
 
-    /** 只随一次Preparation存活；同一不可变context的防御副本和四角缓冲不随glyph重建。 */
+    /** 随一次Preparation持有context防御副本与可复用四角缓冲。 */
     static final class Query {
         final FontRenderContext context;
         final int[] viewport, scissor;
@@ -51,7 +51,7 @@ final class GlFontVisibility {
         private void fill(double x, double y, double[] target) {
             if (!Double.isFinite(x) || !Double.isFinite(y))
                 throw new IllegalArgumentException("非有限anchor");
-            // 与FontProjection.clipAt保留相同运算顺序，避免裁面临界值因增量或重结合而改变。
+            // 沿FontProjection.clipAt的运算顺序计算，保持裁面临界值一致。
             for (int r = 0; r < 4; r++)
                 target[r] = mvp[r] * x + mvp[4 + r] * y + mvp[8 + r] * 0.0 + mvp[12 + r];
         }
@@ -78,7 +78,7 @@ final class GlFontVisibility {
                 }
                 return false;
             }
-            // 旧world输入仍走四角齐次裁剪，不新增UI坐标或资源前提。
+            // 普通world输入直接使用caller空间四角进行齐次裁剪。
             fill(l, t, quad.get(0));
             fill(r, t, quad.get(1));
             fill(r, b, quad.get(2));
@@ -113,7 +113,7 @@ final class GlFontVisibility {
         };
     }
 
-    /** 只用原齐次平面的严格外侧判定；边界不加epsilon，非有限值仍交原精确路径。 */
+    /** 以齐次平面严格外侧判定快速分类，临界边界与非有限值交精确路径。 */
     private static int classify(List<double[]> polygon, int planes, double[] limits) {
         int any = 0, common = (1 << planes) - 1;
         boolean positiveW = true;
@@ -135,7 +135,7 @@ final class GlFontVisibility {
     }
 
     private static List<double[]> clipped(List<double[]> polygon, int planes, double[] limits) {
-        // scissor亦以齐次平面裁多边形，避免旋转quad AABB与小scissor交但实际全在外。
+        // scissor按齐次平面裁实际多边形，精确处理旋转quad边界。
         for (int plane = 0; plane < planes && !polygon.isEmpty(); plane++) {
             List<double[]> out = new ArrayList<double[]>();
             double[] previous = polygon.get(polygon.size() - 1);

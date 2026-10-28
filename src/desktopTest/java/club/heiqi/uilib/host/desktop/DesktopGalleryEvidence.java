@@ -91,7 +91,7 @@ final class DesktopGalleryEvidence {
                 | (value.get(2) & 255);
     }
 
-    /** 证据只读正式几何与实际绘制，不为页面增加定位标记或布局接缝。 */
+    /** 从正式几何与实际绘制读取页面证据。 */
     static void saveGeometry(DesktopWindow window, Path target) throws Exception {
         StringBuilder out = new StringBuilder();
         window.domain.execute(

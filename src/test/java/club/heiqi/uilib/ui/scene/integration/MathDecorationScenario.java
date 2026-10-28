@@ -15,7 +15,7 @@ import club.heiqi.uilib.ui.scene.text.math.MathStyle;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** 真实字体/MATH 装饰几何，检查独立消费者事实而非 helper 内部实现。 */
+/** 以真实字体/MATH装饰几何核验独立消费者事实。 */
 public final class MathDecorationScenario extends TestApplication {
     private FontTextService text;
     private final MathLayoutEngine engine = new MathLayoutEngine();

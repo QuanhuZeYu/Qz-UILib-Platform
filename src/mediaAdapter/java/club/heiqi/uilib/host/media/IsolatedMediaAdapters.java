@@ -25,7 +25,7 @@ public final class IsolatedMediaAdapters {
                 return runtime().decoderFactory().open(source,cancellation);
             }
             @Override public MediaDecoderSource openSource(MediaSource source,MediaCancellation lifetime) throws Exception {
-                // 来源owner保留稳定PTS锚点；不能落回旧open默认桥。
+                // 转交真实来源owner，持续持有稳定PTS锚点。
                 return runtime().decoderFactory().openSource(source,lifetime);
             }
         };
@@ -36,7 +36,7 @@ public final class IsolatedMediaAdapters {
             @Override public MediaAudioSink open(MediaBudget budget) throws Exception { return runtime().audioFactory(deviceName).open(budget); }
         };
     }
-    /** 查询不触发绑定初始化；关闭会话后仍可核对真实所属句柄。 */
+    /** 从已有运行域读取资源快照，支持关闭会话后核对所属句柄。 */
     public static synchronized MediaNativeResources resources() {
         return runtime==null ? new MediaNativeResources(new long[12],0) : new MediaNativeResources(runtime.snapshot(),1);
     }

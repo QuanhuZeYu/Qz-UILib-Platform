@@ -21,7 +21,7 @@ import java.nio.ByteBuffer;
 import java.nio.ReadOnlyBufferException;
 import java.util.function.Predicate;
 
-/** 短真实链路；这里没有 GPU 回放，绝不制造已呈现回执。 */
+/** 核验短媒体的真实解码与音频链路，呈现回执由GPU宿主另行验证。 */
 public final class MediaPlaybackScenario extends TestApplication {
     private String base;
     @Override protected void setup() {

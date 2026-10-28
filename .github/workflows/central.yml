@@ -203,7 +203,7 @@ jobs:
           const deployment = await status();
           const purls = [...new Set(deployment.purls ?? [])];
           if (deployment.deploymentId !== id) throw new Error('响应中的部署 ID 不匹配');
-          // Central 受理公开后不再返回 purls；坐标必须在 VALIDATED 的写入边界核对，后续只查询同一 ID。
+          // 在VALIDATED写入边界核对purls坐标；Central受理公开后按同一ID查询状态。
           if (deployment.deploymentState === 'VALIDATED') {
             if (purls.length !== expected.length || expected.some(purl => !purls.includes(purl))) throw new Error('部署内容与本仓本版 Maven 坐标不匹配：' + JSON.stringify({ deploymentId: id, state: deployment.deploymentState, purls }));
             const response = await fetch(api + 'deployment/' + encodeURIComponent(id), { method: 'POST', headers, signal: AbortSignal.timeout(30000) });

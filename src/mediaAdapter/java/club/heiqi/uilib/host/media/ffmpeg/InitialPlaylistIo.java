@@ -42,7 +42,7 @@ final class InitialPlaylistIo implements AutoCloseable {
     InitialPlaylistIo(byte[] bytes,MediaSource source,HlsSourceContext context,MediaCancellation cancellation) {
         this(bytes);this.sourceContext=context;this.cancellation=cancellation;
         try {
-            // 自定义首列表没有HTTP协议AVOptions，子列表/片段继续使用所属来源的请求头。
+            // 为自定义首列表的子列表/片段显式传递所属来源请求头。
             opener=new AVFormatContext.Io_open_AVFormatContext_PointerPointer_BytePointer_int_PointerPointer(){
                 @Override public int call(AVFormatContext format,PointerPointer target,BytePointer url,int flags,PointerPointer options){
                     try {
@@ -107,7 +107,7 @@ final class InitialPlaylistIo implements AutoCloseable {
         if(sourceContext!=null){
             if(sourceContext.hasMaster()){
                 // FFmpeg 6.1.1 hls.c以声明的variant索引创建公开AVProgram，实际stream经add_stream_to_programs归属。
-                // 只沿已选stream查program；io_open会读取多个变体，其请求先后不能表示播放选择。
+                // 沿已选stream查program确认播放选择；io_open的变体请求仅用于IO捕获。
                 program=av_find_program_from_stream(format,(AVProgram)null,stream);
                 if(program==null||program.isNull())throw new IOException("FFmpeg HLS已选轨道缺少program归属");
                 org.bytedeco.ffmpeg.avutil.AVDictionaryEntry bitrate=av_dict_get(program.metadata(),"variant_bitrate",null,0);

@@ -36,7 +36,7 @@ public final class DesktopDataTableVerification extends TestApplication {
             window = w; glfwSetWindowSize(w.handle(), 1280, 900); settle(w);
             require(glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE, "数据表验收必须使用可见窗口");
             input = new DesktopTestInput(w);
-            // 自动路径只注入本窗口的生产回调，不请求系统前台焦点。
+            // 自动路径通过本窗口的生产回调注入焦点恢复。
             input.focus.invoke(w.handle(), true); w.frame();
             try (DesktopTestInput.ScriptedCursor cursor = input.scriptedCursor()) {
                 scenario("表头正文共享列盒及窄窗独立纵条", this::geometryAndScrollbars);

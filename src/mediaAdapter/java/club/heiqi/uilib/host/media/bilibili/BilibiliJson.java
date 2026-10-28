@@ -7,7 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** 有限JSON语法及纯值读取；每个语法产生式各自消费游标，不构造平台播放策略。 */
+/** 解析有限JSON语法并读取纯值；每个语法产生式各自消费游标，播放选择归平台流程。 */
 final class BilibiliJson {
     private final String text;
     private int at, nodes;

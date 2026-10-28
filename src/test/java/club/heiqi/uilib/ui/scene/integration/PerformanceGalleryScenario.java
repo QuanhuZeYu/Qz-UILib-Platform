@@ -23,7 +23,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.charset.StandardCharsets;
 
-/** 实际字体、正式输入与管线；无GL，结果不能外推为GPU或MC性能。 */
+/** 通过实际字体、正式输入与管线测量CPU工作量，结果范围为该无GL场景。 */
 public final class PerformanceGalleryScenario extends TestApplication {
     public static void main(String[] args) throws Exception { new PerformanceGalleryScenario().run(args); }
     @Override protected void runTests() throws Exception {

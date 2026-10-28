@@ -38,7 +38,7 @@ import static org.bytedeco.ffmpeg.global.avutil.*;
 import static org.bytedeco.ffmpeg.global.swscale.*;
 import static org.bytedeco.ffmpeg.global.swresample.*;
 
-/** native 读取/解码/归一化，所有资源在创建线程释放。共同调度、代际和设备均不在这里。 */
+/** 在创建线程读取、解码和归一化native媒体并释放所属资源；会话负责调度、代际与设备。 */
 final class FfmpegDecoder implements MediaDecoder {
     private final Thread owner=Thread.currentThread();
     private final MediaCancellation cancellation;
@@ -138,7 +138,7 @@ final class FfmpegDecoder implements MediaDecoder {
         configureOptions(source,index,options);
         if(initial!=null){
             initialIo=new InitialPlaylistIo(initial,source,sourceContext,cancellation);initialIo.attach(input);
-            // 每次正常reload通过同一io_open交回完整快照，避免HTTP keepalive在回调外复用响应。
+            // 每次正常reload通过同一io_open返回完整快照，统一HTTP响应的捕获边界。
             if(sourceContext!=null)check(av_dict_set(options,"http_persistent","0",0),"http_persistent");
             check(av_dict_set(options,"protocol_whitelist","http,https,tcp,tls,crypto",0),"protocol_whitelist");
         }
@@ -187,7 +187,7 @@ final class FfmpegDecoder implements MediaDecoder {
                 if(input.streams(stream).codecpar().codec_type()==AVMEDIA_TYPE_AUDIO){audioStream=stream;break;}
             }
         }
-        // 共享时间线不能逐轨减去不同的首PTS；先绑定实际media，再建立同来源anchor。
+        // 先绑定实际media，再以同来源anchor统一各轨PTS。
         originNanos=sharedTimeline||input.start_time()==AV_NOPTS_VALUE?0:Math.multiplyExact(input.start_time(),1000L);
         if(selected!=null){
             long selectedStart=Math.min(trackStart(videoStream),trackStart(audioStream));
@@ -196,7 +196,7 @@ final class FfmpegDecoder implements MediaDecoder {
         if(sourceContext!=null)originNanos=sourceContext.anchor(originNanos);
         if(!hlsSeekClock)seekOriginNanos=originNanos;
         if(selected!=null){
-            // 普通join不额外读取packet；实际物理seek的时钟已在唯一primary活动时确认。
+            // 普通join沿用同流时钟；物理seek的时钟在唯一primary活动时确认。
             long duration=sourceContext.playlistDurationNanos();input.duration(duration<0?AV_NOPTS_VALUE:duration/1000);
         }
         if(videoStream>=0)video=openCodec(videoStream);
@@ -447,7 +447,7 @@ final class FfmpegDecoder implements MediaDecoder {
         if(!hlsSeekClock||seekClockUnavailable||seekOriginNanos!=Long.MIN_VALUE||input.streams(value.stream_index()).id()!=seekPlaylist)return;
         if(value.dts()==AV_NOPTS_VALUE){seekClockUnavailable=true;return;}
         // FFmpeg 6.1.1 hls_read_packet以首个成功packet DTS设置first_timestamp。
-        // 此次seek初始化只启用primary playlist；公开首packet直接给出同一时钟，不从PTS或其他variant推断。
+        // seek初始化仅启用primary playlist，由公开首packet DTS确认同一时钟。
         seekOriginNanos=Math.subtractExact(Math.multiplyExact(av_rescale_q(value.dts(),input.streams(value.stream_index()).time_base(),av_get_time_base_q()),1000L),seekWindowStart);
     }
     private void readSeekClock(){
@@ -491,7 +491,7 @@ final class FfmpegDecoder implements MediaDecoder {
         if (closed) return;
         if (Thread.currentThread()!=owner) throw new IllegalStateException("FFmpeg释放线程错误");
         closed=true; Throwable failure=null;
-        // 每项仍单独尝试，部分分配/释放失败不会跳过后续资源；顺序与原owner保持一致。
+        // 按owner顺序逐项尝试释放，保留首错并汇总后续清理错误。
         AutoCloseable[] releases={
             this::clearObserved,this::clearDeferred,this::releaseFrame,this::releasePacket,
             ()->releaseCodec(video),()->releaseCodec(audio),this::releaseScale,this::releaseResample,

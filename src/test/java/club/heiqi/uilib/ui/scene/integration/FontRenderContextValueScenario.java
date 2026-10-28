@@ -7,7 +7,7 @@ import club.heiqi.uilib.host.client.font.context.StandardFontContext;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL14;
 
-/** 字体历史状态的纯值合同；GL 常量在编译期内联，不读取驱动或创建窗口。 */
+/** 在CPU核验字体提交状态的纯值合同，GL常量由编译期内联。 */
 public final class FontRenderContextValueScenario extends TestApplication {
     private static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
@@ -131,7 +131,7 @@ public final class FontRenderContextValueScenario extends TestApplication {
         require(font.sameDrawState(expected) && expected.sameDrawState(font), "标准字体派生遗漏历史状态");
         require(source.state.color()[0] == 0.25f && !source.rasterState.blendEnabled, "派生改写 caller");
 
-        // 共享只在冻结对象之间成立；构造输入与任一公开 getter 都不能泄漏共享载荷。
+        // 冻结对象可共享载荷；构造与公开getter通过复制隔离外部修改。
         p[0] = mv[0] = color[0] = normal[0] = lighting[0] = blend[0] = range[0] = 99;
         viewport[2] = scissor[2] = 1; mask[0] = true;
         for (FontRenderContext value : new FontRenderContext[]{source, font}) {

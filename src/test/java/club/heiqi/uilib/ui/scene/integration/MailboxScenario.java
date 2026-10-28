@@ -22,7 +22,7 @@ import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 import club.heiqi.uilib.host.font.freetype.LwjglFontEngine;
 import java.util.List;
 
-/** 正式字体与物理输入验证实际邮箱流程，不读取页面内部状态作为输入接缝。 */
+/** 通过正式字体和物理输入意图核验实际邮箱流程。 */
 public final class MailboxScenario extends TestApplication {
     private FontTextService fonts;
     @Override protected void setup() throws Exception { fonts = own(new FontTextService(new LwjglFontEngine())); }
@@ -81,7 +81,7 @@ public final class MailboxScenario extends TestApplication {
                             return false;
                         })
                         .filter(e -> { LayoutBox v=e.clip==null?e.box:e.box.intersect(e.clip); return v.width>0&&v.height>0; })
-                        // 精确动作名优先；视觉呈现序可因覆盖变化，邮件正文中的同词不是导航意图。
+                        // 优先选取精确动作名，区分正文同词与可激活导航。
                         .sorted(java.util.Comparator.comparingInt(e -> e.node.clickAction()!=null&&e.node.text().equals(contains)?0:1))
                         .findFirst().orElseThrow(() -> new AssertionError("找不到可见操作: " + contains));
                 LayoutBox hit = target.clip == null ? target.box : target.box.intersect(target.clip);
@@ -206,7 +206,7 @@ public final class MailboxScenario extends TestApplication {
                         "独立模型继承了其他模型的样本序号"));
             }
         } finally { domain.execute(model::close); }
-        // 外部来源可以占用原有样本id；分配新身份不能改写该对象或把拒绝变成吞并。
+        // 外部来源占用样本id时，新消息分配独立身份并保留原对象。
         domain.execute(() -> retained[0]=new MailboxModel(domain,java.util.Collections.singletonList(
                 new MailboxModel.Message("received-1","外部来源","预存消息","既有内容","预存正文","昨天",false,false,true))));
         MailboxModel preloaded=retained[0];
@@ -272,7 +272,7 @@ public final class MailboxScenario extends TestApplication {
                     &&c.box.y+c.box.height<=bounds[0].y+bounds[0].height),"hover渐显途中聚焦同一动作仍未立即可见：style=0x" + Integer.toHexString(readNode[0].style().color));
         }
     }
-    /** 用正式runtime的宿主时间入口验证真实时间合同，不依赖sleep碰巧落在中点。 */
+    /** 通过正式runtime宿主时间入口确定性地核验时间合同。 */
     private void finiteBindingClock() {
         ReactiveDomain domain=ReactiveDomain.direct();
         domain.execute(() -> {
@@ -339,7 +339,7 @@ public final class MailboxScenario extends TestApplication {
             view.domain.execute(() -> require(view.model.category.get()==MailboxModel.Category.SOCIAL&&view.model.results.get().size()==2,"返回收件箱丢失分类"));
         }
     }
-    /** 保护实际评审发现：空草稿不改变时只切文本方向，提示仍须重新呈现。 */
+    /** 空草稿保持原值时，文本方向变化仍须重新呈现提示。 */
     private void placeholderPolicy() throws Exception {
         try(View view=new View()) {
             club.heiqi.uilib.ui.scene.node.SceneNode[] field=new club.heiqi.uilib.ui.scene.node.SceneNode[1];

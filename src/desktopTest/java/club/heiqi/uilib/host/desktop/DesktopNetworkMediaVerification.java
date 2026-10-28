@@ -28,7 +28,7 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 
-/** 受控解析事实+真实HTTP分轨与正式GLFW，日常build不依赖公网。 */
+/** 以受控解析事实、本地HTTP分轨与正式GLFW核验网络媒体流程。 */
 public final class DesktopNetworkMediaVerification extends TestApplication {
     private DesktopWindow window;private DesktopTestInput input;private SceneNode address;private Path output;
     private static final class Resolver implements MediaResolver {

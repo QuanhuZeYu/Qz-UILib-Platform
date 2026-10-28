@@ -10,7 +10,7 @@ import club.heiqi.uilib.ui.scene.paint.PaintPlan;
 import club.heiqi.uilib.ui.scene.semantics.SceneSemanticSnapshot;
 import club.heiqi.uilib.ui.scene.video.MediaViewPump;
 
-/** 一次页面的 GPU consumer；应用服务借用到页面结束，页面不释放应用配置及字体缓存。 */
+/** 持有单页GPU consumer；应用配置及字体缓存由应用服务持有，页面借用至结束。 */
 public final class EmbeddedSceneHost implements SceneHost, AutoCloseable {
     private final EmbeddedSceneServices services;
     private final IntSupplier width, height;

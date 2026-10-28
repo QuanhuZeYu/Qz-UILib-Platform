@@ -33,7 +33,7 @@ final class DesktopMailboxMotion {
         search(window,input,output);
         receiveShadow(window,input,output);
         navigationHover(window,input,output);
-        // 动画尚未结束时按正式当前区域点击，不能只让画面滑走、命中留在原位。
+        // 在过渡中点击正式当前区域，核验命中随呈现位置移动。
         input.click("折叠导航");runFor(window,35000000L);
         SceneGeometryView.Entry star=action(window,"星标邮件");
         if(star.box.width<=32||star.box.width>=240)throw new AssertionError("未命中导航过渡中间态");
@@ -55,7 +55,7 @@ final class DesktopMailboxMotion {
         if(DesktopTestInput.hit(action(window,"收件箱")).width<=0)throw new AssertionError("过渡中窄窗丢失导航动作");
         org.lwjgl.glfw.GLFW.glfwSetWindowSize(window.handle(),1400,900);runFor(window,220000000L);
         input.click("展开导航");runFor(window,220000000L);
-        // 切出结束挂载，返回直接读取当前目标，不能复活旧过渡。
+        // 切出结束挂载，返回时直接呈现当前目标状态。
         input.click("折叠导航");input.click("场景概览");input.click("打开收件箱");runFor(window,220000000L);
         if(action(window,"星标邮件").box.width!=32)throw new AssertionError("重新进入邮箱没有直接消费保留的折叠目标");
         input.click("展开导航");runFor(window,220000000L);
@@ -106,7 +106,7 @@ final class DesktopMailboxMotion {
         if(action(window,"星标邮件").box.width!=32)throw new AssertionError("短暂停留未等到期限就展开");
         input.point(1100,40);runFor(window,260000000L);
         if(action(window,"星标邮件").box.width!=32)throw new AssertionError("离开后仍执行过期悬停展开");
-        // 指针仍在导航内时改变视口，旧等待须失效，不能从resize前已累计的停留提前展开。
+        // 指针仍在导航内时改变视口，应结束旧悬停等待并重新计时。
         input.cursor.invoke(window.handle(),36,rowY);window.frame();runFor(window,200000000L);
         org.lwjgl.glfw.GLFW.glfwSetWindowSize(window.handle(),1380,900);window.frame();runFor(window,220000000L);
         if(action(window,"星标邮件").box.width!=32)throw new AssertionError("窗口变化没有结束旧悬停等待");
@@ -183,7 +183,7 @@ final class DesktopMailboxMotion {
         });
         input.point(1100,40);runFor(window,220000000L);
         if(action(window,"星标邮件").box.width!=32)throw new AssertionError("离开没有收回临时展开");
-        // 等待中切出，再进入须重新等待；展开中切出不能保留临时覆盖状态。
+        // 等待中切出后重新计时，展开中切出后释放临时覆盖状态。
         focusAction(window,input,"场景概览");
         input.cursor.invoke(window.handle(),36,rowY);window.frame();runFor(window,120000000L);
         activateKey(window,input);input.click("打开收件箱");input.point(1100,40);runFor(window,420000000L);

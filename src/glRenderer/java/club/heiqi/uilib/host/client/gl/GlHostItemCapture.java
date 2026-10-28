@@ -5,7 +5,7 @@ import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 import club.heiqi.uilib.ui.scene.image.ImagePlacement;
 import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 
-/** 透明或带仿射/形状裁剪物品的临时合成面；每次宿主委托后立即由原quad backend消费，不缓存动态外观。
+/** 透明或带仿射/形状裁剪物品的临时合成面；每次宿主委托后由quad backend立即消费当前外观。
  * 单个RGBA8 + DEPTH24_STENCIL8面覆盖原分配与局部clip，旧面先释放再调整尺寸。
  */
 final class GlHostItemCapture implements AutoCloseable {
@@ -38,7 +38,7 @@ final class GlHostItemCapture implements AutoCloseable {
             GlImageResources.HostItems host) {
         return capture(image, clip, framebufferWidth, framebufferHeight, host, false);
     }
-    /** 变换前的image/clip仍在局部分配空间，不能先按页面viewport剔除或放大捕获面。 */
+    /** 按变换前image/clip的局部分配确定捕获面，页面viewport裁剪归最终合成。 */
     Capture captureLocal(ImagePlacement image, LayoutBox clip, GlImageResources.HostItems host) {
         return capture(image, clip, 0, 0, host, true);
     }
@@ -79,7 +79,7 @@ final class GlHostItemCapture implements AutoCloseable {
             gl.glClearBufferfv(GL_COLOR, 0, TRANSPARENT);
             gl.glClearBufferfi(GL_DEPTH_STENCIL, 0, 1, 0);
             // 中间面必须可写alpha；caller的写掩码仅在最终合成时生效，由外层恢复。
-            // 旧HostItems接口仍接收完整ImagePlacement/目标尺寸；透明或新几何用法在局部framebuffer绘制。
+            // HostItems接收完整ImagePlacement与目标尺寸，透明或带变换/形状裁剪时在局部framebuffer绘制。
             // 宿主自身的 ItemStateScope 继续隔离原版/Forge hook，外层只恢复合成面触碰的状态。
             host.render(image.translated(-left, -top), new LayoutBox(0, 0, width, height), width, height);
         }

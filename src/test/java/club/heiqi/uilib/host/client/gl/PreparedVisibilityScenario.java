@@ -19,7 +19,7 @@ import java.util.List;
 import club.heiqi.uilib.ui.scene.text.TextPolicy;
 import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 
-/** 复用既有真实GL窗口、字体和atlas；工作量计数不代表实测帧时间。 */
+/** 复用真实GL窗口、字体与atlas，以计算次数核验可见性准备的工作量。 */
 public final class PreparedVisibilityScenario {
     public static void verify(ClientFontServices owner, GlPaintPlanRenderer renderer, TextLayout text, int width, int height) {
         LayoutBox viewport = new LayoutBox(0, 0, width, height);
@@ -134,7 +134,7 @@ public final class PreparedVisibilityScenario {
         clipped = renderer.clippedGlyphs();
         require(expectChecks(renderer, plain(text, width, height), hidden, 0, "隐藏facts未命中").isEmpty()
                 && renderer.clippedGlyphs() - clipped == delta, "命中改变clippedGlyphs计数");
-        // 经真实FontProjection乘法得到负零；输入符号不能在key中被数值相等抹平。
+        // 经真实FontProjection乘法产生负零，以raw bits区分key中的输入符号。
         float[] zero = projection.clone(), negativeZero = projection.clone(), mv = identityMatrix();
         mv[10] = 0.25f; negativeZero[8] = -Float.MIN_VALUE;
         FontRenderContext plus = context(zero, mv, viewport, true, shown.scissor(), height, identity);
@@ -172,7 +172,7 @@ public final class PreparedVisibilityScenario {
         try (GlPaintPlanRenderer.Prepared next = owner.prepare(renderer, plain(text, width, height), shown)) { next.render(shown); }
     }
 
-    /** 子consumer发布同key并建立几何缓存，仍不能改变父Frame在freeze时的空白快照。 */
+    /** 子consumer发布同key后，父Frame仍保持freeze时的空白快照。 */
     private static void verifyNestedFreeze(ClientFontServices owner, GlPaintPlanRenderer renderer,
             FontRenderContext context, int width, int height) {
         TextLayout text = owner.layout("Ж", new club.heiqi.uilib.ui.scene.text.TextStyle("default", 31, 0xffffffff), width);
@@ -228,7 +228,7 @@ public final class PreparedVisibilityScenario {
         } finally { owner.releasePlanRenderer(renderer); }
         renderer = owner.createPlanRenderer();
         try {
-            // 真实glyph重复出现也占visibleKeys空间；总量按出现次数而非identity表大小控制。
+            // visibleKeys按glyph出现次数计入总量预算。
             TextLayout repeated = repeated(one, 33);
             int retained = 8192 / 33;
             require(retained < 256, "总glyph预算未先于项数生效");
@@ -319,7 +319,7 @@ public final class PreparedVisibilityScenario {
         return demand;
     }
     private static int listenerCount(FontTextService fonts) {
-        // 观察真实订阅的占用/归还，不以类字段数量或源码形状代替生命周期验收。
+        // 从真实订阅集合观察占用与归还，核对生命周期。
         try {
             java.lang.reflect.Field field = FontTextService.class.getDeclaredField("invalidation");
             field.setAccessible(true);

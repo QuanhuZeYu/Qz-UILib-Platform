@@ -36,8 +36,8 @@ import java.util.function.Supplier;
 import javax.imageio.ImageIO;
 
 /**
- * 真实 GLFW/FT/HB/GL 的透明选区回归；自动事件调用已安装的宿主回调，不冒称人工键盘或 OS IME。
- * 选区是一个覆盖域：文字簇数量、方向、滚动或小数行高不能让同一像素重复合成同一层颜色。
+ * 在真实GLFW/FT/HB/GL窗口调用已安装回调，核验透明选区像素。
+ * 同一选区层按覆盖域合成，每个像素合成一次；覆盖文字簇、方向、滚动与小数行高变化。
  */
 public final class DesktopTextSelectionVerification extends TestApplication {
     private static final String MIXED = "WiWi office abc אבג العربية 中文 e\u0301 👩🏽‍💻   ";
@@ -103,7 +103,7 @@ public final class DesktopTextSelectionVerification extends TestApplication {
                         "水平查看修改了草稿或选区");
                 sample(window, page, name + "-scrolled", failures);
 
-                // 逻辑区间在 Bidi 行里可能分成两个视觉片段，不能用总包围盒填掉中间未选文字。
+                // Bidi逻辑区间按实际视觉片段绘制，保留片段之间的未选文字。
                 int rtl = page.text.indexOf("אבג"), start = rtl - 2;
                 key(window, input, GLFW_KEY_HOME, GLFW_MOD_CONTROL);
                 for (int i = 0; i < start; i++) key(window, input, GLFW_KEY_RIGHT, 0);
@@ -144,7 +144,7 @@ public final class DesktopTextSelectionVerification extends TestApplication {
         LayoutBox framebuffer = new LayoutBox(0, 0, window.width(), window.height());
         visible = visible.intersect(framebuffer);
         final LayoutBox sampled = visible;
-        // 自动滚动条在文本之后覆盖选区；从公开语义和同帧几何取遮挡，不把它的颜色误报为选区合成。
+        // 自动滚动条后绘并覆盖选区，按公开语义与同帧几何单独划定遮挡。
         List<LayoutBox> scrollbars = read(window, () -> {
             List<LayoutBox> boxes = new ArrayList<>();
             for (SceneGeometryView.Entry candidate : current.ordered()) {

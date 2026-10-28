@@ -6,7 +6,7 @@ import org.lwjgl.util.freetype.FT_Bitmap;
 import org.lwjgl.util.freetype.FreeType;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.GlyphBitmap;
 
-/** FT native bitmap拷贝边界，结果只含owned JDK数据。 */
+/** 将FT native bitmap复制为独立持有的JDK像素数据。 */
 final class FreeTypeBitmap {
     static GlyphBitmap copy(FT_Bitmap bitmap, float bearingX, float bearingY, float pixelScale) {
         int width = bitmap.width(), height = bitmap.rows();
@@ -33,7 +33,7 @@ final class FreeTypeBitmap {
         if (mode == FreeType.FT_PIXEL_MODE_GRAY && grayLevels < 2)
             throw new IllegalStateException("Invalid gray levels");
         for (int y = 0; y < height; y++) {
-            // FT 的 buffer 指向第一行，pitch 的符号决定下一行地址；不要假定正 pitch。
+            // FT 的 buffer 指向第一行，后续行地址沿带符号的 pitch 推进。
             long row = address + (long) y * bitmap.pitch();
             for (int x = 0; x < width; x++) {
                 int dest = (y * width + x) * (color ? 4 : 1);

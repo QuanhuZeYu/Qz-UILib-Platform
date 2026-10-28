@@ -17,11 +17,11 @@ import club.heiqi.uilib.ui.scene.text.font.glyph.GlyphKey;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.GlyphBitmap;
 
 /** GL上下文线程的稀疏、按需图集。mono/color 分页，数组的层数由预算指定。
- * Frame 在 prepare 收集整个范围的可见需求并 pin，freeze 后只读，不在 draw 中上传或淘汰。
- * UV 只属于当前 Frame；旧 PaintPlan 保存字体来源而非 UV，下次 prepare 可重建已淘汰资源。
+ * Frame在prepare收集可见需求并pin，freeze后以只读资源回放；上传与淘汰归prepare。
+ * UV归当前Frame，PaintPlan保存字体来源，下次prepare按需重建已淘汰资源。
  */
 public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, AutoCloseable {
-    // OpenGL 3.0 核心格式；直接采样 .r，无需 3.3 texture swizzle。
+    // 使用OpenGL 3.0核心格式，覆盖率直接采样.r。
     private static final int GL_R8 = 0x8229, GL_RED = 0x1903;
     public enum Mode {
         TEXTURE_2D,
@@ -82,8 +82,8 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
     }
 
     /** 最小提交单位为含透明 padding 的实际格式整行：mono 主 view 一字节，RGBA view 四字节。
-     * 不累计不足一行的跨帧预算；bytes>=4*pageSize可覆盖所有格式的可放入字形。
-     * nanos在驱动调用边界检查，无法抢占单次GL调用；任一预算为0时该帧不上传。 */
+     * 每帧独立记账，bytes>=4*pageSize可覆盖所有格式的可放入字形。
+     * nanos在驱动调用边界检查；字节、时间与调用次数均有余额时才上传。 */
     public static final class UploadBudget {
         public final long bytes, nanos;
         public final int calls;
@@ -235,7 +235,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         }
     }
 
-    /** 单次 prepare 共用的预算游标；仅在成功提交后记账，不跨帧累计不足一行的额度。 */
+    /** 单次prepare共用预算游标，成功提交后记账，余额限于当前帧。 */
     private final class UploadProgress {
         final UploadBudget limit;
         final long start = System.nanoTime();
@@ -287,7 +287,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
     private final List<Frame> borrowedParents = new ArrayList<>();
     private final List<Upload> borrowedUploads = new ArrayList<>();
 
-    /** 已flush的宿主委托可暂借图集；父Frame仍冻结并pin，nested consumer不能淘汰其resident或改变旧UV。 */
+    /** 已flush的宿主委托可暂借图集；父Frame保持冻结和pin，resident与UV存活至父范围结束。 */
     public void borrowFrozenFrame(Runnable delegated) {
         check();
         Frame parent = active;
@@ -323,7 +323,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         if (uploading != null) uploading.resident.group.pinned = true;
     }
 
-    // 两种资源格式各保留一个partial；同原生bitmap对象，不新增CPUviewcache或长期Frame。
+    // 两种资源格式各保留一个partial，共享原生bitmap对象。
     private final java.util.EnumMap<SamplingView, Upload> partials =
             new java.util.EnumMap<SamplingView, Upload>(SamplingView.class);
     private GlCpuUploadScope preparingState;
@@ -350,7 +350,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         return new Stats(this);
     }
 
-    /** 只查询该采样view已完整发布的驻留项，不pin、创建Frame或返回UV。
+    /** 只读查询该采样view中已完整发布的驻留事实；资源pin与UV归Frame。
      * 登记与回放之间仍可能淘汰；真正prepare须重新取得本Frame的资源保护。 */
     public boolean isResident(GlyphKey key, SamplingView view) {
         check();
@@ -381,7 +381,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 java.util.Collections.singletonList(demand), preserveUpload, view, needsSolid);
     }
 
-    /** 单Frame按调用方已裁决的资源优先层准备；只先pin主层，备用缓存不能阻挡主层新字形。
+    /** 单Frame按调用方裁决的优先层准备；先pin主层，为主层新字形优先分配空间。
      * 所有层共享一次prepare预算和一次freeze，既有冻结父Frame/partial保护保持不变。
      */
     public Frame beginFrameLayers(
@@ -407,9 +407,8 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         }
         if (!frame.priorityLayers.isEmpty()) frame.pinLayer(frame.priorityLayers.get(0));
         uploading = partials.remove(view);
-        // 本consumer的低优先partial已降到备用时，不允许它占据唯一upload槽阻挡主层。
-        // managed preserveUpload及冻结借用父upload属于外部live lease，不为本计划优先级卸载；
-        // 它们造成的压力只能保持未ready，不宣称跨consumer全域优先。CPUbitmap不随partial舍弃。
+        // 本consumer降到备用的partial让出upload槽，CPUbitmap仍归原缓存。
+        // managed preserveUpload与冻结父upload按外部live lease保留，容量压力记为等待。
         if (uploading != null
                 && !preserveUpload
                 && (frame.priorityLayers.isEmpty()
@@ -419,7 +418,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         return frame;
     }
 
-    /** 不持Frame/UV的epoch结束裁决；释放组保护，只丢弃不再可见的未完成upload。 */
+    /** epoch结束时释放组保护，保留仍可见的未完成upload；Frame/UV按各自范围释放。 */
     public void retainUploadDemand(Collection<GlyphKey> demand) {
         check();
         if (active != null) throw new IllegalStateException("先关闭Frame再结束epoch");
@@ -454,8 +453,8 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
 
         private final LinkedHashSet<GlyphKey> demand = new LinkedHashSet<GlyphKey>();
         private final List<List<GlyphKey>> priorityLayers = new ArrayList<>();
-        // 仅复用已发布且本Frame已pin的正项：close前evict不能移除其组，Resident因而保持有效。
-        // 备用层仍到原pinLayer时机才加入；未命中和未完整上传的partial不进入此映射。
+        // 复用本Frame已pin的已发布正项，所属组保护持续到close。
+        // 备用层在pinLayer时加入，partial在完整发布后加入。
         private final Map<GlyphKey, Resident> visible = new HashMap<GlyphKey, Resident>();
 
         private void pinLayer(Collection<GlyphKey> layer) {
@@ -487,7 +486,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
             if (done || active != this) throw new IllegalStateException("图集范围已结束");
         }
 
-        /** 时间预算只在驱动提交边界检查，无法中断单次 GL 调用。实际格式 padded 区域分行上传。 */
+        /** 按实际格式逐行上传padded区域，时间预算在驱动提交边界检查。 */
         public void prepare(AsyncGlyphRasterizer cpu, UploadBudget uploadBudget) {
             prepare(cpu, uploadBudget, true);
         }
@@ -502,7 +501,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 cpu.drainReady(budget.maxDemand);
             } else if (!demand.isEmpty())
                 throw new IllegalArgumentException("非empty glyph需求须提供CPUworker");
-            // #81 visible只含本Frame已经pin的已发布正项；全驻留时不建立上传游标或重复扫描需求。
+            // #81 visible仅保存本Frame已pin的已发布正项，全驻留时可直接结束准备。
             // 直色solid仍须沿原路径准备，CPU队列维护与参数失败也必须先完成。
             if (visible.size() == demand.size() && !(needsSolid && view == SamplingView.STRAIGHT_RGBA)) {
                 java.util.Objects.requireNonNull(uploadBudget, "uploadBudget");
@@ -602,13 +601,13 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         }
     }
 
-    /** 生成当前逐行进度对应的 padded 块，不推进 Upload 或发布 Resident。 */
+    /** 按当前逐行进度生成padded块，提交成功后的进度与发布归uploadRows。 */
     private ByteBuffer glyphBlock(Upload job, int rows, int rowBytes) {
         ByteBuffer data = uploadScratch(Math.multiplyExact(rows, rowBytes));
         Group group = job.resident.group;
         boolean straight = group.view == SamplingView.STRAIGHT_RGBA;
-        // 宿主 MASK view 的 RGB 恒白，含 alpha0 gutter；标准 sampler2D 的过滤不会二次变暗。
-        // 彩色 alpha0 RGB 为0；主 mono view 始终只有覆盖率，不借宿主格式增加主图集存储。
+        // MASK view的RGB在alpha0 gutter内也保持恒白，使标准sampler2D仅过滤覆盖率。
+        // 彩色alpha0的RGB为0；主mono view保持单通道覆盖率存储。
         if (straight && !job.bitmap.color)
             for (int i = 0; i < data.limit(); i += 4) {
                 data.put(i, (byte) 255);
@@ -646,7 +645,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
                 totalRows = job.bitmap.height + 2;
         while (job.row < totalRows && progress.canSubmit(rowBytes)) {
             int rows = (int) Math.min(totalRows - job.row, progress.remaining / rowBytes);
-            // 复用小块提交，单次 staging 不超过64KiB；宽行本身是最小预算单位。
+            // 复用64KiB staging分块提交，更宽的整行按最小预算单位单独处理。
             rows = Math.min(rows, Math.max(1, 65536 / rowBytes));
             ByteBuffer data = glyphBlock(job, rows, rowBytes);
             preparingState.prepare();
@@ -822,8 +821,8 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
     }
 
     private boolean evict() {
-        // glDeleteTextures 会解除所有单元上的绑定。仅在真实淘汰压力下查询各单元，
-        // 不删除宿主仍绑定的资源；预算不足留白，不能破坏上传进入态或其他单元。
+        // glDeleteTextures会解除所有单元绑定；淘汰前查询并保护宿主各单元与上传进入态引用的纹理。
+        // 可淘汰资源不足时保留空白。
         java.util.HashSet<Integer> bound = new java.util.HashSet<Integer>();
         if (preparingState != null) preparingState.addSavedTexturesTo(bound);
         int activeUnit = gl.glGetInteger(GL_ACTIVE_TEXTURE),
@@ -854,7 +853,7 @@ public final class GlGlyphAtlas implements GlQuadRenderer.ResourceProvider, Auto
         return true;
     }
 
-    /** 单atlas可复用scratch，最大为64KiB或一行；每上传清零padding而不分配native行buffer。 */
+    /** 单atlas复用scratch，容量为64KiB或更宽的整行；每次上传前清零padding。 */
     private ByteBuffer uploadScratch(int bytes) {
         if (uploadScratch == null || uploadScratch.capacity() < bytes)
             uploadScratch =

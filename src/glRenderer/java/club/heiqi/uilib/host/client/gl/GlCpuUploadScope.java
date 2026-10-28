@@ -4,7 +4,7 @@ import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 
 import java.util.Set;
 
-/** CPU 像素上传的状态边界；调用方显式声明会绑定的纹理目标，未声明的目标不查询或恢复。 */
+/** 保护CPU像素上传状态，按调用方声明的纹理目标捕获并恢复绑定。 */
 final class GlCpuUploadScope implements AutoCloseable {
     private static final int[] UNPACK_NAMES = {
         GL_UNPACK_ALIGNMENT,
@@ -34,7 +34,7 @@ final class GlCpuUploadScope implements AutoCloseable {
         if (immediate) prepare();
     }
 
-    /** 缓存命中/worker未就绪不触碰上传状态；首次实际写纹理前才激活同一保护范围。 */
+    /** 首次实际写纹理前激活保护范围，缓存命中与worker等待沿用原状态。 */
     static GlCpuUploadScope deferred(GlApi gl, int... textureTargets) {
         return new GlCpuUploadScope(gl, false, textureTargets);
     }

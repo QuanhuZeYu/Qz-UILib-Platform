@@ -176,7 +176,7 @@ public final class LayoutFoundationScenario extends TestApplication {
                 "边框、padding或带权分配没有在共同几何中只计算一次");
         float bottom = 0;
         for (TextLayout.Line line : child.text.lines()) bottom = Math.max(bottom, line.y + line.lineHeight);
-        // 字形墨迹可能超出行框；验证全部内容与行框容纳，不把行高误当最终墨迹高度。
+        // 字形墨迹可超出行框，此处按全部内容与实际行框核验自然高度。
         require(child.box.height >= (int) Math.ceil(bottom) + button.padding() * 2
                         && child.text.lines().get(child.text.lines().size() - 1).logicalEnd == button.text().length(),
                 "最终自然高度未容纳完整文字内容与行框");
@@ -319,7 +319,7 @@ public final class LayoutFoundationScenario extends TestApplication {
                 theme[0] = domain.signal(SceneTheme.light());
                 minimum[0] = domain.signal(180);
                 hidden[0] = domain.signal(false);
-                // 策略由当前主题间距派生，Owner 沿页面释放，工厂不接管外部来源。
+                // 策略派生当前主题间距；Owner随页面释放，外部来源归调用方。
                 grid[0] = SceneGrid.create(context, domain.computed(context.scope(), () ->
                         new SceneGrid.Policy(minimum[0].get(), theme[0].get().gap + 4, theme[0].get().gap + 4)));
                 grid[0].bind(NodeBinding.repeat(items[0], key -> key, item -> {

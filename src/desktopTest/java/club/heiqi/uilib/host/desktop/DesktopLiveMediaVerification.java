@@ -26,7 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 
-/** 只消费正式DesktopWindow/SceneVideo和媒体会话；不自行绘制或伪造呈现回执。 */
+/** 通过正式DesktopWindow、SceneVideo与媒体会话核验真实回放和呈现回执。 */
 public final class DesktopLiveMediaVerification extends TestApplication {
     private final List<MediaPresentation> samples=new ArrayList<>();
     private final StringBuilder observations=new StringBuilder("stage,mono,gen,state,position,start,end,width,height,presented\n");

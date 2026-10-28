@@ -19,7 +19,7 @@ import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 
-/** 正式通知偏好桌面回归；隐藏模式仍使用真实GL及生产回调，不覆盖OS可见焦点。 */
+/** 通过真实 GL 与生产回调核验通知偏好，支持可见与隐藏窗口模式。 */
 public final class DesktopStateControlsVerification extends TestApplication {
     private Path output;
     private DesktopWindow window;
@@ -33,7 +33,7 @@ public final class DesktopStateControlsVerification extends TestApplication {
         boolean requestedVisible = Boolean.parseBoolean(System.getProperty("uilib.desktop.visible", "true"));
         try (DesktopWindow w = DesktopWindow.openWithServices(config, requestedVisible, services -> ctx -> {
             SceneNode root = PreferencesPage.create(ctx, ctx.theme(), () -> {});
-            // 独立挂页没有Gallery外壳，沿共享主题角色补齐画布，而非暴露宿主清屏黑色。
+            // 独立挂页通过共享主题角色设置画布背景。
             root.bind(NodeBinding.value(ctx.theme(), (node, theme) -> node.background(new SceneAppearance.Palette(theme).canvas)));
             ctx.mountOwned(root);
         })) {
@@ -60,7 +60,7 @@ public final class DesktopStateControlsVerification extends TestApplication {
         event(GLFW_KEY_RIGHT, GLFW_PRESS, 0); event(GLFW_KEY_RIGHT, GLFW_REPEAT, 0); event(GLFW_KEY_RIGHT, GLFW_REPEAT, 0); window.frame();
         require(focused() == weekly && hasText("每周整理工作进展。"), "方向repeat未在原组内继续或没有跳过禁用实时选项");
         event(GLFW_KEY_RIGHT, GLFW_RELEASE, 0);
-        // 同批递交整段历史，避免帧末真实物理快照先清除脚本按压而掩盖Core续段问题。
+        // 同批递交完整历史，先核验Core按压续段，再接收帧末物理快照。
         event(GLFW_KEY_RIGHT, GLFW_PRESS, 0); enqueueKey(GLFW_KEY_TAB, 0); enqueueKey(GLFW_KEY_TAB, GLFW_MOD_SHIFT);
         event(GLFW_KEY_RIGHT, GLFW_REPEAT, 0); event(GLFW_KEY_RIGHT, GLFW_RELEASE, 0); window.frame();
         require(focused() == daily && hasText("每天汇总一次工作进展。"), "离组后旧repeat在同批回组时复活");

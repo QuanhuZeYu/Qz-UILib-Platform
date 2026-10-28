@@ -12,9 +12,9 @@ plugins {
 apply plugin: 'com.gradleup.shadow'
 ext.platformShadowJar = ShadowJar
 
-// 本地开发组合由工作站 init 脚本供给项目属性；独立构建继续读取原 -P 与工程默认值。
+// 本地组合由工作站init脚本提供项目属性，独立构建读取-P与工程默认值。
 version = findProperty('uilibVersion') ?: '5.0.0-beta1'
-// 旧版调用仍使用历史坐标；新系列默认使用已验证的 Central namespace。
+// 按主版本选择默认Maven group，调用方可用uilibGroup显式指定。
 group = findProperty('uilibGroup') ?: (version.toString().tokenize('.')[0].toInteger() >= 5 ? 'asia.quanhuzeyu.uilib' : 'club.heiqi.uilib')
 def uilibGroup = project.group.toString()
 java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
@@ -43,7 +43,7 @@ dependencies {
     coreContent 'org.commonmark:commonmark-ext-gfm-tables:0.21.0'
     coreContent 'org.jsoup:jsoup:1.19.1'
     coreContent 'org.nibor.autolink:autolink:0.10.0'
-    // 仅验证侧读取实际宿主方法体，不进入任何生产适配。
+    // ASM供验证侧读取实际宿主方法体。
     testImplementation 'org.ow2.asm:asm-commons:9.8'
 }
 apply from: 'gradle/native-runtime.gradle'
@@ -75,7 +75,7 @@ platformModules.each { module, artifactName ->
     sourceSets['mediaAdapter' + suffix].resources.srcDir(layout.buildDirectory.dir('generated/isolated-media'))
     tasks.named(sourceSets['mediaAdapter' + suffix].processResourcesTaskName) {
         dependsOn 'packageMediaBindings'
-        // 共享全文保留媒体既有资源路径及清单字节。
+        // 复用随附许可全文，保持媒体资源路径与许可字节。
         from(nativeLicenseDirectory) { include 'LWJGL-LICENSE.md', 'FreeType-FTL.txt'; into 'assets/qz_uilib/licenses/media' }
     }
 }
@@ -104,7 +104,7 @@ tasks.named('jar') { enabled = false }
 tasks.named('shadowJar') { enabled = false }
 tasks.named('test', Test) { failOnNoDiscoveredTests = false; maxHeapSize = '1g' }
 
-// 适配包仅重写共同内容引用，不复制或再次嵌入 Core 持有的内容库。
+// 适配包重定位共同内容引用，内容库由Core产物持有。
 ext.platformArtifacts = [:]
 ext.contentPackages = ['com.ibm.icu', 'org.yaml.snakeyaml', 'org.commonmark', 'org.jsoup', 'org.nibor.autolink']
 platformModules.each { module, artifactName ->

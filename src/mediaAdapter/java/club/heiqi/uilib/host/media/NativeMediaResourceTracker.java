@@ -1,6 +1,6 @@
 package club.heiqi.uilib.host.media;
 
-/** 仅媒体私有加载器定义；在实际owner成功创建/释放边界计数，不以包装器close推测native已释放。 */
+/** 由媒体私有加载器持有，在owner实际创建与成功释放native资源时更新计数。 */
 public final class NativeMediaResourceTracker {
     public static final int FORMAT=0, CODEC=1, PACKET=2, FRAME=3, CONVERSION=4, BUFFER=5;
     public static final int AVIO=6, CALLBACK=7, DEVICE=8, CONTEXT=9, SOURCE=10, AUDIO_BUFFER=11;

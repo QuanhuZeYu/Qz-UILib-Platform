@@ -4,8 +4,7 @@ import java.util.Objects;
 import club.heiqi.uilib.host.client.gl.GlApi;
 import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 
-/** 本次宿主effective blend覆盖；其余状态仍由统一光栅捕获从同一queries读取。
- * 不跨调用保存状态，不重复查询将被覆盖的blend，也不产生随后丢弃的RasterState。 */
+/** 以本次宿主effective blend覆盖混合查询，其余状态由统一捕获从同一queries读取。 */
 public final class EffectiveBlendCapture implements LwjglFontContextCapture.RasterQueries {
     private final LwjglFontContextCapture.RasterQueries queries;
     private final boolean blendEnabled;

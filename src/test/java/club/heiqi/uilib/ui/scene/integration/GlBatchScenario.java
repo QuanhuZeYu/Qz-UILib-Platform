@@ -125,8 +125,8 @@ import java.util.List;
 import javax.imageio.ImageIO;
 
 /**
- * 独立 hidden GLFW 上下文，直接消费生产 collector/backend；不启动 MC。 参考器按原图元顺序在 premult 字节域执行 SrcOver；允许每通道
- * 2/255，覆盖 RGBA8 framebuffer 每次混合的定点舍入及驱动浮点转换差异，不容许移动图元次序。
+ * 在独立hidden GLFW上下文消费生产collector/backend。参考器按原图元顺序在premult字节域执行SrcOver，
+ * 每通道容差为2/255，覆盖RGBA8混合的定点舍入与驱动浮点转换差异。
  */
 public final class GlBatchScenario extends TestApplication {
     private static final int W = 96, H = 72, CAPACITY = 4, TOLERANCE = 2;
@@ -161,7 +161,7 @@ public final class GlBatchScenario extends TestApplication {
         result.add(new Item(2, 0, q(48, 6, 32, 30, 0, 0xb000ff00), null));
         result.add(new Item(2, 1, q(56, 14, 32, 30, 1, 0x90ff0000), new LayoutBox(58, 18, 22, 20)));
         result.add(new Item(2, 0, q(52, 22, 32, 30, 0, 0xd00000ff), null));
-        // 空 clip 不得进入实际上传。
+        // 空clip在上传前剔除。
         result.add(new Item(0, 0, q(0, 0, W, H, 0, 0xffffffff), new LayoutBox(0, 0, 0, 0)));
         return result;
     }
@@ -486,7 +486,7 @@ public final class GlBatchScenario extends TestApplication {
                                 + c.textureBindings
                                 + " indexUploads="
                                 + c.indexUploads);
-                // 真实异常退出：资源换代未准备及未知材质均不得污染宿主进入态。
+                // 核验资源代际未就绪与未知材质触发异常后，宿主进入态完整恢复。
                 for (int failure = 0; failure < 2; failure++) {
                     final int mode = failure;
                     try (GlQuadRenderer.Scope scope = renderer.begin(MVP, H, false)) {

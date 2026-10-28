@@ -83,7 +83,7 @@ public final class DesktopInputFocusVerification {
                             SceneNode editor = editors.get(i);
                             String name = page == TestGallery.Page.INPUTS ? (i == 0 ? "single" : "multiline")
                                     : page == TestGallery.Page.FORMS ? (i == 0 ? "field" : "search") : "settings-path";
-                            // 使用正式逻辑关系选取当前组合的外表面，不从截图重建布局或写回尺寸。
+                            // 按正式逻辑关系选择当前组合的外表面，读取实际几何。
                             SceneNode surface = page == TestGallery.Page.INPUTS && i == 1 ? editor : editor.parent();
                             exercise(w, input, new Target(prefix + "-" + name, editor, surface));
                         }
@@ -397,7 +397,7 @@ public final class DesktopInputFocusVerification {
     }
 
     private static BufferedImage pixels(DesktopWindow w) {
-        // 沿已有桌面取证方法在真实 back buffer 回放当前不可变计划，避免隐藏窗口 front buffer 的合成器差异。
+        // 在真实back buffer回放当前不可变计划，统一隐藏窗口取证的缓冲来源。
         w.fonts.beginPresentation(1_000_000);
         try { w.replay(w.lastPlan); }
         finally { w.fonts.endPresentation(); }

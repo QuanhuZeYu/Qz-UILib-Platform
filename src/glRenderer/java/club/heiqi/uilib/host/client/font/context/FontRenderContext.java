@@ -3,9 +3,9 @@ package club.heiqi.uilib.host.client.font.context;
 import java.util.Objects;
 import club.heiqi.uilib.ui.scene.text.RasterSampling;
 
-/** 一次caller提交的不可变上下文，不拥有GL对象；只可在同context/pass内回放。
- * revision来自字体/采样策略/target代际，不使用每帧camera计数增加GlyphKey。
- * image/icon资源代际由其自己的key负责，不能用这份context替代资源失效合同。 */
+/** 一次caller提交的不可变值上下文，回放限于同一context/pass，GL对象由所属owner管理。
+ * revision标识字体/采样策略/target代际；camera变化由投影快照表达。
+ * image/icon通过各自key维护资源代际与失效。 */
 public final class FontRenderContext {
     public final FontProjection projection;
     public final int drawFramebuffer, sourceFramebufferHeight, depthFunction, passKey;
@@ -14,7 +14,7 @@ public final class FontRenderContext {
     public final Object contextIdentity;
     public final MatrixState state;
 
-    /** null仅供旧即时UI调用；新capture总有typed状态，旧value构造不查询GL。 */
+    /** capture提供typed光栅状态；旧即时UI值构造以null表达沿用回放现场状态。 */
     public final RasterState rasterState;
 
     private final int[] scissor;
@@ -99,7 +99,7 @@ public final class FontRenderContext {
         this.rasterState = rasterState;
     }
 
-    /** 延期提交的光栅状态值；数组只能通过防御拷贝读取，不在构造中查询GL。
+    /** 延期提交的光栅状态值；构造消费显式输入，数组通过防御拷贝读取。
      * FBO/viewport/depth/scissor仍由外层context保存。延期consumer应用本载荷后须恢复回放入口状态。
      */
     public static final class RasterState {
@@ -289,7 +289,7 @@ public final class FontRenderContext {
         return projection.samplingAt(x, y, logicalEm, policy, revision);
     }
 
-    /** effective固定管线/可选宿主状态；公开构造复制向量和矩阵，绝不保留JOML stack引用。 */
+    /** effective固定管线与可选宿主状态；公开构造持有向量和矩阵的独立副本。 */
     public static final class MatrixState {
         private static final float[] WHITE = {1, 1, 1, 1};
         private final float[] p, mv, color, normal, lighting;
@@ -332,7 +332,7 @@ public final class FontRenderContext {
             this.blockEntityId = blockEntityId;
         }
 
-        /** 显式字体颜色已在布局中；只将 currentColor 归白，不重拷贝 caller 矩阵与光照。 */
+        /** 布局已保存显式字体颜色；currentColor归白，其余冻结矩阵与光照共享。 */
         MatrixState(MatrixState source) {
             p = source.p;
             mv = source.mv;
@@ -388,7 +388,7 @@ public final class FontRenderContext {
             return lighting.clone();
         }
 
-        /** own scene/core显式提供P/MV；没有world lightmap/alpha fixed-state的默认UI上下文。 */
+        /** 以own scene/core显式P/MV构造默认UI状态，lightmap与alpha test保持关闭。 */
         public static MatrixState ui(float[] p, float[] mv) {
             return new MatrixState(
                     p,

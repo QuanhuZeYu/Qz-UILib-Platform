@@ -4,7 +4,7 @@ import club.heiqi.uilib.ui.media.MediaResolver;
 import club.heiqi.uilib.ui.media.spi.MediaCancellation;
 import java.io.IOException;
 
-/** 平台入口只识别内容并选择点播/直播流程；不持有会话、账户或native资源。 */
+/** 识别平台内容并选择点播或直播解析流程，返回中性媒体来源。 */
 public final class BilibiliResolver implements MediaResolver {
     @Override public boolean supports(String address) {
         try { return BilibiliAddress.parse(address).allowed(); }

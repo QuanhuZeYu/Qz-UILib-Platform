@@ -50,7 +50,7 @@ import static org.lwjgl.opengl.GL32.*;
 import static org.lwjgl.opengl.GL33.*;
 import org.lwjgl.opengl.GLContext;
 
-/** 实际原LWJGL2默认Display.create验收同一shared backend/owner；不启动MC或重建其context。 */
+/** 在默认Display.create上下文核验共享backend与owner的LWJGL2接入。 */
 public final class Lwjgl2HostScenario extends TestApplication {
     private static final int W = 240, H = 160;
     private static final LayoutBox VIEW = new LayoutBox(0, 0, W, H),
@@ -114,7 +114,7 @@ public final class Lwjgl2HostScenario extends TestApplication {
             GlPaintPlanRenderer renderer,
             PaintPlan plan,
             FontRenderContext context) {
-        // 正式owner入口统一登记visiblekeys并扣整个presentation预算，consumer不自行retain。
+        // 由正式owner统一登记visiblekeys、扣presentation预算并管理保留需求。
         owner.beginPresentation(System.nanoTime());
         try (GlPaintPlanRenderer.Prepared p = owner.prepare(renderer, plan, context)) {
             p.render(context);
@@ -232,7 +232,7 @@ public final class Lwjgl2HostScenario extends TestApplication {
                         + " entryTextureUnit3Restore=true perspectiveNonuniform=true lightmapRGBA=true effectiveLighting=true alphaCompare=true depthWriteOcclusion=true viewportFboRestore=true behindEyeNoDemand=true DefaultDisplayContext=true realIrisEngine=false");
     }
 
-    /** 仅反射依赖库的真实事件生产者，不构造字节协议、不调用原生poll。 */
+    /** 通过反射调用依赖库真实事件生产者，再读取其生成的事件。 */
     private static final class WindowsEvents {
         final Object keyboard;
         final Method character, key, read;
@@ -407,7 +407,7 @@ public final class Lwjgl2HostScenario extends TestApplication {
                                 Keyboard.isRepeatEvent()),
                         "旧按键门应拒绝CHAR-only载荷");
                 require(gate.available(), "CHAR-only应有独立可用性门");
-                // 这里只验证正式核心支持真实载荷；独立宿主不加载MC，不能冒充routeKey回归。
+                // 将依赖库生成的真实字符载荷交正式核心核验，覆盖范围为中性编辑入口。
                 field.page.edit(SceneEditEvent.text(String.valueOf(value)));
             }
             field.page.frame();
@@ -614,7 +614,7 @@ public final class Lwjgl2HostScenario extends TestApplication {
                 || !glIsEnabled(GL_STENCIL_TEST)
                 || glGetInteger(GL_STENCIL_WRITEMASK) != 0)
             throw new AssertionError("world target/depth/stencil现场未恢复");
-        // 同深度LESS遮挡，不可被overlay flatten或关闭depthwrite绕过。
+        // 以同深度LESS核验遮挡与world depthwrite语义。
         draw(owner, renderer, solid, target);
         if (!Arrays.equals(pixels, read(fbo))) throw new AssertionError("world重复深度未遮挡");
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);

@@ -6,7 +6,7 @@ import club.heiqi.uilib.ui.config.ConfigSession;
 import club.heiqi.uilib.ui.scene.image.ImageService;
 import club.heiqi.uilib.ui.settings.SettingsConfiguration;
 
-/** 页面借用已初始化的桌面宿主服务；有效期止于窗口关闭，不转移资源或配置所有权。
+/** 页面借用已初始化的桌面宿主服务，有效期止于窗口关闭；资源与配置归窗口持有。
  * 工厂只装配页面；配置读写和设置动作在ScenePageContext所属状态域内执行。 */
 public final class DesktopPageServices {
     private final ImageService images;

@@ -66,7 +66,7 @@ import java.util.List;
 
 import javax.imageio.ImageIO;
 
-/** 不依赖数学：唯一scene子树顺序反例与正式GLhost斜线/clip/半透明像素。 */
+/** 核验scene子树绘制顺序，以及正式GL宿主的斜线、clip与半透明像素。 */
 public final class PaintPrimitiveScenario extends TestApplication {
     private static final int W = 256, H = 192;
     private static final LayoutBox VIEW = new LayoutBox(0, 0, W, H);
@@ -410,7 +410,7 @@ public final class PaintPrimitiveScenario extends TestApplication {
                             && overlays.commands().get(1).branchSource == inner.get(1),
                     "嵌套overlay未复用对应IMAGE资源选择");
             order(overlays.commands().get(1).pendingPaint, 95);
-            // 回放闭包不回访已关闭的live节点；准备只按本计划的冻结图像事实选择分支。
+            // 节点关闭后，回放闭包继续按计划冻结的图像事实选择分支。
             PaintPlan captured = host.plan;
             SceneTransform outer = SceneTransform.translation(12, 8);
             PaintPlan mapped = captured.transformed(outer, SceneClipRegion.rectangle(VIEW));
@@ -494,7 +494,7 @@ public final class PaintPrimitiveScenario extends TestApplication {
                 line.x0, line.y0, line.x1, line.y1, line.thickness, 0, 0, 0, 0, 0, command.color);
     }
 
-    /** 新路径/纹理像素只在原正式GL入口执行；order-only不创建字体、纹理或窗口。 */
+    /** 正式GL入口核验路径与纹理像素；order-only入口单独核验绘制顺序。 */
     private void gpuVector() throws Exception {
         SceneMesh mesh = SceneMesh.rectangle(0, 0, 44, 34);
         SceneTransform transform = SceneTransform.translation(60, 46).multiply(SceneTransform.rotationDegrees(25));
@@ -581,13 +581,13 @@ public final class PaintPrimitiveScenario extends TestApplication {
             } finally { fonts.releasePlanRenderer(nativeRenderer); }
         }
     }
-    /** 原GL入口观察prepare到宿主producer的真实载荷；纯PATH不能借RECT背景取得white。 */
+    /** 在正式GL入口观察prepare到宿主producer的PATH载荷，核验独立白纹理需求。 */
     private void hostPathPayload() {
         GlApi gl = fonts.gl(); double[] submittedArea = {0}; int[] submitted = {0}; boolean[] configured = {false};
         GlProgramProvider provider = new GlProgramProvider() {
             public boolean preview(FontRenderContext context) { return true; }
             public GlProgramScope open(FontRenderContext context) {
-                // 此消费只记录原batch，不模拟宿主shader的GPU像素。
+                // 此producer记录原batch，观测范围为提交载荷。
                 return new GlProgramScope() {
                     public int programId() { return gl.glGetInteger(GL_CURRENT_PROGRAM); }
                     public List<GlProgramAttribute> attributes() { return Collections.emptyList(); }
@@ -659,7 +659,7 @@ public final class PaintPrimitiveScenario extends TestApplication {
         PaintCommand command =
                 PaintCommand.line(10, 20, 40, 60, 10, new LayoutBox(12, 24, 6, 9), 0x804080C0);
         Quad q = quad(command);
-        // 3-4-5斜率：法线(4,-3)，两端不能被clip包络替换。
+        // 3-4-5斜率对应法线(4,-3)，按真实线段端点核验quad。
         require(
                 q.x0 == 14
                         && q.y0 == 17
@@ -734,7 +734,7 @@ public final class PaintPrimitiveScenario extends TestApplication {
         require(clippedQuads > 0 && Math.abs(area - expected) < .001, "共享collector丢失精确shape交集或重复画三角");
         require(last != null && last.x0 == after.x0 && last.y0 == after.y0 && last.x2 == after.x2
                 && last.y2 == after.y2 && last.layer == after.layer, "变换批次改变原有序输出或污染下一identity命令");
-        // 同一矩形输入的非恒定UV由共享collector核对，不把framebuffer专用IMAGE送进world入口。
+        // 由共享collector核对矩形裁剪后的非恒定UV插值。
         SceneClipRegion effectiveRegion = SceneClipRegion.rectangle(new LayoutBox(2, 0, 3, 10));
         List<Quad> textured = new ArrayList<>();
         OrderedQuadCollector worldCollector = new OrderedQuadCollector(2, batch -> textured.addAll(batch.quads()));
@@ -847,7 +847,7 @@ public final class PaintPrimitiveScenario extends TestApplication {
         int[] radius={12,16,0},colors={0x80ff6040,0x900060ff,0xff00aa00};
         for(int i=0;i<boxes.length;i++)club.heiqi.uilib.ui.scene.paint.ScenePaintShapes.rounded(target,boxes[i],clips[i],colors[i],radius[i]);
         int[] actual=render(target.build()),expected=new int[W*H*4];int partial=0,maxDifference=0;
-        // 独立 RoundRectangle2D + 更密的面积采样作为几何参考，不消费被测 RECT 条带。
+        // 以独立RoundRectangle2D和更密的面积采样生成几何参考。
         for(int y=0;y<H;y++)for(int x=0;x<W;x++) {
             double[] pixel=new double[4];
             for(int shape=0;shape<boxes.length;shape++) {

@@ -22,7 +22,7 @@ import club.heiqi.uilib.ui.scene.text.font.nativefont.InkBounds;
 import club.heiqi.uilib.host.font.IsolatedFontEngine;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.FontSession;
 
-/** 原版替代near-plane欠采样真实native像素复现；其余验收只用已定位计划，完全不查询MC/GL。 */
+/** 以真实native像素复现near-plane采样边界，其余采样断言消费已定位计划。 */
 public final class FontPlanSamplingScenario extends TestApplication {
     private static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
@@ -166,7 +166,7 @@ public final class FontPlanSamplingScenario extends TestApplication {
         scenario(
                 "已关闭face计划墨迹与四角投影",
                 () -> {
-                    // face已关闭：后续计划采样只能消费logical ink，不可能依赖实时native ink查询。
+                    // face关闭后，计划采样继续使用已保存的logical ink。
                     float[] distantMv = mv.clone();
                     distantMv[14] = -10;
                     FontRenderContext distant = context(p, distantMv);
@@ -284,7 +284,7 @@ public final class FontPlanSamplingScenario extends TestApplication {
         gui[0] = 2f / 800;
         gui[5] = -2f / 600;
         FontRenderContext screen = context(gui, IDENTITY);
-        // float投影系数的精度可能把密度略推过1；按实际Jacobian向上选档，不硬塞em12。
+        // float投影系数可能使密度略大于1，按实际Jacobian向上选档。
         int guiEm = RasterPolicy.DEFAULT.rasterEm(screen.projection.pixelsPerUnitAt(0, 0, 0) * 12);
         scenario(
                 "GUI并行投影稳定采样",

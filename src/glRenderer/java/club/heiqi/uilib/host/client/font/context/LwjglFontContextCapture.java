@@ -5,11 +5,10 @@ import club.heiqi.uilib.host.client.gl.GlApi;
 import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 import club.heiqi.uilib.host.client.font.context.FontRenderContext.MatrixState;
 
-/** 捕捉调用线程当前LWJGL context的实际target/viewport/depth/scissor。
- * 固定管线矩阵必须由adapter声明来源；core profile不允许猜测driver legacy矩阵。
- * 此类不切FBO、不画文字，也不是可恢复所有GL状态的guard。延期回放另须保序和producer合同。 */
+/** 捕获调用线程当前context的实际target/viewport/depth/scissor。
+ * adapter提供固定管线矩阵来源；延期回放的状态恢复、保序和提交由backend负责。 */
 public final class LwjglFontContextCapture {
-    /** 可由GLSM覆盖；只查询合法GL3光栅枚举，不碰legacy矩阵/alpha/light。 */
+    /** 查询GL3光栅状态；GLSM可提供宿主实际有效值。 */
     public interface RasterQueries {
         GlApi gl();
 
@@ -132,7 +131,7 @@ public final class LwjglFontContextCapture {
                 raster);
     }
 
-    /** core/own scene由其根空间提供真实P/MV及状态，无legacy查询。 */
+    /** core/own scene由根空间显式提供P/MV及状态。 */
     public static MatrixStateProvider explicit(final GlApi gl, final MatrixState state) {
         Objects.requireNonNull(state, "state");
         return new MatrixStateProvider() {
@@ -146,7 +145,7 @@ public final class LwjglFontContextCapture {
         };
     }
 
-    /** 只有合法compatibility context可调用；无宿主协议时不猜lightmap/blockEntity/FFP灯光。 */
+    /** 在合法compatibility context捕获固定管线状态；lightmap与FFP灯光由专用宿主provider提供。 */
     public static MatrixStateProvider compatibility(final GlApi gl) {
         return new MatrixStateProvider() {
             public GlApi gl() {

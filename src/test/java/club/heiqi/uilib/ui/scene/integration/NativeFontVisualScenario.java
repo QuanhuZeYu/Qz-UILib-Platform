@@ -20,11 +20,11 @@ import club.heiqi.uilib.ui.scene.text.font.nativefont.FontFace;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.ShapedGlyph;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.FontSession;
 
-/** 直接回放生产HB定位和FT像素，Java2D只承担软件合成，不负责文本整形/度量/字形生成。 */
+/** 直接回放生产HB定位与FT像素，Java2D承担软件合成。 */
 public final class NativeFontVisualScenario extends TestApplication {
     private FontSession service;
 
-    /** 软件出口仍为 premult RGBA，主 owned mono 不因导出变成四通道缓存。 */
+    /** 软件出口转换为premult RGBA，主owned mono缓存保持单通道覆盖率。 */
     private static void checkOwnedRows(GlyphBitmap bitmap) {
         int bytes = bitmap.width * bitmap.height * (bitmap.color ? 4 : 1);
         require(bitmap.byteSize() == bytes && bitmap.singleChannel() != bitmap.color,

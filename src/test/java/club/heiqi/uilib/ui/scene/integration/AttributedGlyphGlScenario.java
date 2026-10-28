@@ -224,7 +224,7 @@ public final class AttributedGlyphGlScenario extends TestApplication {
             int[] actual,
             int[] expected,
             float scale) {
-        // 像素中心恰在quad边界时由驱动subpixel/top-left覆盖决定；独立参考不冒充该离散规则。
+        // quad边界上的像素归属由驱动subpixel/top-left规则决定，参考比较单独标记这些点。
         // 仅标记与实际nativebitmap边界距离<=1e-4的点，其余全通道必须满足小容差。
         boolean[] ties = new boolean[W * H];
         for (TextLayout.Glyph g : glyphs(layout)) {
@@ -369,7 +369,7 @@ public final class AttributedGlyphGlScenario extends TestApplication {
         onClose(
                 () -> {
                     owner.close();
-                    // owner已关闭字体服务；重复关闭renderer不能再次访问原订阅。
+                    // owner关闭字体服务后，renderer重复close应沿用已释放结果。
                     if (renderer != null) renderer.close();
                     require(owner.awaitRasterizerClose(10000), "workerclose");
                 });
@@ -455,7 +455,7 @@ public final class AttributedGlyphGlScenario extends TestApplication {
         image(new File(output, "scale-" + scale + "-gl.png"), actual);
         image(new File(output, "scale-" + scale + "-reference.png"), expected);
         compare(owner, sampled, actual, expected, scale);
-        // 样式色不应染掉emoji原色；真实读回中的黄色像素证明保留RGBA。
+        // 以真实读回中的黄色像素核验emoji保留原生RGBA。
         boolean colored = false;
         for (TextLayout.Glyph g : glyphs(sampled))
             if (g.color) {

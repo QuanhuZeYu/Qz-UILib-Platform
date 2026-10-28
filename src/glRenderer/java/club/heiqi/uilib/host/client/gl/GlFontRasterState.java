@@ -6,7 +6,7 @@ import java.util.Arrays;
 import club.heiqi.uilib.host.client.font.context.FontRenderContext.RasterState;
 import club.heiqi.uilib.host.client.font.context.FontRenderContext.StencilFace;
 
-/** world历史光栅载荷只短时应用；退出恢复actual进入态，不写宿主有效缓存。 */
+/** 在短world范围应用提交时的光栅快照，退出时恢复actual进入态；宿主缓存由宿主管理。 */
 final class GlFontRasterState {
     private GlFontRasterState() {}
 
@@ -61,7 +61,7 @@ final class GlFontRasterState {
             DEPTH_RANGE = 1 << 12, CULL = 1 << 13, CULL_FACE = 1 << 14,
             FRONT_FACE = 1 << 15, POLYGON_FILL = 1 << 16, POLYGON_OFFSET = 1 << 17;
 
-    /** 同一封闭 typed scope 的进入态与目标态决定同一组 apply/restore；不记录完成进度。 */
+    /** 由封闭typed scope的进入态与目标态预先确定配对apply/restore差异。 */
     static int changes(RasterState entry, RasterState target) {
         int changes = 0;
         if (entry.blendEnabled != target.blendEnabled) changes |= BLEND;

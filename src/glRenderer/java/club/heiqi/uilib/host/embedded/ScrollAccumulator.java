@@ -11,6 +11,6 @@ public final class ScrollAccumulator {
         return whole;
     }
 
-    /** 输入联系结束时丢弃旧余量，新联系不能继承旧页的半格。 */
+    /** 输入联系结束时清空余量，新联系从零累计。 */
     public void reset() { remainder = 0; }
 }

@@ -43,7 +43,7 @@ public final class DesktopDirectionVerification extends TestApplication {
         require(glfwGetWindowAttrib(w.handle(), GLFW_VISIBLE) == GLFW_TRUE, "方向验收必须使用可见窗口");
         settle(w);
         DesktopTestInput input = new DesktopTestInput(w);
-        // 自动路径显式注入焦点恢复；不移动系统光标，不请求系统前台焦点。
+        // 自动路径通过本窗口的生产回调注入焦点恢复。
         input.focus.invoke(w.handle(), true); w.frame();
         return input;
     }

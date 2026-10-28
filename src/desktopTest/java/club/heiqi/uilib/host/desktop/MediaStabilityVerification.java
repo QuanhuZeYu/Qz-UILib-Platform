@@ -48,7 +48,7 @@ import java.util.regex.Pattern;
  * 启动器在build冻结后注入IsolatedMediaAdapters的中性factory及正式资源只读观察器。
  */
 public final class MediaStabilityVerification extends TestApplication {
-    /** 消费者自己的桥，不是新增生产API。最终字段映射须对应真实owner，不得用null/零假装通过。 */
+    /** 消费者资源观测桥，字段逐项映射真实owner。 */
     public interface Resources {
         Map<String,Long> nativeCounts();
         long runtimeLoaders();
@@ -81,7 +81,7 @@ public final class MediaStabilityVerification extends TestApplication {
         for(Path artifact:finalArtifacts)records.add("artifact","path",artifact.toAbsolutePath().toString(),"sha256",sha256(artifact));
         origin(MediaService.class);origin(SceneVideo.class);origin(DesktopWindow.class);origin(decoders.getClass());origin(audio.delegate.getClass());
         records.add("input","uri",arguments()[1],"inputsSha256",config.inputsSha,"acceptanceSha256",config.acceptanceSha);
-        // 整个进程只构造一套隔离adapter owner/factory，不为20cycle重复创建classloader/native库。
+        // 全部cycle复用同一套隔离adapter owner/factory及其classloader/native库。
         try(MediaService service=new MediaService(decoders,audio,MediaBudget.DEFAULT)) {
             switch(mode) {
                 case "calibration": scenario("最终成品短校准",()->continuous(service,arguments()[1],false));break;
@@ -102,7 +102,7 @@ public final class MediaStabilityVerification extends TestApplication {
         long hostRequest=System.nanoTime();
         club.heiqi.uilib.ui.scene.host.ScenePageContext[] context={null};
         java.util.concurrent.atomic.AtomicReference<club.heiqi.uilib.ui.reactive.Signal<List<SceneNode>>> children=new java.util.concurrent.atomic.AtomicReference<>();
-        // 先建立正常空媒体页；此时尚无媒体session，不可能推进音频或损失启动视频帧。
+        // 先建立空媒体页，再打开session，完整观测启动音视频。
         DesktopWindow window=DesktopWindow.openWithServices(output.resolve(operation+".yaml"),service,false,services->page->{
             context[0]=page;
             children.set(page.domain().signal(Collections.emptyList()));
@@ -126,7 +126,7 @@ public final class MediaStabilityVerification extends TestApplication {
                 SceneNode video=SceneVideo.create(context[0],opened).size(Size.fill(1),Size.fill(1));
                 children.get().set(Collections.singletonList(video));
             });
-            // paused只覆盖声明装配的同步短边界；记录真实play调用，不等解码或用sleep预热。
+            // paused覆盖声明装配短边界，随后立即记录并执行play。
             long playRequest=System.nanoTime();opened.play();
             records.add("play","operation",operation,"requestNanos",n(playRequest),"generation",n(opened.snapshot().generation));
             return new Opened(service,opened,window,operation,request);
@@ -317,7 +317,7 @@ public final class MediaStabilityVerification extends TestApplication {
     private static String sha256(Path path)throws Exception{MessageDigest d=MessageDigest.getInstance("SHA-256");try(InputStream in=Files.newInputStream(path)){byte[] b=new byte[65536];int count;while((count=in.read(b))!=-1)d.update(b,0,count);}StringBuilder out=new StringBuilder();for(byte v:d.digest())out.append(String.format(Locale.ROOT,"%02x",v&255));return out.toString();}
 
     private static final class AudioSample {final long generation;final MediaAudioPosition position;AudioSample(long g,MediaAudioPosition p){generation=g;position=p;}}
-    /** 只包现有SPI，仍由core音频owner线程调用；不输出声音、不另建音频引擎或时钟。 */
+    /** 在core音频owner线程转发原SPI并观测设备位置，输出保持静音。 */
     private static final class ObservedAudio implements MediaAudioSinkFactory {
         final MediaAudioSinkFactory delegate;final AudioSample[] ring=new AudioSample[1024];int cursor;volatile String description;
         ObservedAudio(MediaAudioSinkFactory delegate){this.delegate=delegate;}

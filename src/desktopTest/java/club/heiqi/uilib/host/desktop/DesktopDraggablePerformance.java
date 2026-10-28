@@ -16,7 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 
-/** 隐藏真实GL窗口的有限压测；只调用已安装回调，不移动系统鼠标或操作前台。 */
+/** 在隐藏GL窗口调用已安装回调，执行有限拖拽压测。 */
 public final class DesktopDraggablePerformance {
     private DesktopDraggablePerformance() {}
     public static void main(String[] args) throws Exception {
@@ -80,7 +80,7 @@ public final class DesktopDraggablePerformance {
                 } else input.mouse.invoke(window.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
                 window.frame();
                 long end = System.nanoTime();
-                // 计时外读取共同几何和正式状态；current沿用已呈现时间，不推进动画。
+                // 计时外按已呈现时间读取共同几何与正式状态。
                 LayoutBox actual = DesktopTestInput.geometry(window, load.firstContent()).box;
                 window.domain.execute(observeActive);
                 boolean active = currentActive[0];
@@ -98,7 +98,7 @@ public final class DesktopDraggablePerformance {
                 }
                 previousStart = begin; previousX = actual.x; previousY = actual.y; previousActive = active;
             }
-            // 非完整循环参数也必须正常释放；清理动作不进入稳定样本。
+            // 采样结束后释放剩余按压，清理耗时独立于稳定样本。
             input.mouse.invoke(window.handle(), GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0); window.frame();
             require(glfwGetWindowAttrib(window.handle(), GLFW_VISIBLE) == GLFW_FALSE, "运行结束窗口必须仍隐藏");
             require(observedChanges > 0 && movedFrames > 0 && activeFrames > 0 && releasedFrames > 0, "稳定采样没有完整拖拽证据");
@@ -153,7 +153,7 @@ public final class DesktopDraggablePerformance {
             double startX = 0, startY = 0, targetY = 0;
             int headBefore = -1, commitsBefore = 0, stableDrops = 0, orderChanges = 0, previousPreviewY = 0, proxyMoves = 0;
             long previousStart = 0;
-            // 每轮只在DOWN边界读取两个key，不在每帧复制或重建权威序列。
+            // 每轮在DOWN边界读取两个key，其余帧沿用原权威序列。
             for (int step = 0; step < warmup + frames; step++) {
                 require(!window.shouldClose(), "排序窗口提前关闭");
                 int phase = step % 6;

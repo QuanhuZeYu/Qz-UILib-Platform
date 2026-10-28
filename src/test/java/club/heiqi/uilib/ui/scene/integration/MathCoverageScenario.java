@@ -207,7 +207,7 @@ public final class MathCoverageScenario extends TestApplication {
 
     @Override
     protected void runTests() throws Exception {
-        // 可选身份筛选仅用于定位；完整验收不传第二个参数，不能把筛选运行作为全量 PASS。
+        // 可选身份筛选用于定位；全量验收使用默认完整目录。
         String filter = arguments().length > 1 ? arguments()[1] : "";
         List<Case> selected = new ArrayList<>();
         for (Case c : cases) if (filter.isEmpty() || c.id.contains(filter)) selected.add(c);
@@ -259,7 +259,7 @@ public final class MathCoverageScenario extends TestApplication {
                         club.heiqi.uilib.ui.scene.text.TextEffects.NORMAL,
                         club.heiqi.uilib.ui.scene.text.TextDecoration.NONE);
         SceneTheme theme = (dark ? SceneTheme.dark() : SceneTheme.light()).withTextStyle(style);
-        // 每页独立挂载并及时关闭；不把数千幅大图、ScenePageSession 或需求同时持有。
+        // 按页挂载、取证并关闭，控制图像、会话与需求占用。
         try (ScenePageSession page =
                 ScenePageSession.open(
                         domain,
@@ -496,7 +496,7 @@ public final class MathCoverageScenario extends TestApplication {
                 }
         }
         glyphs.append("count=").append(glyphCount).append(' ').append(actualFonts);
-        // spacing、零 advance 墨迹与私用字体编码分别取证，不把它们强行当普通字符。
+        // 按各自语义分别取证spacing、零advance墨迹与私用字体编码。
         if (!rejected && !c.expected.isEmpty()) {
             if (spacesOnly(c.expected)) {
                 if (value.width <= 0) problems.append("spacing几何丢失;");
@@ -556,8 +556,7 @@ public final class MathCoverageScenario extends TestApplication {
                                     .indexOf(semanticCharacters(c.expected, true))
                             < 0) problems.append("oracle字符缺失:").append(c.expected).append(';');
         }
-        // SceneMath的逻辑smash/lap原点可能平移；像素区域使用同代scene自然盒，
-        // 不再把raw公式墨迹范围直接加到scene原点，以免在已绘制图元旁边采样。
+        // smash/lap可平移逻辑原点，像素取样区域使用同代scene自然盒。
         LayoutBox inkRegion = region;
         LayoutBox cell = new LayoutBox((region.x / CW) * CW, (region.y / CH) * CH, CW, CH);
         if (inkRegion.x < cell.x
@@ -632,7 +631,7 @@ public final class MathCoverageScenario extends TestApplication {
         if (bad) System.err.println("COVERAGE FAIL " + c.id + " " + c.source + " -> " + problems);
     }
 
-    /** 仅观察已有 typed AST，不给生产新增测试 API 或另做 parser。 */
+    /** 从已有typed AST读取观测字段。 */
     private static Object field(Object target, String name) throws ReflectiveOperationException {
         if (target == null) return null;
         java.lang.reflect.Field f = target.getClass().getDeclaredField(name);
@@ -721,7 +720,7 @@ public final class MathCoverageScenario extends TestApplication {
         return false;
     }
 
-    /** Unicode17标准变体＋正式STIX cmap14实读，原catalog PUA不作真实Unicode字符比较。 */
+    /** 以Unicode17标准变体和正式STIX cmap14实读结果映射catalog PUA期望。 */
     private static int[] variantExpectation(String expected) {
         if (expected.length() != 1) return null;
         switch (expected.charAt(0)) {
@@ -742,7 +741,7 @@ public final class MathCoverageScenario extends TestApplication {
         }
     }
 
-    /** 数学字体段的Unicode空洞由固定token与typed事实限定，不以NFKD把Fraktur/Script/BB混作普通字母。 */
+    /** 按固定token与typed事实映射数学字体段Unicode空洞，保留Fraktur/Script/BB身份。 */
     private static int[] letterlikeExpectation(Case c) {
         if (!c.kind.equals("symbol")
                 || c.expected.length() != 1
@@ -807,7 +806,7 @@ public final class MathCoverageScenario extends TestApplication {
         return count == 1;
     }
 
-    /** 固定符号目录PUA有明确Unicode语义，v12 Array9与coverage双em正式HB核验，不泛归约任何关系符号。 */
+    /** 映射固定符号目录中语义明确的PUA，依据v12 Array9与coverage双em正式HB结果。 */
     private static String semanticPua(String expected) {
         if (expected.length() != 1) return null;
         switch (expected.charAt(0)) {
@@ -863,7 +862,7 @@ public final class MathCoverageScenario extends TestApplication {
         }
     }
 
-    /** 非法公式原文进入已有默认文本入口；准确缺字warning保留，不伪称它是成功数学glyph。 */
+    /** 非法公式原文经默认文本入口呈现，保留其准确缺字warning。 */
     private static boolean expectedRejectedWarning(
             Case c, MathLayout.TextPiece p, TextLayout.Diagnostic d) {
         return c.kind.equals("negative")
@@ -896,7 +895,7 @@ public final class MathCoverageScenario extends TestApplication {
                 member.contains("bold"), member.contains("italic"));
     }
 
-    /** 只接受已知CJK或MonoGreek公开tail profile的真实普通face与准确STYLE_FALLBACK，不接受其它font阶段错误。 */
+    /** 仅将已知CJK或MonoGreek公开tail profile的真实普通face与STYLE_FALLBACK认作预期。 */
     private static boolean allowedCjkStyle(
             Case c, MathLayout.TextPiece p, TextLayout.Diagnostic d, float em) {
         if (!c.kind.equals("profile")
@@ -1033,7 +1032,7 @@ public final class MathCoverageScenario extends TestApplication {
                 typedEvidence.toString().getBytes(StandardCharsets.UTF_8));
     }
 
-    /** 只归约 Mathematical Alphanumeric Symbols；不对重音、圈字、单位等做全 Unicode NFKD。 */
+    /** 仅归约Mathematical Alphanumeric Symbols，保留其余Unicode字符原义。 */
     private static String semanticCharacters(String text, boolean expectation) {
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < text.length(); ) {

@@ -176,7 +176,7 @@ public final class DesktopCommandVerification extends TestApplication {
             focusWindow(w); DesktopTestInput in = new DesktopTestInput(w);
             try (DesktopTestInput.ScriptedCursor cursor = in.scriptedCursor()) {
                 in.click(geometry(w, view.button)); int before = read(w, () -> view.activations.get());
-                // 正式S命令在同批中观察DOWN和repeat之后的计数，不改变当前焦点。
+                // 通过S命令读取同批DOWN与repeat后的计数，保持当前焦点。
                 key(w, in, GLFW_KEY_SPACE, GLFW_PRESS, 0); chord(w, in, GLFW_KEY_S, GLFW_MOD_CONTROL);
                 key(w, in, GLFW_KEY_SPACE, GLFW_REPEAT, 0); chord(w, in, GLFW_KEY_S, GLFW_MOD_CONTROL);
                 key(w, in, GLFW_KEY_SPACE, GLFW_RELEASE, 0); key(w, in, GLFW_KEY_SPACE, GLFW_RELEASE, 0); w.frame();
@@ -363,7 +363,7 @@ public final class DesktopCommandVerification extends TestApplication {
                 for (int i = 0; i < names.length; i++) {
                     keys.key(physical[i], names[i], true, false, false, false);
                     keys.character('\uD83D');
-                    // 原生UTF-16事件可以各带一次DOWN，第二段不要求消费者伪造release。
+                    // 高低代理事件各带一次DOWN，核验连续字符提交的拼接。
                     keys.key(physical[i], names[i], true, false, false, false);
                     keys.character('\uDE80');
                     keys.key(physical[i], names[i], false, false, false, false); expected.append("🚀");

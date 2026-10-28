@@ -15,7 +15,7 @@ import java.net.URI;
 import java.util.Collections;
 import java.util.Map;
 
-/** 直播流程依次读取房间、主播和实际流；未开播是内容事实，不创建播放来源。 */
+/** 依次读取房间、主播和实际流；开播后创建播放来源，未开播时返回内容状态。 */
 final class BilibiliLive {
     private BilibiliLive() {}
 

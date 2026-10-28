@@ -6,7 +6,7 @@ import club.heiqi.uilib.ui.media.spi.MediaAudioSink;
 import club.heiqi.uilib.ui.media.MediaBudget;
 
 
-/** 依赖显式装配的 release LWJGL3/OpenAL Soft；不借用游戏音频设备。 */
+/** 通过显式装配的release LWJGL3/OpenAL Soft打开独立音频设备。 */
 public final class OpenAlAudioSinkFactory implements MediaAudioSinkFactory {
     private final String deviceName;
     public OpenAlAudioSinkFactory() { this(null); }

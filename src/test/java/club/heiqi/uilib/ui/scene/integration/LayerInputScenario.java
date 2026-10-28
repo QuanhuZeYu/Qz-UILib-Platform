@@ -436,7 +436,7 @@ public final class LayerInputScenario extends TestApplication {
                                 .size(Size.fixed(200), Size.fixed(30)).clip(true).add(source);
                         source = new SceneNode().size(Size.fixed(180), Size.fixed(30)).add(outer[0]);
                     }
-                    // 正交滚动也不能使来源裁剪成为层内导航的显露窗口。
+                    // 正交滚动时，层内导航仍以所属层的窗口裁决显露。
                     panel[0] = new SceneNode().axis(SceneNode.Axis.ROW).size(Size.fixed(230), Size.fixed(30))
                             .clip(true).scrollable(sourceScrollable).add(source)
                             .add(new SceneNode().size(Size.fixed(250), Size.fixed(30)));
@@ -574,7 +574,7 @@ public final class LayerInputScenario extends TestApplication {
         }
     }
 
-    /** 示例的坐标是页面声明给普通扩展的输入，不读取或回写生产几何。 */
+    /** 将页面声明的坐标作为普通布局扩展的输入，交正式管线生成几何。 */
     private static class SourceBox implements SceneControl {
         final int x, y;
         SourceBox(int x, int y) { this.x = x; this.y = y; }

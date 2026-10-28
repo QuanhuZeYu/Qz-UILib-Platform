@@ -31,7 +31,7 @@ final class DesktopGalleryVerification extends TestApplication {
     static void verify(Path output, String[] args) throws Exception {
         DesktopGalleryResult result=DesktopGalleryResult.begin(output);
         new DesktopGalleryVerification(output).run(args);
-        // run返回时所有场景及窗口清理已经成功；失败路径不执行结果写入。
+        // run成功返回后写入结果，包含全部场景及窗口清理成功。
         result.passed();
     }
 
@@ -52,7 +52,7 @@ final class DesktopGalleryVerification extends TestApplication {
         System.out.println("GALLERY host=desktop sharedDeclaration=true sharedJourney=true realReferencesOnly=true settingsShared=true renderer="
                 +glGetString(GL_RENDERER));
         scenario("全部现有页面浅深色与宽窄实际画面",()->{
-            // 宿主拥有完整GLFW生命周期；先结束原窗口，再顺序创建取证窗口，不并存两个owner。
+            // 宿主独占GLFW生命周期，关闭原窗口后顺序创建取证窗口。
             window.close();DesktopPageAppearanceEvidence.captureAll(output.resolve("appearance"));
         });
     }

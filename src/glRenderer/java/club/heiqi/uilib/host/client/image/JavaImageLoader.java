@@ -18,8 +18,8 @@ import club.heiqi.uilib.ui.scene.image.ImageSource;
 import club.heiqi.uilib.ui.scene.image.ImageContent;
 import club.heiqi.uilib.ui.scene.image.ImageLoader;
 
-/** Java8宿主解码器；AWT/ImageIO不进入核心。读取前限制编码字节，分配像素前检查真实维度。
- * HTTP一次请求总时限与连接/读取时限明确；仅瞬时网络I/O或502/503/504一次重试，无每帧重发。
+/** Java8宿主通过AWT/ImageIO解码；读取限制编码字节，像素分配前检查真实维度。
+ * HTTP设置连接、读取和单次请求时限；瞬时网络I/O或502/503/504最多重试一次。
  */
 public final class JavaImageLoader implements ImageLoader {
     public interface Resources {
@@ -68,7 +68,7 @@ public final class JavaImageLoader implements ImageLoader {
             case RESOURCE:
                 if (resources == null)
                     throw new ImageLoader.Failure(true, "resolve", "宿主缺少资源图像适配: " + source);
-                // ResourceManager只在宿主线程调用；独立stream快照在worker读/关，旧代不会再访问manager。
+                // 宿主线程取得独立stream快照，worker负责读取和关闭。
                 InputStream stream;
                 try {
                     stream = resources.snapshot(source.location);

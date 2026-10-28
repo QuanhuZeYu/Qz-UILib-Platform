@@ -21,7 +21,7 @@ import java.util.Random;
 
 import javax.imageio.ImageIO;
 
-/** 无MC真实收集器集成：透明跨资源重叠、裁剪、容量及委托屏障；出图用于agent直接检查。 */
+/** 用真实收集器与软件出图核验透明跨资源重叠、裁剪、容量及委托屏障。 */
 public final class OrderedBatchScenario extends TestApplication {
     private static BufferedImage image() {
         return new BufferedImage(128, 96, BufferedImage.TYPE_INT_ARGB);
@@ -80,7 +80,7 @@ public final class OrderedBatchScenario extends TestApplication {
         scenario(
                 "同数组不同层不拆批",
                 () -> {
-                    // 数组层只是顶点数据，不拆批；模拟同资源页层连续混排。
+                    // 同资源的数组层作为顶点数据连续混排，保持同批提交。
                     for (int i = 0; i < 6; i++) {
                         Quad q = new Quad(70 + i * 3, 5, 15, 15, 0, 0, 1, 1, i, 0x7080ffff);
                         draw(original, a, q);

@@ -27,7 +27,7 @@ import club.heiqi.uilib.ui.scene.paint.PaintPlanBuilder;
 import club.heiqi.uilib.ui.scene.text.TextLayout;
 import club.heiqi.uilib.ui.scene.text.TextStyle;
 
-/** 真GPU读取RGBA：图像/文字/rect有序批次、fit与有效clip、upload预算和状态恢复，不伪物品render。 */
+/** 从GPU读取RGBA，核验图像/文字/rect有序批次、fit、有效clip、上传预算与状态恢复。 */
 public final class ImageGlScenario extends TestApplication {
     private static final int W = 380, H = 170;
     private ClientFontServices fonts;
@@ -1137,7 +1137,7 @@ public final class ImageGlScenario extends TestApplication {
                                     fonts.releasePlanRenderer(consumer);
                                 }
                             }
-                            // 同一冻结计划换成主图ready的Frame：后续正文应显露，不能按live uploading继续投影备用提示。
+                            // 同一冻结计划在主图ready的Frame中，应显露正文并停止投影备用提示。
                             try (GlImageResources resources =
                                     new GlImageResources(
                                             new Lwjgl3GlApi(),
@@ -1450,7 +1450,7 @@ public final class ImageGlScenario extends TestApplication {
                     readyGlyphs(owner, main.text, quantity.text);
                     GlPaintPlanRenderer consumer = owner.createPlanRenderer(resources);
                     try {
-                        // 先让成功数量成为resident，随后仍须在本Frame需求中保留，不能靠缓存侥幸画出。
+                        // 数量字形驻留后，仍须登记为当前Frame需求。
                         PaintPlan warm = new PaintPlanBuilder().add(quantity).build();
                         for (int i = 0; i < 100; i++) {
                             boolean done;
@@ -1474,7 +1474,7 @@ public final class ImageGlScenario extends TestApplication {
                             prepared.render(FramebufferCoordinates.orthographic(W, H), H, false);
                         }
                         capture();
-                        // 白背景上分别验证显式深色字形；测量区域遵守该命令实际clip，不能白字白底误判留白。
+                        // 在白背景的实际clip内以显式深色字形核验墨迹。
                         LayoutBox viewport = new LayoutBox(0, 0, W, H),
                                 mainRegion =
                                         main.box
@@ -1526,7 +1526,7 @@ public final class ImageGlScenario extends TestApplication {
         }
     }
 
-    /** 主图集的单色为R8覆盖率、彩色为RGBA；预算按实际格式计字节，不能沿用CPU RGBA载荷。 */
+    /** 主图集按单色R8覆盖率与彩色RGBA的实际格式核算字节预算。 */
     private static long premultRowBytes(
             club.heiqi.uilib.ui.scene.text.font.nativefont.GlyphBitmap bitmap) {
         return (bitmap.color ? 4L : 1L) * (bitmap.width + 2);
@@ -1695,7 +1695,7 @@ public final class ImageGlScenario extends TestApplication {
                 prepared.render(FramebufferCoordinates.orthographic(W, H), H, false);
             }
             capture();
-            // 小字号句点的抗锯齿可仅产生浅灰像素；验证实际墨迹quad相对清屏基线的变化，不要求深于任意阈值。
+            // 小字号句点可仅产生浅灰抗锯齿，以实际墨迹quad相对清屏基线的变化核验。
             int changed = 0, minChannel = 255;
             for (int py = inkRegion.y; py < inkRegion.y + inkRegion.height; py++)
                 for (int px = inkRegion.x; px < inkRegion.x + inkRegion.width; px++) {
@@ -1745,7 +1745,7 @@ public final class ImageGlScenario extends TestApplication {
                             + " minChannel="
                             + minChannel);
         }
-        // 多层prepare仍只花一次预算：主Y占满上传字节/调用额，备用X不能从下一层重新获取额度。
+        // 多层prepare共用一次预算；主Y耗尽字节/调用额后，备用X保持等待。
         club.heiqi.uilib.ui.scene.text.font.glyph.GlyphKey
                 yKey =
                         club.heiqi.uilib.ui.scene.text.font.glyph.GlyphKey.of(

@@ -12,9 +12,9 @@ import java.util.List;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.FontEngine;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.FontSession;
 
-/** CPU字体绑定的发行隔离。官方JNI类名保留在私有加载器内，不覆盖窗口宿主的org.lwjgl。
- * Java8的URLClassLoader.getPackage会继承parent的sealed包，因此必须null parent并显式共享核心合同。
- * 只装载core/FreeType/HarfBuzz，不装载GL或GLFW；配置对象属于child，不修改全局系统属性。 */
+/** CPU字体绑定由私有加载器持有，官方JNI类名与窗口宿主隔离。
+ * Java8的URLClassLoader.getPackage会继承parent的sealed包，因此使用null parent并显式共享核心合同。
+ * 加载范围为core/FreeType/HarfBuzz，绑定配置归child所有。 */
 public final class IsolatedFontEngine implements FontEngine {
     private static final String ROOT = "assets/qz_uilib/runtime/font/";
     private final FontEngine engine;
@@ -85,8 +85,8 @@ public final class IsolatedFontEngine implements FontEngine {
         }
     }
 
-    /** LaunchWrapper的CodeSource是jar内class资源URL，不能作为URLClassLoader的搜索根。
-     * 从自身实际资源归一化jar根或开发classes目录；实现仍只由私有loader定义。 */
+    /** 从自身class资源定位jar根或开发classes目录，供私有loader加载实现。
+     * LaunchWrapper的CodeSource指向jar内class，搜索根须取其所属jar。 */
     private static URL implementationRoot() throws IOException {
         String entry = IsolatedFontEngine.class.getName().replace('.', '/') + ".class";
         URL resource = IsolatedFontEngine.class.getResource("/" + entry);
@@ -136,8 +136,8 @@ public final class IsolatedFontEngine implements FontEngine {
             boolean nativeResource =
                     name.endsWith(".dll") || name.endsWith(".so") || name.endsWith(".dylib");
             if (owned != null && nativeResource) {
-                // 官方SharedLibraryLoader提取jar资源时会写进程全局org.lwjgl.librarypath。
-                // 返回私有常规文件让官方Library直接加载；按其请求选择平台/架构，不改JNI或全局属性。
+                // 官方SharedLibraryLoader提取jar时会写全局org.lwjgl.librarypath；
+                // 按请求的平台/架构返回私有常规文件，交官方Library直接加载。
                 Path file = nativeDirectory.resolve(name).normalize();
                 if (!file.startsWith(nativeDirectory))
                     throw new IllegalStateException("无效字体native资源: " + name);

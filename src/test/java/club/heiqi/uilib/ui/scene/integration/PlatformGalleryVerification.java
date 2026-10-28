@@ -6,7 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-/** 平台所属的真实字体、软件图像和会话检查；不创建窗口、GPU 或音频设备。 */
+/** 平台CPU验证入口，覆盖真实字体、软件图像与会话。 */
 public final class PlatformGalleryVerification extends TestApplication {
     private Throwable failure;
     @Override protected void runTests() throws Exception {

@@ -42,7 +42,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** 真实FT/HB、同树文档与正式frame/input；位图不冒充Minecraft物品绘制。 */
+/** 通过真实FT/HB、同树文档与正式frame/input核验文档交互；图像输入使用位图。 */
 public final class DocumentSceneScenario extends TestApplication {
     FontTextService fonts;
 

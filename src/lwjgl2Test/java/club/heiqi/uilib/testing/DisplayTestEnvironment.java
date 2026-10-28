@@ -4,7 +4,7 @@ import org.lwjgl.LWJGLException;
 import org.lwjgl.opengl.Display;
 import org.lwjgl.opengl.DisplayMode;
 
-/** 独立LWJGL2宿主，保留默认Display.create()上下文参数，不依赖LWJGL3。 */
+/** 通过默认Display.create()上下文参数创建独立LWJGL2宿主。 */
 public final class DisplayTestEnvironment implements AutoCloseable {
     public DisplayTestEnvironment(int width, int height, String title) throws LWJGLException {
         try {

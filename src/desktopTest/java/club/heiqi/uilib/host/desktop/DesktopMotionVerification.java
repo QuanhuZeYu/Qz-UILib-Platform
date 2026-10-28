@@ -124,7 +124,7 @@ public final class DesktopMotionVerification extends TestApplication {
             deformation.add((int) Math.round(read(f.window, club.heiqi.uilib.ui.scene.control.SceneSlider.elasticOffset(slider)) * 10));
             double value = read(f.window, f.page.volume()); require(value >= 0 && value <= 100, "拉伸污染了真实音量");
         });
-        // 连续取证验证回弹；末端还要求速度达到阈值，不能把固定800ms当作弹簧结束合同。
+        // 连续取证验证回弹，按末端速度阈值确认弹簧结束。
         long deadline = System.nanoTime() + 1_000_000_000L;
         while (read(f.window, club.heiqi.uilib.ui.scene.control.SceneSlider.elasticOffset(slider)) != 0
                 && System.nanoTime() < deadline) f.window.frame();
@@ -531,7 +531,7 @@ public final class DesktopMotionVerification extends TestApplication {
             f.window.frame();
             SceneGeometryView current = geometry(f.window);
             f.window.domain.execute(() -> {
-                // 入场属于独立呈现层，采样父坐标中的当前原点，不读取普通位移属性。
+                // 入场属于独立呈现层，从父坐标中的当前原点读取偏移。
                 for (SceneNode child : content.children()) {
                     SceneGeometryView.Entry entry = current.get(child);
                     SceneTransform relative = current.get(content).inverse.multiply(entry.transform);

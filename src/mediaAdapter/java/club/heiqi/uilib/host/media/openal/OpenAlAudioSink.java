@@ -21,7 +21,7 @@ import org.lwjgl.openal.ALCapabilities;
 import org.lwjgl.openal.EXTThreadLocalContext;
 import org.lwjgl.openal.SOFTSourceLatency;
 
-/** 专属 device/thread context/source。只在实际 unqueue 后移动 PCM 基准，STOPPED 不采用归零 raw offset。 */
+/** 持有专属device/thread context/source；实际unqueue后移动PCM基准，停止后保持单调播放位置。 */
 final class OpenAlAudioSink implements MediaAudioSink {
     private final Thread owner=Thread.currentThread();
     private final MediaBudget budget;

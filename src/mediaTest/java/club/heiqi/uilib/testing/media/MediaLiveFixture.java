@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** 同一合成TS沿真实90kHz PTS/DTS/PCR平移，动态有限窗口无ENDLIST；不依赖外部ffmpeg进程。 */
+/** 在进程内平移合成TS的90kHz PTS/DTS/PCR，提供持续刷新的有限直播窗口。 */
 public final class MediaLiveFixture implements AutoCloseable {
     private final HttpServer server;private final ExecutorService executor;private final byte[] original,aheadAudio;private final boolean byteRanges;private final long started=System.nanoTime();
     public final java.util.concurrent.atomic.AtomicInteger manifests=new java.util.concurrent.atomic.AtomicInteger(),heads=new java.util.concurrent.atomic.AtomicInteger();
@@ -41,7 +41,7 @@ public final class MediaLiveFixture implements AutoCloseable {
             if(path.startsWith("/master")){
                 masters.incrementAndGet();
                 String audio="#EXT-X-STREAM-INF:BANDWIDTH=64000\n"+(aheadAudio==null?"audio.m3u8":"ahead.m3u8")+"?token=audio\n",video="#EXT-X-STREAM-INF:BANDWIDTH=1000000\nselected/live.m3u8?token=media\n";
-                // FFmpeg 6.1.1忽略I-FRAME声明；它不能挤占实际program的索引。
+                // FFmpeg 6.1.1跳过I-FRAME声明，实际program索引按普通变体顺序核验。
                 body=("#EXTM3U\n#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=32000,URI=\"ignored.m3u8?token=ignored\"\n"+(path.equals("/master-reversed")?video+audio:audio+video)).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type","application/vnd.apple.mpegurl");
             }else if(path.equals("/ahead.m3u8")){
@@ -79,7 +79,7 @@ public final class MediaLiveFixture implements AutoCloseable {
         });server.start();
     }
     /**
-     * 自有合成信号，由随包FFmpeg 6.1.1生成；只进入mediaTest资源，不依赖外部进程。
+     * 自有合成信号由随包FFmpeg 6.1.1预先生成，打包为mediaTest资源。
      * bframe-segment.ts：ffmpeg -f lavfi -i testsrc2=size=96x64:rate=10 -f lavfi -i sine=frequency=440:sample_rate=48000
      * -t 4 -map 0:v -map 1:a -c:v mpeg2video -g 40 -bf 2 -q:v 5 -c:a mp2 -b:a 64k -f mpegts bframe-segment.ts
      * ahead-audio.ts：ffmpeg -f lavfi -i sine=frequency=440:sample_rate=48000 -t 4 -c:a mp2 -b:a 64k -f mpegts ahead-audio.ts

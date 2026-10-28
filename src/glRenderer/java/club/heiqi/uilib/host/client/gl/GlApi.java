@@ -2,7 +2,7 @@ package club.heiqi.uilib.host.client.gl;
 
 import java.nio.ByteBuffer;
 
-/** 宿主GPU端口；算法不链接具体bindings或平台类。实例绑定单context/thread。 */
+/** 共享算法通过此端口调用宿主GPU；实例绑定单一context/thread。 */
 public interface GlApi {
     GlCapabilities capabilities();
 

@@ -12,7 +12,7 @@ import static org.lwjgl.opengl.GL11.GL_RENDERER;
 import static org.lwjgl.opengl.GL11.GL_VERSION;
 import static org.lwjgl.opengl.GL11.glGetString;
 
-/** 完整正式Desktop帧及已安装滚轮回调，不把自动事件冒充人工设备。 */
+/** 以完整Desktop帧与已安装滚轮回调执行自动压测。 */
 public final class DesktopMailboxPerformance {
     public static void main(String[] args)throws Exception{
         Path output=Paths.get(args[0]);Files.createDirectories(output);

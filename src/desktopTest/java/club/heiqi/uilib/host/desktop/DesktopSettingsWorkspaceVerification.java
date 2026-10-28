@@ -9,7 +9,7 @@ import club.heiqi.uilib.testing.TestApplication;
 import club.heiqi.uilib.ui.scene.control.SceneDragHandle;
 import club.heiqi.uilib.ui.scene.layout.*;
 
-/** 重设计真实绘制与输入矩阵；完整配置文件流程由原设置验收维护。 */
+/** 核验设置工作区的绘制与输入矩阵，配置文件全流程由设置验收维护。 */
 public final class DesktopSettingsWorkspaceVerification extends TestApplication {
     private Path output;
 
@@ -87,7 +87,7 @@ public final class DesktopSettingsWorkspaceVerification extends TestApplication 
                     fullyVisible(w, "添加到末尾");
                     DesktopSettingsVerification.screenshot(w, output.resolve("add-" + dimensions));
                     if (size[1] <= 400) {
-                        // 低窗沿正式滚动显露来源选项，真实选择与浏览证明可操作，不要求固定首屏行数。
+                        // 低窗通过正式滚动显露来源选项，再核验选择与浏览操作。
                         input.click("本地字体文件");
                         finitePresentations(w);
                         input.click("浏览字体文件");
@@ -144,7 +144,7 @@ public final class DesktopSettingsWorkspaceVerification extends TestApplication 
             input.point(point.x + point.width / 2.0, point.y + point.height / 2.0);
             String lastOrdinal = String.format(Locale.ROOT, "%02d  ", sources.size());
             int scrolls = 0;
-            // 大滚轮量不等于实际内容末端；持续发送真实滚轮，按当前可见几何结束。
+            // 持续发送滚轮，按当前可见几何确认到达内容末端。
             while (!sourceVisible(w, lastOrdinal) && scrolls < sources.size()) {
                 input.scroll.invoke(w.handle(), 0, -12);
                 w.frame();
@@ -171,7 +171,7 @@ public final class DesktopSettingsWorkspaceVerification extends TestApplication 
     }
 
     private static void escape(DesktopWindow w, DesktopTestInput input) {
-        // 此矩阵测弹层返回；先离开目录行，避免真实Tooltip按合同优先消费ESC。
+        // 先离开目录行结束Tooltip，再以ESC核验弹层返回。
         input.point(0, 0);
         DesktopTestFrames.inputFrame(w);
         finitePresentations(w);

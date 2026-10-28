@@ -23,7 +23,7 @@ import club.heiqi.uilib.ui.scene.text.TextLayout;
 import club.heiqi.uilib.ui.scene.text.TextStyle;
 import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 
-/** 正式转换、字体、页面、计划与唯一 router 路径；不代表 MC 原生输入与 GPU 实机验收。 */
+/** 通过正式转换、字体、页面、计划与router核验富文本输入和呈现事实。 */
 public final class RichTextScenario extends TestApplication {
     private FontTextService font;
 
@@ -520,7 +520,7 @@ public final class RichTextScenario extends TestApplication {
                                                                     club.heiqi.uilib.ui.scene
                                                                             .control.SceneTextPolicy
                                                                             .OVERFLOW);
-                                            // 使用正式入口默认策略，避免手动policy掩盖标签或Area的硬行回归。
+                                            // 按正式入口默认策略核验标签与Area的硬行语义。
                                             body[0].size(Size.fixed(140), Size.natural());
                                             context.mount(body[0]);
                                         }));

@@ -21,11 +21,11 @@ import java.util.LinkedHashSet;
 import java.util.Objects;
 
 /**
- * 正式 PaintPlan 回放：位置只消费不可变 Glyph，不重新布局、读取 scene 或等待字形。 调用方先 prepare（资源上传/失效通知边界），再
- * replay（固定MVP/depth/pass），最后关闭Prepared。command.box/clip与glyph定位属于局部分配，经command.transform映到页面；
- * prepare.viewport为原生framebuffer像素（左上原点）。旧UI重载MVP将framebuffer XY映到clip，不再次GUI scale。
- * FontRenderContext重载直接接受caller XY，
- * 保留P/MV/viewport/FBO与齐次w；只使用context outer scissor，不把callerclip矩形近似成screenrect。
+ * 回放不可变PaintPlan：调用方先prepare上传资源，再以固定MVP/depth/pass replay，最后关闭Prepared。
+ * command.box/clip与glyph定位属于局部分配，经command.transform映到页面；
+ * prepare.viewport使用左上原点的原生framebuffer像素，UI重载MVP直接将framebuffer XY映到clip。
+ * FontRenderContext重载接受caller XY，保留P/MV/viewport/FBO与齐次w；
+ * caller clip参与几何裁剪，framebuffer裁剪使用context outer scissor。
  * CPU与atlas由宿主持有，可跨renderer复用；本类仅拥有自己的quad backend。
  */
 public final class GlPaintPlanRenderer implements AutoCloseable {
@@ -47,7 +47,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
     private boolean closed;
     private long resourceEpoch;
     private long clippedGlyphs, demandOverflow, blankGlyphs, drawnGlyphs;
-    // 同包场景以工作量检查重复准备，不把计数换算为帧时间。
+    // 同包场景通过可见性计算次数核对重复准备的工作量。
     long visibilityChecks;
 
     public GlPaintPlanRenderer(
@@ -142,7 +142,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 Objects.requireNonNull(viewport, "viewport"), null));
     }
 
-    /** caller空间的world需求：context对象属于不可变本次原生状态，不能以plan身份跨world状态复用。 */
+    /** 按caller空间和本次不可变context收集world需求，复用身份包含原生状态。 */
     public java.util.Set<GlyphKey> collectVisibleDemand(PaintPlan plan, FontRenderContext context) {
         Objects.requireNonNull(context, "context");
         return collectVisibleDemand(new Preparation(Objects.requireNonNull(plan, "plan"),
@@ -172,7 +172,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         return java.util.Collections.unmodifiableSet(demand);
     }
 
-    /** owner传同epoch裁决资源key与剩余预算；此入口不重新扩张需求或取消其他consumer。 */
+    /** 按owner在同一epoch裁决的资源key与剩余预算准备当前consumer。 */
     public Prepared prepareDemandContext(
             PaintPlan plan,
             FontRenderContext context,
@@ -202,7 +202,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 plan, viewport, budget, collectVisibleDemand(plan, viewport), true, null);
     }
 
-    /** 显式资源准备入口；共享owner传入已裁决的epoch需求与剩余预算，不能重新扩张需求。 onClose仅归还owner生命周期，不控制渲染或上传。 */
+    /** 按共享owner裁决的epoch需求与剩余预算准备资源；onClose归还owner生命周期。 */
     public Prepared prepareDemand(
             PaintPlan plan,
             LayoutBox viewport,
@@ -280,7 +280,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 (int) Math.max(0, bottom - top));
     }
 
-    /** 只保存数值源：每个Preparation捕获/散列一次，多条命令共享；不保留context或GL状态对象。 */
+    /** 每个Preparation捕获并散列一次可见性数值源，供多条命令共享。 */
     private static final class VisibilitySource {
         private final int[] values;
         private final int hash;
@@ -330,7 +330,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         }
     }
     private void remember(CommandKey key, CommandFacts facts) {
-        // 重复glyph身份仍可在visibleKeys出现多次，按出现次数计预算，避免长布局绕过上限。
+        // visibleKeys按glyph出现次数计预算，使长布局受同一上限约束。
         long weight = facts.visibleKeys.size() + facts.clipped;
         if (weight > FACTS_GLYPHS) return;
         java.util.Iterator<CommandFacts> oldest = commandFactsMemo.values().iterator();
@@ -346,10 +346,10 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         pendingPreparation = null;
         if (commandFactsMemo != null) commandFactsMemo.clear();
         memoGlyphs = 0;
-        // 已有Prepared继续持有原不可变facts；换代/逐出不改其冻结资源或几何。
+        // 已有Prepared持续持有原不可变facts，换代与逐出后仍使用冻结资源和几何。
     }
 
-    /** 只属于一次collect→prepare→replay；跨帧memo只接收不含Preparation引用的CPU事实。 */
+    /** 协调一次collect→prepare→replay；跨帧memo另存独立CPU事实。 */
     private final class Preparation {
         final PaintPlan plan;
         final LayoutBox viewport;
@@ -410,7 +410,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             facts.put(command, known);
             return known;
         }
-        /** 隐藏同key不能占用主层；只分层owner已admit的key，不扩张需求。 */
+        /** 按首次可见层分配owner已admit的key，隐藏命令让出主层优先级。 */
         java.util.List<java.util.Collection<GlyphKey>> glyphLayers(java.util.Collection<GlyphKey> admitted) {
             java.util.LinkedHashSet<GlyphKey> remaining = new java.util.LinkedHashSet<>(admitted);
             java.util.List<java.util.Collection<GlyphKey>> result = new java.util.ArrayList<>();
@@ -502,7 +502,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
         return shown;
     }
 
-    /** 只缓存已就绪的普通文字值载荷；不保留Frame、Resident或资源租约。
+    /** 缓存已就绪普通文字的独立值载荷；Frame、Resident与租约归当前Prepared。
      * 原CommandFacts的条目/字形预算和字体失效负责释放；publish或淘汰后重建UV。 */
     private static final class TextQuads {
         final long version, evictions;
@@ -551,7 +551,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             this.videoFrame = videoFrame;
             this.onClose = onClose;
             if (textureEpoch <= 0) throw new IllegalStateException("绘制资源代际耗尽");
-            // 本 Prepared 为 image/video 分配独立 ref；不会把负 sessionId 混入图像 identity。
+            // 本Prepared为image/video分配独立ref，分别映射图像identity与视频帧key。
             for (PaintCommand command : preparation.commands) {
                 if (command.kind == PaintCommand.Kind.IMAGE && imageFrame != null && imageFrame.ready(command.image.content.identity)
                         && command.image.content.kind != club.heiqi.uilib.ui.scene.image.ImageContent.Kind.HOST_ITEM
@@ -712,9 +712,9 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
 
         public void draw(PaintCommand command) {
             if (closed) throw new IllegalStateException("回放已结束");
-            // 提交边界不绘制；必须先于空几何和裁剪判断，激进策略也不能跨呈现组重排。
+            // 先处理提交边界再判断几何与裁剪，使重排范围限于各呈现组。
             if (command.kind == PaintCommand.Kind.ORDER_BARRIER) { collector.flush(); return; }
-            // 计划中的子片段已由Core映射到同一页面空间；嵌套只切换当前命令，不能再乘父矩阵。
+            // Core已将子片段映射到同一页面空间，嵌套回放仅切换当前命令。
             PaintCommand previous = geometryCommand;
             SceneClipRegion previousClip = geometryClip, previousVisible = geometryVisible;
             CommandFacts previousFacts = geometryFacts;
@@ -736,7 +736,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             } finally { geometryCommand = previous; geometryClip = previousClip; geometryVisible = previousVisible; geometryFacts = previousFacts; }
         }
         private State state(int material, long resource, long generation, LayoutBox localClip) {
-            // world的framebuffer外部scissor由原scope保持，不交给caller XY几何裁剪。
+            // 原scope保持world的framebuffer外部scissor，当前State处理caller XY几何。
             return new State(material, resource, generation, localClip, geometryCommand.transform, geometryClip);
         }
         private void drawPath(PaintCommand command, LayoutBox clip) {
@@ -771,7 +771,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             if (resource == null) return;
             collector.add(state(GlQuadRenderer.COLOR_PREMULT, resource, prepared.textureEpoch, clip),
                     new Quad(video.x, video.y, video.width, video.height, 0, 0, 1, 1, 0, command.color));
-            // VIDEO 单独形成同一 collector 的提交段；容量或委托提交不会把未提交 key 补报成功。
+            // VIDEO在同一collector中单独提交，以当前key记录实际成功flush。
             videoSubmitting = video.frame.key;
             try { collector.flush(); } finally { videoSubmitting = null; }
         }
@@ -859,10 +859,10 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                     collector.add(state(GlQuadRenderer.COLOR_PREMULT, GlHostItemCapture.RESOURCE,
                                     captured[0].generation, clip),
                             new Quad(box.x, box.y, box.width, box.height, 0, 1, 1, 0, 0, command.color));
-                    // 下一宿主物品可复用同一面；合成先提交，readyOverlay里的物品也不能覆盖它。
+                    // 先提交当前合成面，再由后续物品或readyOverlay复用。
                     collector.flush();
                 }
-                // 原图只执行一次；失败仅选择控件已冻结的同代片段，不重prepare或读live scene。
+                // 原图委托一次，按结果选择控件已冻结的同代ready/failed片段。
                 imageChoices.put(command, drawn[0] ? ImageChoice.READY : ImageChoice.FAILED);
                 drawPlan(drawn[0] ? command.readyOverlay : command.failedPaint);
                 return;
@@ -919,8 +919,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
             if (!geometryFacts.plainText) return false;
             TextQuads known = geometryFacts.textQuads;
             if (known != null && known.matches(glyphResources, prepared.frame.view, command.color)) {
-                // 需求被接纳不等于freeze时已驻留：嵌套委托可能刚上传同key。
-                // 按唯一字形核对本Frame正项，不能借另一Frame的就绪结果越过原冻结快照。
+                // 嵌套委托可能刚上传同key；缓存复用前逐个核对本Frame冻结的驻留正项。
                 for (GlyphKey key : geometryFacts.visibleDemand)
                     if (prepared.frame.lookup(key) == null) return false;
                 for (int i = 0; i < known.quads.size(); i++)
@@ -935,7 +934,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                 for (TextLayout.Line line : command.text.lines())
                     for (TextLayout.Glyph glyph : line.glyphs()) drawGlyph(command, glyph, clip);
             } finally { collectingText = null; }
-            // 未ready不能把暂时空白固化；发布新字形或淘汰任意组也使旧缓存stamp失效。
+            // 全部字形就绪后才缓存；发布或淘汰会使旧stamp失效。
             if (blankGlyphs == blanksBefore) geometryFacts.textQuads = pending;
             return true;
         }
@@ -998,7 +997,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                     collectingText.quads.add(quad);
                 }
             } else {
-                // 三片目标域互斥，共享原atlas资源及Y采样；中片固定原覆盖度列，hook/stem不横向变形。
+                // 三片目标域互斥，共享原atlas资源及Y采样；中片延伸原覆盖度列，hook/stem保持原宽。
                 float cut = command.box.x + glyph.x + glyph.xExtension.splitX;
                 float extra = glyph.xExtension.extraWidth;
                 float splitU = u0 + (u1 - u0) * (cut - x) / width;
@@ -1054,7 +1053,7 @@ public final class GlPaintPlanRenderer implements AutoCloseable {
                         new Quad(x, y, width, height, 0, 0, 0, 0, 0, color));
         }
 
-        /** 外部绘制前提交并退出quad状态范围，委托后重新观测宿主状态，不复用状态猜测。 */
+        /** 外部绘制前提交并退出quad状态范围，委托后重新捕获宿主状态。 */
         public void delegate(Runnable delegated) {
             if (closed) throw new IllegalStateException("回放已结束");
             try {

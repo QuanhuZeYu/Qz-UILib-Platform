@@ -2,7 +2,7 @@ package club.heiqi.uilib.ui.scene.integration;
 
 import club.heiqi.uilib.testing.TestApplication;
 
-/** 每种受支持 JVM 在一个进程核对正式字体、媒体与桌面产物，整个检查不创建窗口。 */
+/** 每种受支持JVM在单一无窗口进程核对正式字体、媒体与桌面产物。 */
 public final class PlatformArtifactVerification extends TestApplication {
     @Override protected void runTests() throws Exception {
         String[] args = arguments();

@@ -54,7 +54,7 @@ import java.util.Map;
 
 import javax.imageio.ImageIO;
 
-/** 隐藏真实GL：共同文档唯一scene树，经正式字体、图像与PaintPlan检验像素；不代表游戏实机。 */
+/** 在隐藏GL宿主中，以共同文档scene树、正式字体、图像与PaintPlan核验像素。 */
 public final class DocumentGlScenario extends TestApplication {
     private static final int W = 640, H = 360;
     private long window, serial;

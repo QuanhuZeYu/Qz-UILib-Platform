@@ -21,7 +21,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
-/** 直接消费正式source/decoder；媒体PTS来自真实帧，未把解码当作GPU或设备已呈现。 */
+/** 直接消费正式source/decoder，核验真实解码帧的PTS与ENDLIST事实。 */
 public final class MediaEndlistScenario extends TestApplication {
     private static String get(String url)throws Exception {
         HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(2000);c.setReadTimeout(2000);

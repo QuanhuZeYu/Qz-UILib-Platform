@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** 自包含短输入；只有测试Jar携带合成媒体，普通build不依赖外部持续服务或ffmpeg命令。 */
+/** 以测试Jar内合成媒体提供自包含短输入与本地HTTP服务。 */
 public final class MediaFixture implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService executor;

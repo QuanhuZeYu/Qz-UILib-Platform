@@ -432,7 +432,7 @@ public final class IncrementalMeasurementScenario extends TestApplication {
     }
 
     private void settingsSurfaceStages() {
-        // 设置页已统一使用公开的现代卡片；验证真实布局/配色分层，不反射私有实现。
+        // 通过公开设置页几何和配色核验卡片分层。
         Signal<SceneTheme>[] colors = new Signal[1];
         SceneNode[] content = {null}, wrapper = {null};
         try (Page p =
@@ -673,7 +673,7 @@ public final class IncrementalMeasurementScenario extends TestApplication {
             int stable = p.requests.count("固定未变行 Café");
             int backup = p.requests.count("未就绪备用");
             require(backup > 0, "真实READY图像没有沿正式绘制捕获自定义备用子树");
-            // READY隐藏备用树仍挂载；旁行重排不能按主几何访问集合清理其有效文字。
+            // READY备用树保持挂载，旁行重排后仍应复用其有效文字请求。
             p.update(() -> p.value.set("旁行更新保留READY备用"));
             require(p.requests.count("未就绪备用") == backup, "主布局清理了仍挂载READY备用树的有效请求");
             p.session.pointer(ScenePointerEvent.scroll(20, 20, -1));

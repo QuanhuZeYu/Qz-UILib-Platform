@@ -14,7 +14,7 @@ import club.heiqi.uilib.ui.scene.layout.LayoutBox;
 import club.heiqi.uilib.ui.scene.layout.SceneGeometryView;
 import club.heiqi.uilib.ui.scene.node.SceneNode;
 
-/** 包内机械输入支持：借用已安装的生产回调，不拥有或释放回调，也不直写业务模型。 */
+/** 包内自动输入支持，借用已安装生产回调；回调生命周期归窗口。 */
 final class DesktopTestInput {
     private final DesktopWindow window;
     final GLFWCursorPosCallback cursor;

@@ -35,7 +35,7 @@ import club.heiqi.uilib.ui.scene.text.font.nativefont.FontEngine;
 import club.heiqi.uilib.ui.settings.SettingsConfiguration;
 
 /** 嵌入式应用的资源与配置归属。主线程 capture/apply，worker 只准备不可变文档与字体。
- * 宿主在原 tick/frame 调 pumpResources；ready 完成前不挂载页面或消费测量服务。
+ * 宿主在原tick/frame调用pumpResources，ready成功后挂载页面并使用测量服务。
  */
 public final class EmbeddedSceneServices implements AutoCloseable {
     private final Thread thread = Thread.currentThread();
@@ -79,7 +79,7 @@ public final class EmbeddedSceneServices implements AutoCloseable {
             }
         });
     }
-    /** 返回资源 owner；真实文档/字体就绪由 ready 表达，不能在 UI 上 join/get。 */
+    /** 返回资源owner；宿主持续推进原帧流程，通过ready接收文档与字体就绪结果。 */
     public static EmbeddedSceneServices open(Path path, ClassLoader loader, FontEngine engine, GlApi gl,
             JavaImageLoader.Resources imageResources, FontSources fontSources) throws IOException {
         EmbeddedSceneServices result = new EmbeddedSceneServices(fontSources);
@@ -94,7 +94,7 @@ public final class EmbeddedSceneServices implements AutoCloseable {
         List<FontSource> defaults = sources.builtins;
         candidates = FontCandidateConfiguration.key(defaults);
         ConfigSchema schema = ConfigSchema.of(candidates, ThemeConfiguration.KEY, ScrollConfiguration.KEY);
-        // 先把捕获的 streams 移交worker，文档失败也不会遗留未消费的资源流。
+        // streams先移交worker，文档处理失败时仍由worker完成读取与关闭。
         preparation.prepare(sources, FontCandidateConfiguration.defaults(defaults), Collections.emptyList());
         CompletableFuture.supplyAsync(() -> {
             try {
@@ -143,7 +143,7 @@ public final class EmbeddedSceneServices implements AutoCloseable {
         if (Thread.currentThread() == thread) action.run();
         else { ownerActions.add(action); if (closed) ownerActions.remove(action); }
     }
-    /** 仅由宿主原有主线程 tick/frame 推进，不在worker直接drain状态域。 */
+    /** 在宿主原有主线程tick/frame执行资源结果与状态域动作。 */
     public void pumpResources() {
         if (Thread.currentThread() != thread) throw new IllegalStateException("嵌入资源必须由owner线程推进");
         if (closed) return;

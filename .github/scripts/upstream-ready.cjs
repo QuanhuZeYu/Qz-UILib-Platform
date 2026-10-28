@@ -52,5 +52,5 @@ async function main() {
   console.log(summary);
 }
 
-// 不把认证、网络、服务端或配置错误转换为 ready=false，避免跳过真实故障。
+// 认证、网络、服务端与配置错误通过失败退出码报告。
 main().catch(error => { console.error('上游 Release 检查失败：' + error.message); process.exitCode = 1; });

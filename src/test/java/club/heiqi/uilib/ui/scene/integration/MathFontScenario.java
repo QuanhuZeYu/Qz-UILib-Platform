@@ -45,7 +45,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/** 真实 FT/HB 数学字体场景；独立 raw 探针核对单位、variant、光栅及资源生命周期，无 MC/GL。 */
+/** 以真实FT/HB与独立raw探针核对数学字体单位、variant、光栅及资源生命周期。 */
 public final class MathFontScenario extends TestApplication {
     private static final String RESOURCE = "assets/qz_uilib/fonts/math/STIXTwoMath-Regular.otf";
     private byte[] bytes;
@@ -285,7 +285,7 @@ public final class MathFontScenario extends TestApplication {
         }
     }
 
-    /** 非零整体修正来自同次 raw MATH oracle；保留字形的转换不能退为末部件修正。 */
+    /** 以同次raw MATH oracle核验非零整体修正，在字形转换后保持完整修正语义。 */
     private static void verifyAssemblyTransfers(
             FontTextService service, MathFont math, TextLayout layout, float expectedCorrection) {
         require(expectedCorrection > 0, "非零 assembly 修正反例未命中");
@@ -333,7 +333,7 @@ public final class MathFontScenario extends TestApplication {
                 "采样密度变化未命中真实 raster 字号");
     }
 
-    /** 预期连接来自独立raw HB，按原点差反推实际overlap，不能由生产算法自证。 */
+    /** 以独立raw HB生成预期连接，按实际原点差核对overlap。 */
     private void verifyAssemblyLayout(
             MathFont math,
             RawMath raw,
@@ -624,7 +624,7 @@ public final class MathFontScenario extends TestApplication {
                                             + part.extender);
                         }
                         raw.nearHorizontalDesign(assembly.minOverlap, design.minOverlap);
-                        // STIX v2.13b171 的右帽 start=0；上游 #289 明确记录此缺陷，不能猜测反转/交换。
+                        // STIX v2.13b171的右帽start=0；上游#289记录此缺陷，按原始设计顺序核验。
                         if (cp == 0x2192 || cp == 0x2194) {
                             MathData.Part cap = assembly.parts().get(assembly.parts().size() - 1);
                             require(
@@ -764,7 +764,7 @@ public final class MathFontScenario extends TestApplication {
                         + repeats);
     }
 
-    /** 仅输出真实能力，供数学布局选择正式字形；不把无数据或非法connector断成成功。 */
+    /** 输出真实数学能力与connector有效性，供布局选择正式字形。 */
     private void verifyArrowFacts() throws Exception {
         try (FontTextService service = new FontTextService(new LwjglFontEngine())) {
             float em = 32.3f;
@@ -919,7 +919,7 @@ public final class MathFontScenario extends TestApplication {
     }
 
     private void verifyAssemblyEdges() {
-        // 零次候选没有部件，必须继续加 extender；不能因这个候选不存在拒绝构建。
+        // 零次候选为空时继续增加extender，直到形成有效部件候选。
         MathData.Part extender = new MathData.Part(2, 4, 4, 10, true);
         MathData.Assembly onlyExtender =
                 new MathData.Assembly(Collections.singletonList(extender), 2, 3);
@@ -1126,7 +1126,7 @@ public final class MathFontScenario extends TestApplication {
             String absent = "assets/qz_uilib/fonts/math/absent-review-font.otf";
             FontSource missing =
                     FontSource.fromResource("math-resource-review-missing", 1, absent, false);
-            // 中间可加载但无 MATH 的字体只是能力不匹配，不应伪造资源 warning。
+            // 中间字体可加载但缺少MATH时，按能力不匹配继续后继候选。
             service.register(
                     "math", Arrays.asList(missing, service.defaultCandidates().get(0), validMath));
             MathFont math = service.mathFont(style(24));
@@ -1245,7 +1245,7 @@ public final class MathFontScenario extends TestApplication {
                     !oldPartKey.equals(
                             GlyphKey.of(replacedAssembly.lines().get(0).glyphs().get(0))),
                     "assembly新旧source混入同glyph身份");
-            // 旧布局source仍是不可变字节；换代不能让既有绘制事实失去光栅资格。
+            // 旧布局source持有不可变字节，换代后仍支持已有绘制事实重新光栅。
             try (FontSession session = new LwjglFontEngine().openSession();
                     FontFace face = oldKey.source.openFace(session, oldKey.size)) {
                 require(face.rasterize(oldKey.glyphId).width > 0, "旧source换代后不可重开");
@@ -1371,7 +1371,7 @@ public final class MathFontScenario extends TestApplication {
         return 0;
     }
 
-    /** 原始SFNT设计顺序独立校准HB方向，避免生产和raw探针一起错误反转。 */
+    /** 按原始SFNT设计顺序独立校准HB方向。 */
     private static int[] assemblyGlyphOrder(byte[] bytes, int glyph) {
         MathData.Assembly assembly = assemblyDesign(bytes, glyph, MathAxis.VERTICAL);
         int[] glyphs = new int[assembly.parts().size()];
@@ -1440,7 +1440,7 @@ public final class MathFontScenario extends TestApplication {
         return -1;
     }
 
-    /** 仅观测真实native打开和关闭；不模拟face或MATH返回值。 */
+    /** 转发真实native调用并记录face的打开与关闭。 */
     private static final class RecordingEngine implements FontEngine {
         final List<FontFace> opened = new ArrayList<FontFace>();
 
@@ -1473,7 +1473,7 @@ public final class MathFontScenario extends TestApplication {
         }
     }
 
-    /** 独立FT/HB原始探针，故意不调用生产mathConstant/variant/advance方法作预期值。 */
+    /** 直接调用原始FT/HB生成独立MATH常量、variant与advance期望。 */
     private static final class RawMath implements AutoCloseable {
         private long library, font;
         private FT_Face face;

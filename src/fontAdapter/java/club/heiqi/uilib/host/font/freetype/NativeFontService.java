@@ -14,12 +14,12 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.freetype.FreeType;
 
-/** 原生字体资源作用域。所有操作（含关闭）仅限创建线程，不创建线程池。 */
+/** 持有原生字体资源；所有操作（含关闭）均在创建线程执行。 */
 public final class NativeFontService implements FontSession {
     private final Thread thread = Thread.currentThread();
     private final Set<NativeFontFace> faces = new LinkedHashSet<NativeFontFace>();
     private long library;
-    // 一次整形作用域只有一个完整上下文；face LRU 不拥有也不关闭它。
+    // 服务持有并关闭当前唯一整形上下文，face LRU 借用该上下文。
     private NativeShapeContext context;
 
     public NativeFontService() {
@@ -75,7 +75,7 @@ public final class NativeFontService implements FontSession {
         NativeShapeContext(NativeFontService owner, String text) {
             super(text);
             this.owner = owner;
-            // 不使用 MemoryStack 编码长上下文；每个完整行/段落只编码一次。
+            // 完整行/段落在堆外编码一次，长文本占用由上下文生命周期管理。
             utf16 = MemoryUtil.memUTF16(text, false);
         }
 

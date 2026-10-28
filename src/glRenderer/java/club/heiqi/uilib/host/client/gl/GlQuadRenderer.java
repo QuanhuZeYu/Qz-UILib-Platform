@@ -14,8 +14,9 @@ import java.nio.ByteOrder;
 import java.util.Objects;
 
 /**
- * GL3.2/GLSL150 的正式有序载荷消费者；所有操作及 close 必须在所属上下文线程执行。 宿主在变换、深度、pass 或外部委托屏障处结束 Scope；不捕获 GL 矩阵，不管理
- * scene。 资源提供者只解析已准备并存活的 resource/generation，不得在消费中修改 GL 状态。
+ * GL3.2/GLSL150有序载荷消费者；所有操作及close在所属上下文线程执行。
+ * 宿主提供矩阵，在变换、深度、pass或外部委托屏障处结束Scope；scene归呈现运行时。
+ * 资源提供者只读解析已准备并存活的resource/generation，GL状态由本backend管理。
  */
 public final class GlQuadRenderer implements AutoCloseable {
     /** ARGB 顶点颜色为直通颜色；输出为 premult RGBA。 */
@@ -36,12 +37,12 @@ public final class GlQuadRenderer implements AutoCloseable {
         RED
     }
 
-    /** 纹理由调用者拥有；backend 不上传、换代或删除提供者的资源。 */
+    /** 借用调用者持有的纹理，上传、换代与删除由资源owner负责。 */
     public static final class Texture {
         public final int target, id;
         public final CoverageChannel coverageChannel;
 
-        /** 既有外部 RGBA 资源默认从 alpha 采样，不能因 mono 材质改读 red。 */
+        /** 外部RGBA资源默认从alpha通道采样覆盖率。 */
         public Texture(int target, int id) {
             this(target, id, CoverageChannel.ALPHA);
         }
@@ -78,7 +79,7 @@ public final class GlQuadRenderer implements AutoCloseable {
     private final int[] programs = new int[3];
     private final ProgramUniforms[] uniforms = new ProgramUniforms[3];
 
-    /** 位置只属于本 renderer 创建且不再重链的 program；动态宿主值仍在每个 Scope 应用。 */
+    /** 缓存本renderer持有且链接状态固定的program位置，动态宿主值在每个Scope应用。 */
     private static final class ProgramUniforms {
         final int mvp, material, image, image2, coverageRed;
         final int hostLighting, hostAlpha, outputStraight, alphaEnabled, alphaFunction, alphaReference;
@@ -336,7 +337,7 @@ public final class GlQuadRenderer implements AutoCloseable {
                                     "vertex producer");
                 programProducer.configure(scope.iris);
                 world.applyIris();
-                // Pass.use拥有FBO/blend/alpha overrides；不能再用普通world.apply盖掉pack定义。
+                // Pass.use拥有FBO/blend/alpha overrides，按该pass定义继续回放。
                 return scope;
             }
             if (context.rasterState == null) {
@@ -348,7 +349,7 @@ public final class GlQuadRenderer implements AutoCloseable {
                                 world);
                 scope.world = world;
             } else {
-                // typed world 直接应用捕获状态，避免先建立 UI blend/cull 与通用 EBO 后再覆盖。
+                // typed world直接应用捕获状态，所需blend/cull与EBO由world路径设置。
                 scope = new Scope(context.projection.mvp(), context.sourceFramebufferHeight, world);
                 active = scope;
                 scope.world = world;
@@ -399,7 +400,7 @@ public final class GlQuadRenderer implements AutoCloseable {
         private Scope(float[] mvp, int height, GlFontWorldState worldEntry) {
             this.mvp = mvp;
             this.height = height;
-            // preview 只读；与 world 共用同一 actual 进入态，不能用历史 context 代替。
+            // preview只读；与world共用本次actual进入态，提交快照提供目标态。
             unit = worldEntry == null ? gl.glGetInteger(GL_ACTIVE_TEXTURE) : worldEntry.unit;
             scissor = worldEntry == null ? gl.glIsEnabled(GL_SCISSOR_TEST) : worldEntry.scissor;
             depth = worldEntry == null ? gl.glIsEnabled(GL_DEPTH_TEST) : worldEntry.depth;
@@ -433,7 +434,7 @@ public final class GlQuadRenderer implements AutoCloseable {
             if (samplerObjects) gl.glBindSampler(0, 0);
         }
 
-        /** 一段恰好一次顶点上传；双2D只按原索引连续提交，其余逐 Draw 消费，不排序。 */
+        /** 每段上传一次顶点；双2D按原索引连续提交，其余按原Draw顺序消费。 */
         public void consumeBatch(OrderedQuadBatch batch) {
             if (done || active != this) throw new IllegalStateException("范围已结束");
             Objects.requireNonNull(batch, "batch");
@@ -493,7 +494,7 @@ public final class GlQuadRenderer implements AutoCloseable {
             }
         }
 
-        /** 只消费同一封闭 typed world 批次；按原 Draw/quad 顺序打包，不排序或延长资源引用。 */
+        /** 在封闭typed world范围内按原Draw/quad顺序打包，资源沿原Frame生命周期。 */
         private boolean consumeDual2d(OrderedQuadBatch batch) {
             if (world == null || world.context.rasterState == null || batch.draws().size() < 2) return false;
             State first = batch.draws().get(0).state;
@@ -510,7 +511,7 @@ public final class GlQuadRenderer implements AutoCloseable {
                 else if (s.resource != resource1 || s.generation != generation1) return false;
             }
             if (resource1 == 0 || count != batch.quads().size()) return false;
-            // provider 只解析本 Frame 已 pin 的资源；解析失败原样上抛，不吞错重试或跨 Frame 缓存。
+            // provider解析本Frame已pin的资源，解析失败沿原异常通道上抛。
             Texture firstTexture = Objects.requireNonNull(resources.resolve(resource0, generation0), "texture");
             Texture second = Objects.requireNonNull(resources.resolve(resource1, generation1), "texture");
             if (firstTexture.target != GL_TEXTURE_2D || second.target != GL_TEXTURE_2D || firstTexture.id == second.id)
@@ -519,7 +520,7 @@ public final class GlQuadRenderer implements AutoCloseable {
             for (Draw draw : batch.draws()) {
                 boolean firstSlot = draw.state.resource == resource0 && draw.state.generation == generation0;
                 Texture texture = firstSlot ? firstTexture : second;
-                // 2D 不读数组层；复用原 layer 槽的三个局部位：texture slot/material/coverage channel。
+                // 2D的layer槽编码三个局部位：texture slot/material/coverage channel。
                 int selector = (firstSlot ? 0 : 4) + (draw.state.material - 1) * 2
                         + (texture.coverageChannel == CoverageChannel.RED ? 1 : 0);
                 for (int i = draw.firstQuad; i < draw.firstQuad + draw.quadCount; i++)

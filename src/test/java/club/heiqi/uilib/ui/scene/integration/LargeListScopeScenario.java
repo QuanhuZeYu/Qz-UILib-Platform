@@ -25,7 +25,7 @@ import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 
-/** 大列表范围复用的真实边界；行为验收不依赖缓存字段或探针。 */
+/** 通过正式页面行为核验大列表的范围复用边界。 */
 public final class LargeListScopeScenario extends TestApplication {
     private FontTextService fonts;
     @Override protected void setup() throws Exception { fonts = own(new FontTextService(new LwjglFontEngine())); }

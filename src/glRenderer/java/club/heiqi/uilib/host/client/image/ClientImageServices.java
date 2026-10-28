@@ -6,7 +6,7 @@ import club.heiqi.uilib.ui.scene.image.ImageService;
 import club.heiqi.uilib.ui.scene.image.SharedImageService;
 import club.heiqi.uilib.ui.scene.image.ImageLoader;
 
-/** 正式客户端共享图像owner；网络不进入字体owner，页面关闭仅释放自身consumer。 */
+/** 持有客户端共享图像服务与纹理，页面按各自生命周期释放consumer。 */
 public final class ClientImageServices implements AutoCloseable {
     private final Thread thread = Thread.currentThread();
     private final GlApi gl;
@@ -78,7 +78,7 @@ public final class ClientImageServices implements AutoCloseable {
         check();
         closed = true;
         Throwable failure = null;
-        // 桌面规格第5节：子owner自行完成所属清理，后续GPU错误不能替换CPU首错。
+        // CPU与GPU owner分别完成所属清理，首错保留，后续错误附入suppressed。
         try { images.close(); }
         catch (RuntimeException | Error next) { failure = next; }
         try { if (textures != null) textures.close(); }

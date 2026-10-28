@@ -31,7 +31,7 @@ dependencies {
     mediaNativeRuntime('org.bytedeco:javacpp:1.5.10:windows-x86_64') { transitive = false }
     mediaNativeRuntime('org.bytedeco:ffmpeg:6.1.1-1.5.10:windows-x86_64') { transitive = false }
 }
-// 私有运行时固定官方根 JNI；移除 Java25 FFM 多版本覆盖的原装配语义保持。
+// 打包时过滤多版本覆盖，使Java25继续使用官方根JNI。
 def packageBindings = { String taskName, String runtimeName, String kind, boolean integrityIndex ->
     tasks.register(taskName) {
         def bindings = configurations[runtimeName]
@@ -56,7 +56,7 @@ def packageBindings = { String taskName, String runtimeName, String kind, boolea
                         }
                     }
                 } else java.nio.file.Files.copy(artifact.toPath(), output.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                // 媒体加载器用此已有清单校验私有绑定；字体沿原文件名索引。
+                // 媒体加载器以文件名和SHA-256校验私有绑定，字体按文件名索引。
                 index += integrityIndex ? artifact.name + ' ' + MessageDigest.getInstance('SHA-256').digest(output.bytes).encodeHex().toString() : artifact.name
             }
             new File(directory, 'index.txt').setText(index.join('\n') + '\n', 'UTF-8')

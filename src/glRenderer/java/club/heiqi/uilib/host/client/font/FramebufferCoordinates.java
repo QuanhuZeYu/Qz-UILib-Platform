@@ -21,7 +21,7 @@ public final class FramebufferCoordinates {
         long left = Math.max(0L, box[0]), right = Math.min((long) width, (long) box[0] + box[2]);
         long top = Math.max(0L, (long) height - box[1] - box[3]),
                 bottom = Math.min((long) height, (long) height - box[1]);
-        // 完全在framebuffer外仍产生可表达的空clip，不引入负尺寸或整数溢出。
+        // framebuffer外的范围归一为合法空clip，long中间量保留边界计算。
         int x = (int) Math.min(width, left), y = (int) Math.min(height, top);
         return new LayoutBox(
                 x, y, (int) Math.max(0, right - left), (int) Math.max(0, bottom - top));

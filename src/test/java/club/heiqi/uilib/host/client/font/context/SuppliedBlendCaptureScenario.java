@@ -4,7 +4,7 @@ import java.util.Arrays;
 import club.heiqi.uilib.host.client.gl.GlApi;
 import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 
-/** 在真实GL的A状态下供给不同的effective blend，非blend仍必须取A且不得二次读blend。 */
+/** 在真实GL的A状态供给effective blend，其余状态取A，blend直接消费供给值。 */
 public final class SuppliedBlendCaptureScenario {
     private static final int GL_ZERO = 0, GL_FUNC_SUBTRACT = 0x800A;
     private SuppliedBlendCaptureScenario() {}

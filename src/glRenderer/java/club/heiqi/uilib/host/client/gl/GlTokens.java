@@ -1,6 +1,6 @@
 package club.heiqi.uilib.host.client.gl;
 
-/** OpenGL协议整数，不引用bindings。 */
+/** 供共享GPU端口使用的OpenGL协议整数。 */
 public final class GlTokens {
     private GlTokens() {}
 

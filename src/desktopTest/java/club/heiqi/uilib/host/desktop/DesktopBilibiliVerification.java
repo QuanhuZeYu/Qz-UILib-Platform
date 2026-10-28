@@ -21,7 +21,7 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 
-/** 独立公网兼容验收：正式广场、GLFW、设备、回放和swap后GL_FRONT，不进入日常build。 */
+/** 显式公网兼容验收，覆盖正式广场、GLFW、设备、回放与swap后GL_FRONT。 */
 public final class DesktopBilibiliVerification extends TestApplication {
     private DesktopWindow window;
     private DesktopTestInput input;

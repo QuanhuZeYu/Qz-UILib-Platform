@@ -1,6 +1,6 @@
 package club.heiqi.uilib.host.embedded;
 
-/** 宿主提供命令修饰键事实；共享转换不读取操作系统，也不解释 Core 命令。 */
+/** 根据宿主提供的Primary键策略转换修饰键事实，命令解释归Core。 */
 public final class NativeInputPolicy {
     private final boolean primaryUsesMeta;
 

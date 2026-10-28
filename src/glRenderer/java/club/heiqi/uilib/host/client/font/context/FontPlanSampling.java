@@ -6,11 +6,9 @@ import club.heiqi.uilib.ui.scene.text.RasterSampling;
 import club.heiqi.uilib.ui.scene.text.TextLayout;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.InkBounds;
 
-/** 已定位计划的有界质量采样，不重排、不查询native ink、不代替GLVisibility或预算。
- * 标准宿主计划从同一Settings捕获统一logicalEm；此入口明确拒绝混字号计划。
- * inkBounds已经logical：只加command box和glyph原点，绝不再乘rasterToLayout。
- * eye/near穿越和UNKNOWN透视取策略顶档，优先避免可见墨迹欠采样；不承诺最小纹理。
- * 完全behind的需求由既有GLVisibility剔除；此处不复制裁剪平面/不丢glyph。
+/** 根据已定位计划的logical墨迹与投影选择有界采样档位，需求裁剪和预算归GLVisibility与资源owner。
+ * 调用方将不同logicalEm拆为独立command；logical inkBounds只叠加command box和glyph原点。
+ * eye/near穿越和透视下未知墨迹边界取策略顶档，完全behind的需求交GLVisibility剔除。
  */
 public final class FontPlanSampling {
     private FontPlanSampling() {}
@@ -36,9 +34,9 @@ public final class FontPlanSampling {
         int[] sizes = policy.sizes();
         int maximum = sizes[sizes.length - 1];
         FontProjection projection = context.projection;
-        // 同一command逐角复用clip缓冲，不再次投影已得到的角点。
+        // 同一command逐角复用clip缓冲和投影结果。
         double[] q = new double[4];
-        // 平行投影在整个logical x/y平面有同一Jacobian，GUI不必逐glyph取四角。
+        // 平行投影在整个logical x/y平面共用一次Jacobian。
         if (projection.parallelXY()) {
             projection.fillClip(command.box.x, command.box.y, 0, q);
             double density = density(projection, q);
@@ -81,7 +79,7 @@ public final class FontPlanSampling {
                         if (best * em >= maximum) return capped(maximum, em, context.revision);
                     }
                 }
-                // 线性clip平面在quad四角的异号意味着可能有可见部分，不按originbehind放弃质量。
+                // quad四角跨越clip平面时保留潜在可见部分的最高采样质量。
                 if ((minW <= 1e-9 && maxW > 0) || (minNear <= 0 && maxNear > 0))
                     return capped(maximum, em, context.revision);
             }
@@ -91,7 +89,7 @@ public final class FontPlanSampling {
     private static double density(FontProjection projection, double[] q) {
         double density = projection.densityClip(q[0], q[1], q[3]);
         if (Double.isFinite(density)) return density;
-        // 保留原失败语义：完全behind使用逻辑档，正tiny-w及数值退化/溢出保守封顶。
+        // 完全behind使用逻辑档，正tiny-w及数值退化/溢出取策略顶档。
         double w = q[3];
         return Double.isFinite(w) && w <= 0 ? 0 : Double.POSITIVE_INFINITY;
     }

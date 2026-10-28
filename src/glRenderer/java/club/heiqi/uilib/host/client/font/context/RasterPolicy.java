@@ -1,6 +1,6 @@
 package club.heiqi.uilib.host.client.font.context;
 
-/** 有界光栅em档位；只调采样，不改变布局advance。策略修改须更换调用者revision。 */
+/** 选择有界光栅em采样档位，布局沿原advance；策略修改须更换调用者revision。 */
 public final class RasterPolicy {
     public static final RasterPolicy DEFAULT =
             new RasterPolicy(8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512);
@@ -18,7 +18,7 @@ public final class RasterPolicy {
         }
     }
 
-    /** 向上选档；超过最大档时明确封顶，防止摄像机运动产生无限raster keys。 */
+    /** 向上选档并封顶，使摄像机运动产生的raster key集合保持有界。 */
     public int rasterEm(double desiredPixels) {
         if (!Double.isFinite(desiredPixels) || desiredPixels <= 0)
             throw new IllegalArgumentException("无效像素em");

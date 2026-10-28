@@ -7,7 +7,7 @@ import club.heiqi.uilib.ui.media.spi.MediaDecoder;
 import club.heiqi.uilib.ui.media.spi.MediaDecoderSource;
 import club.heiqi.uilib.ui.media.spi.MediaDecoded;
 
-/** 独立公网探针，不进入可重复build；只记录内容身份和解码事实，不记录签名媒体URL。 */
+/** 显式运行的公网探针，记录内容身份与解码事实，签名媒体URL限于请求使用。 */
 public final class BilibiliSourceProbe {
     public static void main(String[] args)throws Exception{
         BilibiliResolver resolver=new BilibiliResolver();

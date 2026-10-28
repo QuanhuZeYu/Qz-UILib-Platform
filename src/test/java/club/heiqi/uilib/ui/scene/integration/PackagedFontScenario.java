@@ -11,7 +11,7 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Properties;
 
-/** 正式核心与独立字体适配组合在Java8/25打开字体、整形及光栅，避免开发classpath掩盖缺失依赖。 */
+/** 在Java8/25以正式核心和独立字体适配产物核验字体打开、整形与光栅。 */
 public final class PackagedFontScenario extends TestApplication {
     private URLClassLoader loader;
     private Class<?> sessionType, faceType, directionType;

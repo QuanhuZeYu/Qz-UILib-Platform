@@ -17,7 +17,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import club.heiqi.uilib.ui.media.MediaSource;
 
-/** 真实HTTP/Range媒体，要求调用方声明的头；供native与Desktop共享，不连接公网。 */
+/** 提供要求声明请求头的本地HTTP/Range媒体，供native与Desktop共享。 */
 public final class MediaNetworkFixture implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService worker;

@@ -383,7 +383,7 @@ public final class MathGlScenario extends TestApplication {
                                 require(
                                         glyph.source != null && glyph.inkBounds.known,
                                         "未取得真实nativeglyph墨迹facts");
-                                // 真实像素区域消费同代文字投影；smash/lap的raw原点不一定是Scene原点。
+                                // smash/lap按同代scene文字投影定位真实像素区域。
                                 int projectedLine = 0;
                                 for (MathLayout.TextPiece piece : layout.pieces) {
                                     if (piece == numerator) break;
@@ -433,7 +433,7 @@ public final class MathGlScenario extends TestApplication {
                                 LayoutBox hiddenClip =
                                         page.pipeline().current().geometry.get(hiddenImage).clip;
                                 require(regions[3].intersect(hiddenClip).width == 0, "隐藏图像并未实际裁剪");
-                                // 这些区域由同代几何给出且上下行分离，不能由其它glyph/图像冒充命中。
+                                // 同代几何为上下行分别提供互斥区域，独立核验各glyph/图像。
                                 require(
                                         !overlap(regions[0], regions[1])
                                                 && !overlap(regions[0], regions[2]),
@@ -979,7 +979,7 @@ public final class MathGlScenario extends TestApplication {
         saveEvidence();
     }
 
-    /** 真实回归：直线中段亮度应恒定，根号短横到长横不能有背景列或上下台阶。 */
+    /** 核验直线中段亮度恒定，以及根号延长横线的覆盖率连续性。 */
     private void lineSeamPixels() throws Exception {
         String[] formulas = {
             tex("@sqrt{@dfrac{1}{@dfrac{1}{@dfrac{@embed{ore}}{1+x}}}}"),
@@ -1080,7 +1080,7 @@ public final class MathGlScenario extends TestApplication {
                                         }
                                         require(first >= 0 && last - first > em, "求值线未产生可验证像素");
                                         int low = 255, high = 0;
-                                        // 两端的正常滤波衰减不计入恒定中段；覆盖所有部件接点。
+                                        // 恒定中段取两端滤波衰减之间的区域，包含所有部件接点。
                                         for (int y = first + 2; y <= last - 2; y++) {
                                             low = Math.min(low, peaks[y]);
                                             high = Math.max(high, peaks[y]);
@@ -1133,7 +1133,7 @@ public final class MathGlScenario extends TestApplication {
                                             }
                                             require(peak > background + 10, "根号原顶横接点存在背景列: " + x);
                                         }
-                                        // 比较整条覆盖度纵向向量，避免只看峰值而漏掉接点双alpha或上下台阶。
+                                        // 比较完整纵向覆盖度向量，核验接点alpha与上下位置连续。
                                         require(vectorDiff <= 1, "根号延长横线改变原覆盖度向量: " + vectorDiff);
                                         evidence.append("line-seam radical em=")
                                                 .append(em)
@@ -1173,7 +1173,7 @@ public final class MathGlScenario extends TestApplication {
         for (int y = 0; y < area.height; y++)
             for (int x = area.x; x < area.x + area.width; x++) {
                 int pixel = rendered.getRGB(x, area.y + y);
-                // 白色真实数学字形，不把背景或中性红色Item算作连接像素。
+                // 连接像素取白色数学字形，按通道范围与背景、红色Item区分。
                 if (((pixel >> 16) & 255) > 80 && ((pixel >> 8) & 255) > 80 && (pixel & 255) > 80) {
                     rows[y] = true;
                     pixels++;

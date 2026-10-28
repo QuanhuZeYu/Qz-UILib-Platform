@@ -17,7 +17,7 @@ final class DesktopGalleryResult {
         return new DesktopGalleryResult(result);
     }
 
-    /** 只能在应用run正常返回后调用，不放入finally或资源close中。 */
+    /** 应用run及资源清理全部成功返回后写入通过结果。 */
     void passed() throws IOException {
         Files.write(result,"PASS sharedJourney actualGLFWCallbacks actualImagePixels resourceReload close\n"
                 .getBytes(StandardCharsets.UTF_8));

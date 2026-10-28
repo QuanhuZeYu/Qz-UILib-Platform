@@ -26,7 +26,7 @@ import club.heiqi.uilib.ui.scene.text.TextLayout;
 import club.heiqi.uilib.ui.scene.text.TextStyle;
 import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 
-/** 真实 FT/HB → 正式页面 pointer → 实际 caret 绘制；不复制控件命中算法。 */
+/** 通过真实FT/HB、正式页面pointer与实际caret绘制核验双向文字命中。 */
 public final class BidiEditingScenario extends TestApplication {
     private FontTextService fonts;
     private static final class Host implements SceneHost {
@@ -146,7 +146,7 @@ public final class BidiEditingScenario extends TestApplication {
         for (boolean multi : new boolean[] {false, true})
             for (String text : new String[] {"abc אבג def", "abc العربية def"}) {
                 Page p = new Page(text, multi);
-                // 空格末端是 LTR/RTL 交界的独立真实字体边界，旧实现在此跳到RTL起边。
+                // 空格末端属于LTR/RTL交界的独立字体边界，点击后应保留其视觉归属。
                 require(!p.cluster(3, 4).rtl && p.cluster(4, 5).rtl, "反例必须实际跨方向");
                 p.click(3, 4, false);
                 require(p.snapshot().caret == 4 && p.snapshot().anchor == 4, "逻辑定位必须仍是UTF16 4");

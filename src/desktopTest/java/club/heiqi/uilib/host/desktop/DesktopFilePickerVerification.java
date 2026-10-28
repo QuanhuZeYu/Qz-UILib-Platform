@@ -157,7 +157,7 @@ public final class DesktopFilePickerVerification extends TestApplication {
                     SceneNode pathField = field(window, "输入目录或文件路径");
                     Path first = directory.resolve(existing ? "条目 000.ViDeO" : "不存在的待核验文件.ViDeO");
                     String laterDraft = directory.resolve("尚未确认的新路径.ViDeO").toString();
-                    // 每例重新打开，未点击任何列表条目；只手输 A，避免旧选择的通用反馈掩盖请求反馈。
+                    // 每例重开后直接输入A，以独立草稿核验请求反馈。
                     type(window, input, pathField, first.toString());
                     require(first.toString().equals(editText(window, pathField)), "手输 A 未成为当前草稿");
                     int cancelledBefore = page.cancelledCalls;
@@ -220,7 +220,7 @@ public final class DesktopFilePickerVerification extends TestApplication {
                 "文件行提示未完整绘制名称、类型、大小与修改时间：" + name);
         input.point(window.width() - 2, window.height() - 2); DesktopTestFrames.finitePresentations(window);
         evidence(window, list, pathField, search, name, minimumRatio, minimumRows);
-        // 同一搜索框跨宽度变化保留真实焦点与草稿，查询完成也不能把焦点送去列表。
+        // 宽度变化与查询完成后，同一搜索框继续持有焦点和草稿。
         type(window, input, search, "149"); key(window, input, GLFW_KEY_ENTER, 0);
         await(window, () -> text(window, "条目 149.ViDeO") && !text(window, "条目 000.ViDeO"), "边界搜索失败：" + name);
         require(focused(window) == search, "边界搜索抢走焦点：" + name);
@@ -244,7 +244,7 @@ public final class DesktopFilePickerVerification extends TestApplication {
             footerControls.add(action(view, modal, action));
         java.util.List<SceneNode> controls = new java.util.ArrayList<>(headerControls);
         controls.addAll(footerControls);
-        // 面板由列表及真实操作的共同几何归属决定，内部布局类与组合层数不构成验证合同。
+        // 按列表与实际操作控件的共同祖先确定面板几何。
         SceneNode panelNode = list;
         for (SceneNode control : controls)
             while (panelNode != null && !within(control, panelNode)) panelNode = panelNode.parent();

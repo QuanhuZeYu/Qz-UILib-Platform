@@ -22,7 +22,7 @@ import java.nio.file.Paths;
 import java.util.Collections;
 import javax.imageio.ImageIO;
 
-/** 真实隐藏GLFW窗口及已安装回调；不移动系统鼠标，也不直接调用控件动作。 */
+/** 在真实隐藏GLFW窗口注入已安装回调，核验正式投放与排序流程。 */
 public final class DesktopDropSortVerification extends TestApplication {
     private final Path output;
     private DesktopDropSortVerification(Path output) { this.output = output; }
@@ -86,7 +86,7 @@ public final class DesktopDropSortVerification extends TestApplication {
             source = SceneDraggable.create(ctx, body, state, options);
             if (releaseProbe != null) source.bind((runtime, node, owner) -> {
                 owner.own(runtime.observeGeometry(node, view -> {
-                    // 输入先准备当批几何，整页 paint 留到回放；不能以历史 paint 判断 UP 的最终 Entry。
+                    // 输入准备当批几何，UP最终Entry取该几何；整页paint在回放阶段生成。
                     releaseProbe.entry = view == null ? null : view.get(releaseProbe.overlay ? preview : body);
                 }));
                 return new club.heiqi.uilib.ui.scene.runtime.BindingActivation() {
@@ -157,7 +157,7 @@ public final class DesktopDropSortVerification extends TestApplication {
                     new SceneNode().size(Size.fixed(40), Size.fixed(40)).background(0xffffbb88));
             SceneNode current = SceneDroppable.create(ctx, scope[0], "current-box",
                     new SceneNode().size(Size.fixed(40), Size.fixed(40)).background(0xff99ddbb));
-            // 两个普通流目标有独立固定位置；缩窗后旧盒只在视口外，不能继续接收。
+            // 两个普通流目标独立定位，缩窗后视口外目标退出接收候选。
             ctx.mountOwned(new SceneNode().size(Size.fixed(1100), Size.fixed(650))
                     .add(new SceneNode().size(Size.fixed(1), Size.fixed(540)))
                     .add(new SceneNode().axis(SceneNode.Axis.ROW).size(Size.fixed(1100), Size.fixed(40))
@@ -206,7 +206,7 @@ public final class DesktopDropSortVerification extends TestApplication {
         return a != null && b != null && a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
     }
 
-    /** 只观察同批正式几何，绘制只消费该几何，不参与生产位置求解。 */
+    /** 读取同批正式几何并据此绘制探针标记。 */
     private static final class ReleaseGeometryProbe implements club.heiqi.uilib.ui.scene.control.SceneControl {
         final boolean overlay;
         club.heiqi.uilib.ui.scene.layout.SceneGeometryView.Entry entry;
@@ -251,7 +251,7 @@ public final class DesktopDropSortVerification extends TestApplication {
                 LayoutBox parent = geometry(w, page.source.parent()).box;
                 expectedY = Math.min(expectedY, parent.y + parent.height - start.height);
             }
-            // 直接递交公开 UP；不调用 cursor/point，也不在 UP 前补 MOVE。
+            // 直接递交携带新坐标的公开UP，核验释放时重新定位。
             w.page.pointer(club.heiqi.uilib.ui.scene.input.ScenePointerEvent.up(0, x, y));
             w.frame();
             require(page.drops == 1 && "B".equals(page.last), "UP 新坐标仍按旧 A 接收：" + page.last);
@@ -262,7 +262,7 @@ public final class DesktopDropSortVerification extends TestApplication {
             require(page.finalDrag != null && page.finalDrag.deltaX == expectedX - start.x
                     && page.finalDrag.deltaY == expectedY - start.y, "UP 有效 delta 与当前 Entry 不同");
             require(page.releaseX == x && page.releaseY == y, "POINTER 接收点未使用 UP 新坐标");
-            // 宿主采集状态仍由其实际 RELEASE 清理；重复 UP 不得再投放。
+            // 宿主状态在实际RELEASE时清理，重复UP保持单次投放结果。
             release(w, input); require(page.drops == 1 && !active(w, page), "直接 UP 后物理尾部重复提交");
             require(glGetError() == GL_NO_ERROR, "无MOVE-UP真实 GPU 回放异常");
             System.out.println("DROP_UP_ONLY collision=" + collision + " overlay=" + overlay + " bounds=" + bounds
@@ -277,7 +277,7 @@ public final class DesktopDropSortVerification extends TestApplication {
             DesktopTestInput input = new DesktopTestInput(w);
             pickup(w, input, page.source); pointAt(w, input, page.first, page.scope);
             w.domain.execute(() -> page.accept.set(false)); w.frame();
-            // 接收重判沿输入周期推进；呈现帧不限频，必须等待实际状态，不假定一帧已跨过采样门。
+            // 沿输入周期驱动帧，等待接收重判的实际状态。
             await(w, () -> over(w, page) == null, "静止指针下接收规则变化未失效"); release(w, input);
             require(page.drops == 0, "失格接收区仍提交");
             w.domain.execute(() -> page.accept.set(true)); w.frame();
@@ -325,7 +325,7 @@ public final class DesktopDropSortVerification extends TestApplication {
             key(w, input, GLFW_KEY_SPACE); key(w, input, GLFW_KEY_RIGHT); key(w, input, GLFW_KEY_ESCAPE);
             require(page.drops == 1 && !active(w, page), "键盘取消误投放");
             key(w, input, GLFW_KEY_ENTER);
-            // 验证真实键盘可达，不把拾取时已有候选误算成固定的按键次数。
+            // 按实际候选持续导航，核验部分裁剪目标的键盘可达性。
             int remaining = geometry(w).ordered().size();
             while (!"clipped".equals(over(w, page)) && remaining-- > 0) key(w, input, GLFW_KEY_RIGHT);
             require("clipped".equals(over(w, page)), "部分裁剪接收区未保持键盘可达：" + over(w, page));
@@ -435,7 +435,7 @@ public final class DesktopDropSortVerification extends TestApplication {
     }
     private static void move(DesktopWindow w, DesktopTestInput input, int x, int y, SceneDragDrop<?> scope) {
         move(w, input, x, y);
-        // 一个呈现帧不保证跨过连续输入采样门；只等坐标到达，不等待目标选择成功。
+        // 持续驱动帧至连续输入坐标到达，目标选择结果另行核验。
         boolean[] consumed = {false};
         await(w, () -> {
             w.domain.execute(() -> {

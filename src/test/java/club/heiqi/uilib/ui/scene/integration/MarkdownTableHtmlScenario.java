@@ -47,8 +47,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * ../Qz-UILib-Core/specs/content/uilib-markdown-spec.md 第 2、4 节 表格/HTML 的阅读和输入回归。期望来自固定 markdown-it14.2 与 jsoup1.19.1
- * 的实际研究证据及规格，手写语义断言，不把生产输出转成期望或结构快照。 真实字体场景使用共同 scene；不冒充宿主 GL 或双实例部署验收。
+ * 核验表格/HTML的阅读与输入。独立期望来自固定markdown-it14.2、jsoup1.19.1与正式Markdown规格；
+ * 真实字体场景通过共同scene执行语义断言。
  */
 public final class MarkdownTableHtmlScenario extends TestApplication {
     private static final TextStyle BASE = new TextStyle("default", 22, 0xffabcdef);
@@ -102,7 +102,7 @@ public final class MarkdownTableHtmlScenario extends TestApplication {
         List<String> failures = new ArrayList<>();
         for (Map<String, Object> item : (List<Map<String, Object>>) corpus.get("cases")) {
             String id = (String) item.get("id"), source = (String) item.get("source");
-            // 固定扩展把首行quote内部也误作frontmatter并报YAML错；不以吞容器正文作为验收。
+            // quote内首行按正文合同核验，固定扩展在该输入上会误报frontmatter YAML错。
             if (id.equals("quote_front")) continue;
             try {
                 org.jsoup.nodes.Document expected =
@@ -151,7 +151,7 @@ public final class MarkdownTableHtmlScenario extends TestApplication {
                                     id + " YAML错误吞掉后续正文");
                     } else if (item.get("frontMatter") != null)
                         for (TextLayout.Diagnostic diagnostic : doc.diagnostics()) {
-                            // CommonMark输入NUL已有INVALID_INPUT合同，frontmatter消费不撤销原文诊断。
+                            // frontmatter消费后仍保留原输入NUL的INVALID_INPUT诊断。
                             require(
                                     source.indexOf(0) >= 0
                                             && diagnostic.kind
@@ -852,7 +852,7 @@ public final class MarkdownTableHtmlScenario extends TestApplication {
                         wheel[1] = box.y + box.height / 2;
                         targetPoint(link[0], g, point);
                     });
-            // 使用该页面实际声明，而不是另一次parse的同值链接作为输入身份。
+            // 以当前页面实际声明的链接作为输入身份。
             long[] measureBefore = new long[1];
             f.domain.execute(() -> measureBefore[0] = f.page.runtime().measureRevision());
             f.page.pointer(ScenePointerEvent.down(0, point[0], point[1]));

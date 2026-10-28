@@ -57,7 +57,7 @@ import club.heiqi.uilib.ui.scene.text.TextPolicy;
 import club.heiqi.uilib.ui.scene.text.font.glyph.GlyphKey;
 import static org.lwjgl.opengl.GL32C.*;
 
-/** 不启动MC，使用生产共享owner/scene pipeline/GLconsumer验证原生像素与生命周期。 */
+/** 通过生产共享owner、scene pipeline与GL consumer验证独立宿主的原生像素和生命周期。 */
 public final class ClientFontServicesScenario extends TestApplication {
     private static final int W = 301, H = 181;
 
@@ -243,7 +243,7 @@ public final class ClientFontServicesScenario extends TestApplication {
         TextLayout warm = owner.fonts().layout("中文 e\u0301 👩🏽‍💻", style, W);
         if (owner.hasGlResources() || owner.rasterizer().stats().started)
             throw new AssertionError("measure启动GL/worker");
-        // facade必须保留字体相关意图解析；公式直接消费这个入口，不会再由layout补解析。
+        // 公式直接消费facade解析结果，字体意图须在该入口完整结算。
         for (TextScript intent :
                 new TextScript[] {
                     TextScript.NONE.appendEm(9),
@@ -703,7 +703,7 @@ public final class ClientFontServicesScenario extends TestApplication {
             final ScenePresentation[] rendered = {null};
             boolean tooltip;
             deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
-            // MOVE沿正式输入采样门推进；渲染加快后，紧邻首帧不保证已经消费这次移动。
+            // MOVE沿正式采样门推进，持续驱动帧至该输入结算。
             do {
                 clear();
                 page.frame();
@@ -737,7 +737,7 @@ public final class ClientFontServicesScenario extends TestApplication {
         }
     }
 
-    /** 新页面只借用共享字体owner，不取得screen或编辑状态的所有权。 */
+    /** 新页面借用共享字体owner，页内编辑状态沿本地作用域管理。 */
     private final class FieldFixture implements AutoCloseable {
         final ReactiveDomain local = ReactiveDomain.direct();
         final SceneEditState[] state = {null};
@@ -877,7 +877,7 @@ public final class ClientFontServicesScenario extends TestApplication {
                             && entry.text.lines().stream()
                                     .anyMatch(line -> !line.glyphs().isEmpty()),
                     "字段未使用真实整形glyph");
-            // FBO中必须有正文墨迹，不能仅凭PaintCommand出现便声称GPU文字绘制成功。
+            // 通过FBO正文区域的真实墨迹核验GPU文字绘制。
             int ink = 0;
             for (int y = inner.y; y < inner.y + inner.height; y++)
                 for (int x = inner.x; x < inner.x + inner.width; x++) {
@@ -1089,7 +1089,7 @@ public final class ClientFontServicesScenario extends TestApplication {
         }
     }
 
-    /** 共用真实owner/页面/FBO；仅声明页面及观测，未另建编辑器或输入路由。 */
+    /** 通过真实owner、页面与FBO声明并观测正式编辑和输入流程。 */
     private final class AreaFixture implements AutoCloseable {
         final ReactiveDomain local = ReactiveDomain.direct();
         final SceneEditState[] state = {null};

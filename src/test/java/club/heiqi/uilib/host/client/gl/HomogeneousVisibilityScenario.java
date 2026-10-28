@@ -6,7 +6,7 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 
-/** 数值边界直接执行生产齐次可见性；不创建GL，不以屏幕AABB代替多边形裁剪。 */
+/** 在CPU执行生产齐次多边形裁剪，核验可见性的数值边界。 */
 public final class HomogeneousVisibilityScenario {
     private static FontRenderContext context(boolean scissor, int[] rect) {
         float[] m = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};

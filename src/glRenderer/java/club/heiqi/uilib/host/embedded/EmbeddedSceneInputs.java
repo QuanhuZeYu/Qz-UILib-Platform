@@ -51,7 +51,7 @@ public final class EmbeddedSceneInputs {
         keypadEnter = new SceneKeyPressInputAdapter(() -> keys.key(event(SceneKey.KEYPAD_ENTER)));
         space = new SceneKeyPressInputAdapter(() -> keys.key(event(SceneKey.SPACE)));
     }
-    /** 不访问runtime或本地键盘状态；请求从调用线程进入原session有序队列。 */
+    /** 将调用线程的语义请求递交原session有序队列。 */
     public CompletableFuture<SceneSemanticRequest.Result> semantic(SceneSemanticRequest request) {
         return page.semantic(request);
     }
@@ -68,10 +68,10 @@ public final class EmbeddedSceneInputs {
         edits.availability(available); keys.availability(available); tab.availability(available); escape.availability(available);
         enter.availability(available); keypadEnter.availability(available); space.availability(available);
     }
-    /** 消费者完成本批历史后调用，不能用采集前的未来物理状态越过旧尾部。 */
+    /** 消费者耗尽本批历史后递交当时的物理释放事实。 */
     public void historyDrained(Set<Integer> physical, Set<Key> special, boolean buttonsReleased) {
         edits.historyDrained(physical);
-        // 旧消费者的special可只含导航键；已见过的编辑键仍按其原物理码确认释放。
+        // special集合可仅含导航键，已登记编辑键沿原物理码确认释放。
         physicalKeys.keySet().retainAll(physical);
         Set<SceneKey> named = EnumSet.noneOf(SceneKey.class);
         named.addAll(physicalKeys.values());

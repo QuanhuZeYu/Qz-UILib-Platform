@@ -31,7 +31,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/** 持有字体内存的固定字号 face；仅在所属服务的创建线程使用。无平台 GUI 依赖。 */
+/** 持有字体内存的固定字号 face；在所属服务的创建线程使用和释放。 */
 public final class NativeFontFace implements FontFace {
     private final NativeFontService owner;
     private ByteBuffer bytes;
@@ -100,7 +100,7 @@ public final class NativeFontFace implements FontFace {
                 }
             // 可缩放字体按 em 设置；纯 bitmap 字体选择最接近请求字号的真实 strike。
             if ((face.face_flags() & FreeType.FT_FACE_FLAG_SCALABLE) != 0) {
-                // FT将小于1pt的字符尺寸提升到1pt；按真正请求值归一，避免小字号仍显示1px。
+                // FT将小于1pt的字符尺寸提升到1pt；pixelScale将度量与像素归一到请求字号。
                 long requestedSize = Math.max(64L, Math.round(emSize * 64.0));
                 NativeFontService.check(
                         FreeType.FT_Set_Char_Size(face, 0, requestedSize, 72, 72),
@@ -171,7 +171,7 @@ public final class NativeFontFace implements FontFace {
             long actualFace = HarfBuzz.hb_font_get_face(font);
             for (int i = 0; i < count.get(0); i++) {
                 int tag = tags.get(i);
-                // 必须命中实际脚本记录；DFLT 回退或 cmap 非空不能证明复杂脚本布局能力。
+                // 以实际GSUB/GPOS脚本记录确认复杂脚本布局能力。
                 if (tag != OpenType.HB_OT_TAG_DEFAULT_SCRIPT
                         && (OpenType.hb_ot_layout_table_find_script(
                                         actualFace, OpenType.HB_OT_TAG_GSUB, tag, index)
@@ -185,11 +185,11 @@ public final class NativeFontFace implements FontFace {
     @Override
     public boolean hasColorGlyph(int glyphId) {
         checkOpen();
-        // 稳定替代也查询 .notdef；数学端口的正 glyph ID 限制不适用于呈现事实。
+        // 呈现事实包含稳定替代 .notdef，允许查询 glyph ID 0。
         if (glyphId < 0 || glyphId >= face.num_glyphs())
             throw new IllegalArgumentException("Invalid glyph ID");
         if ((face.face_flags() & FreeType.FT_FACE_FLAG_COLOR) == 0) return false;
-        // 只读取当前实际 strike 的格式和尺寸，禁止解码 bitmap 像素或执行 FT_Render_Glyph。
+        // 通过当前strike的格式和尺寸查询彩色能力，像素生成归光栅入口。
         NativeFontService.check(
                 FreeType.FT_Load_Glyph(
                         face, glyphId, FreeType.FT_LOAD_COLOR | FreeType.FT_LOAD_BITMAP_METRICS_ONLY),
@@ -199,7 +199,7 @@ public final class NativeFontFace implements FontFace {
             return slot.bitmap().pixel_mode() == FreeType.FT_PIXEL_MODE_BGRA
                     && slot.bitmap().width() > 0
                     && slot.bitmap().rows() > 0;
-        // 当前 FT_Render_Glyph 管线可呈现 COLR v0；SVG/COLR v1 不能仅凭全局 color 标记冒充支持。
+        // 当前FT_Render_Glyph管线以实际COLR v0图层确认彩色呈现能力。
         try (MemoryStack stack = MemoryStack.stackPush()) {
             return FreeType.FT_Get_Color_Glyph_Layer(
                     face, glyphId, stack.mallocInt(1), stack.mallocInt(1),
@@ -207,7 +207,7 @@ public final class NativeFontFace implements FontFace {
         }
     }
 
-    /** 墨迹的保守像素界，用于需求裁剪；不执行FT_Render_Glyph或生成像素缓存。 */
+    /** 从字形度量取得保守像素界，供需求裁剪使用。 */
     public InkBounds glyphInkBounds(int glyphId) {
         return glyphInkBounds(glyphId, GlyphRasterStyle.NORMAL);
     }
@@ -244,7 +244,7 @@ public final class NativeFontFace implements FontFace {
                     (slot.bitmap_left() + slot.bitmap().width()) * pixelScale,
                     (-slot.bitmap_top() + slot.bitmap().rows()) * pixelScale);
         }
-        // COLR/SVG等字形的paint可能伸出outline metrics，未验证格式不得用经验界裁掉。
+        // COLR/SVG的paint可能伸出outline metrics，按未知边界保留需求。
         if (slot.format() != FreeType.FT_GLYPH_FORMAT_OUTLINE
                 || (face.face_flags() & FreeType.FT_FACE_FLAG_COLOR) != 0) return InkBounds.UNKNOWN;
         org.lwjgl.util.freetype.FT_Glyph_Metrics m = slot.metrics();
@@ -308,7 +308,7 @@ public final class NativeFontFace implements FontFace {
         float unit = pixelScale / 64f;
         float top = Float.POSITIVE_INFINITY, right = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < outline.n_points(); i++) top = Math.min(top, -points.get(i).y() * unit);
-        // slot metrics 是像素包络，不能用其 top+rule 截纹理；从真实 hinted 水平轮廓边找横线。
+        // 从真实hinted水平轮廓边定位横线，保持其相对像素包络的实际位置。
         int start = 0;
         for (int contour = 0; contour < outline.n_contours(); contour++) {
             int end = contours.get(contour);
@@ -329,7 +329,7 @@ public final class NativeFontFace implements FontFace {
                 if ((tags.get(i) & 3) != 1 || (tags.get(j) & 3) != 1) continue;
                 float y = -points.get(i).y() * unit;
                 float x1 = points.get(i).x() * unit, x2 = points.get(j).x() * unit;
-                // MATH 常量与 FT hint 后边有最多两个 26.6 单位的量化差，不能假定字体像素位置。
+                // MATH常量与FT hint后轮廓边的匹配允许两个26.6单位的量化差。
                 if (y != -points.get(j).y() * unit
                         || Math.abs(y - top - rule) > 2 * unit
                         || Math.max(x1, x2) != right) continue;
@@ -358,9 +358,9 @@ public final class NativeFontFace implements FontFace {
     }
 
     /**
-     * 只 shape [start,end)，完整 text 为前后文。边界及 cluster 为原串 UTF-16 索引，不能切开代理对。 script 为可空 ISO 15924
-     * 标记；空时 HB 猜测。beginning/endOfText 指真正文本边界，非普通 run 边界。 输出保持 HB 顺序和向上为正的 Y；所有 advance/offset 均为请求
-     * emSize 下的浮点单位。
+     * shape [start,end)，完整text提供前后文。边界及cluster使用完整代理对边界上的原串UTF-16索引。
+     * script为可空ISO 15924标记，空时由HB推断；beginning/endOfText标记完整文本边界。
+     * 输出保持HB顺序和向上为正的Y；advance/offset使用请求emSize下的浮点单位。
      */
     public ShapeRun shape(
             String text,
@@ -426,7 +426,7 @@ public final class NativeFontFace implements FontFace {
         long buffer = HarfBuzz.hb_buffer_create();
         if (buffer == 0) throw new IllegalStateException("Cannot create HarfBuzz buffer");
         try {
-            // HB 在 add 时复制本 run 及必要前后文，不保留准备上下文的 native 地址。
+            // HB在add时复制本run及必要前后文，数据归当前HB buffer持有。
             HarfBuzz.hb_buffer_add_utf16(buffer, utf16, start, end - start);
             HarfBuzz.hb_buffer_set_direction(
                     buffer,
@@ -483,7 +483,7 @@ public final class NativeFontFace implements FontFace {
         checkMath();
         if (constant < 0 || constant > 55) throw new IllegalArgumentException("无效 MATH 常量编号");
         int value = org.lwjgl.util.harfbuzz.OpenType.hb_ot_math_get_constant(font, constant);
-        // 三个百分比是无量纲整数，HB 不按 font scale 缩放，不能按 26.6 位置量除64。
+        // 三个百分比保留HB返回的无量纲整数；其余常量按26.6位置量缩放。
         return constant == 0 || constant == 1 || constant == 55
                 ? value
                 : value * (pixelScale / 64.0f);
@@ -507,7 +507,7 @@ public final class NativeFontFace implements FontFace {
                     org.lwjgl.util.harfbuzz.OpenType.hb_ot_math_get_glyph_variants(
                             font, glyphId, direction, 0, count, null);
             if (total == 0) return Collections.emptyList();
-            // 数据先复制到 Java 值；返回结果不持有 stack 或被 LRU 关闭的 face。
+            // 返回独立Java值，native缓冲与face按各自作用域释放。
             try (org.lwjgl.util.harfbuzz.hb_ot_math_glyph_variant_t.Buffer variants =
                     org.lwjgl.util.harfbuzz.hb_ot_math_glyph_variant_t.malloc(total)) {
                 count.put(0, total);
@@ -550,7 +550,7 @@ public final class NativeFontFace implements FontFace {
                 count.put(0, total);
                 org.lwjgl.util.harfbuzz.OpenType.hb_ot_math_get_glyph_assembly(
                         font, glyphId, direction, 0, count, parts, italic);
-                // HB 保留 OpenType 记录顺序：横向左到右、竖向底到顶，不因方向反转。
+                // HB按OpenType记录顺序返回部件：横向左到右，竖向底到顶。
                 for (int i = 0; i < count.get(0); i++) {
                     org.lwjgl.util.harfbuzz.hb_ot_math_glyph_part_t part = parts.get(i);
                     result.add(
@@ -582,7 +582,7 @@ public final class NativeFontFace implements FontFace {
         checkGlyph(glyphId);
         if (!hasMathData()) return Float.NaN;
         if (topAccentGlyphs == null) topAccentGlyphs = readTopAccentCoverage();
-        // HB 对未覆盖字形会返回半个横向 advance；它是默认策略，不是真实附件点记录。
+        // 仅覆盖表中的字形具有真实附件点；HB对其余字形返回默认半advance。
         if (!topAccentGlyphs.get(glyphId)) return Float.NaN;
         return org.lwjgl.util.harfbuzz.OpenType.hb_ot_math_get_glyph_top_accent_attachment(
                         font, glyphId)
@@ -607,7 +607,7 @@ public final class NativeFontFace implements FontFace {
             int coverageOffset = data.getShort(attachment) & 65535;
             if (coverageOffset == 0) return covered;
             int valueCount = data.getShort(attachment + 2) & 65535;
-            // 核查整个 MathValueRecord 数组，不能把只有 coverage 的损坏表视为有效数据。
+            // 核查完整MathValueRecord数组后再发布有效coverage。
             if ((long) attachment + 4 + (long) valueCount * 4 > data.limit())
                 throw new UnsupportedOperationException("MATH top-accent 记录越界");
             int coverage = attachment + coverageOffset;
@@ -661,7 +661,7 @@ public final class NativeFontFace implements FontFace {
                 && Character.isLowSurrogate(text.charAt(index));
     }
 
-    /** 灰度/mono 输出白色 premultiplied coverage；BGRA 保留原生 premultiplied 颜色并重排为 RGBA。 */
+    /** 灰度/mono输出单通道覆盖率；BGRA保留原生premultiplied颜色并重排为RGBA。 */
     public GlyphBitmap rasterize(int glyphId) {
         return rasterize(glyphId, GlyphRasterStyle.NORMAL);
     }

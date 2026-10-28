@@ -273,7 +273,7 @@ public final class MathArrayScenario extends TestApplication {
                         MathStyle.TEXT);
         healthy(shortRows);
         require(shortRows.embeds.size() == 4, "短行/空cell丢失内容");
-        // 完整行交接必须区分内部整空行与环境末尾整空行，不能统一按空内容丢弃。
+        // 完整行交接分别处理内部整空行与环境末尾整空行。
         String adjacentRows = "@begin{matrix}@embed{a}@@@embed{b}";
         MathLayout adjacent = layout(adjacentRows + "@end{matrix}", em, MathStyle.TEXT);
         MathLayout trailing = layout(adjacentRows + "@@@end{matrix}", em, MathStyle.TEXT);

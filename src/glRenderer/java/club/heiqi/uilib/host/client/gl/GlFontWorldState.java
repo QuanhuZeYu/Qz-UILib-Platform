@@ -5,9 +5,9 @@ import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 import club.heiqi.uilib.host.client.font.context.FontRenderContext;
 import java.util.Arrays;
 
-/** 短world范围的actual GL target/depth/lightmap保护；不改变GLSM有效缓存或固定矩阵。
- * typed RasterState恢复捕获的历史状态；null旧value合同保留回放现场实际stencil/color mask。
- * lightmap UV已由有效provider乘unit1 texture matrix，不能再乘一次。 */
+/** 保护短world范围的actual GL target/depth/lightmap，GLSM缓存与固定矩阵由宿主管理。
+ * typed RasterState应用提交时快照；null值沿用回放现场的stencil/color mask。
+ * lightmap UV由provider完成unit1 texture matrix变换，回放直接消费结果。 */
 final class GlFontWorldState implements AutoCloseable {
     private final GlApi gl;
     final FontRenderContext context;
@@ -50,8 +50,8 @@ final class GlFontWorldState implements AutoCloseable {
     }
 
     void applyIris() {
-        // 外部 Pass.use 按当前 program/阶段拥有目标与 blend overrides；历史 caller FBO
-        // 可属于另一 pass，不能用句柄相等约束或重新绑定它。viewport/depth/scissor 仍取提交快照。
+        // 外部Pass.use按当前program/阶段选择目标与blend overrides；
+        // viewport/depth/scissor取提交快照，FBO沿用当前pass。
         if (context.rasterState != null) GlFontRasterState.applyNonBlend(gl, context.rasterState);
         gl.glViewport(targetViewport[0], targetViewport[1], targetViewport[2], targetViewport[3]);
         gl.glDepthFunc(context.depthFunction);
@@ -66,8 +66,8 @@ final class GlFontWorldState implements AutoCloseable {
 
     void apply() {
         if (context.rasterState != null) {
-            // preview 为只读，typed 普通范围内也无外部 GL 写入。先选择配对差异恢复，
-            // 再做任何 setter；中途失败仍恢复整组原定差异，不能只恢复已完成的步骤。
+            // 进入态在只读 preview 前捕获，setter 前确定完整配对差异；
+            // 中途失败仍按原定差异整组恢复。
             rasterChanges = GlFontRasterState.changes(entryRaster, context.rasterState);
             differential = true;
             applyTyped(false);
@@ -108,7 +108,7 @@ final class GlFontWorldState implements AutoCloseable {
             gl.glBindTexture(GL_TEXTURE_2D, restore ? lightmapTexture : context.state.lightmapTexture);
         }
         if (samplerChanged) gl.glBindSampler(1, restore ? sampler : 0);
-        // close 也覆盖 Scope 自身清理中途失败，不能依赖它已恢复活动单元。
+        // close显式恢复活动单元，覆盖外层Scope清理中途失败的路径。
         if (textureChanged || restore) gl.glActiveTexture(restore ? unit : GL_TEXTURE0);
     }
 

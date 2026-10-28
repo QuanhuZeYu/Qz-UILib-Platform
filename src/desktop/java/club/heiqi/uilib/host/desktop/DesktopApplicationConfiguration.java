@@ -51,7 +51,7 @@ final class DesktopApplicationConfiguration implements AutoCloseable {
         });
     }
 
-    /** worker 只处理不可变声明与文档；不创建状态域、Signal、主题或资源。 */
+    /** worker按不可变声明读写配置文档，状态域、Signal与资源由owner装配。 */
     ConfigDocument prepare(List<FontSource> defaults) throws IOException {
         checkDeclaration(defaults);
         if (Files.exists(path)) return ConfigDocument.read(schema, path);
@@ -68,7 +68,7 @@ final class DesktopApplicationConfiguration implements AutoCloseable {
             throw new IllegalArgumentException("桌面配置默认字体声明不一致");
     }
 
-    /** 字体和文档准备完成后由 owner 装配；这里不执行文件或字体 I/O。 */
+    /** owner消费已准备的字体声明与文档，装配配置会话和应用投影。 */
     void initialize(List<FontSource> defaults, ConfigDocument document,
             Function<List<String>, CompletableFuture<Void>> validate, Runnable resourcesReloaded) {
         Objects.requireNonNull(resourcesReloaded, "resourcesReloaded");
@@ -78,7 +78,7 @@ final class DesktopApplicationConfiguration implements AutoCloseable {
             owner = domain.owner();
             session = new ConfigSession(domain, schema);
             session.publish(document);
-            // 文档发布后才建立应用投影与真实文件基线，页面关闭不结束这些对象。
+            // 文档发布后建立应用投影与真实文件基线，生命周期归窗口配置owner。
             theme = new ThemeConfiguration(domain, session, owner);
             scroll = new ScrollConfiguration(domain, session, owner);
             settings = SettingsConfiguration.withAsyncValidation(domain, session, fontCandidates, null, path,

@@ -18,9 +18,9 @@ import club.heiqi.uilib.ui.scene.text.font.FontFamilyResolver;
 import club.heiqi.uilib.ui.scene.text.font.FontResources;
 import club.heiqi.uilib.ui.scene.text.font.FontSource;
 
-/** 客户端资源 owner 的字体准备 worker；只产生 bytes/metadata，绝不打开 native 或访问状态域。
+/** 字体准备worker生成bytes/metadata，native与状态域由客户端资源owner操作。
  * 每个 Sources 的完整资源只准备一次，紧接着的 validate/apply 共用同一候选 future。
- * 完成回调由宿主的真实 owner executor 递交；本对象不把 ReactiveDomain.direct 当作线程切换。
+ * 完成回调经宿主owner executor回到所属线程。
  */
 public final class FontResourcePreparation implements AutoCloseable {
     public static final class Sources {

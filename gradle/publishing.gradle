@@ -146,7 +146,7 @@ publishing {
 tasks.withType(PublishToMavenRepository).matching { it.repository?.name == 'Workspace' || it.repository?.name == 'ReleaseStage' }.configureEach {
     doFirst { if (repository.url.scheme != 'file') throw new GradleException('publishWorkspace 只写入显式本地 Maven 目录') }
 }
-// Central 与本地 ZIP 共用这一套签名入口；没有密钥时本地 build/releaseAssets 保持可用。
+// Central与本地ZIP共用显式签名配置；本地build/releaseAssets也支持无密钥运行。
 def signingInMemoryKey = findProperty('signingInMemoryKey') ?: findProperty('signingKey') ?: System.getenv('ORG_GRADLE_PROJECT_signingInMemoryKey') ?: System.getenv('SIGNING_KEY')
 def signingInMemoryKeyId = findProperty('signingInMemoryKeyId') ?: System.getenv('ORG_GRADLE_PROJECT_signingInMemoryKeyId')
 def signingInMemoryKeyPassword = findProperty('signingInMemoryKeyPassword') ?: findProperty('signingPassword') ?: System.getenv('ORG_GRADLE_PROJECT_signingInMemoryKeyPassword') ?: System.getenv('SIGNING_PASSWORD') ?: ''
@@ -166,7 +166,7 @@ tasks.register('publishWorkspace') {
     group = 'publishing'; description = '将 Platform 正式双目标与独立验证产物写入本地 Maven 仓'
     dependsOn tasks.withType(PublishToMavenRepository).matching { it.repository?.name == 'Workspace' }
 }
-// 发布资产只取本次发布阶段目录，避免 build/distributions 的旧版本残留混入。
+// 发布资产从本次清空重建的Maven阶段目录归档。
 def prepareReleaseStage = tasks.register('prepareReleaseStage', Delete) {
     delete releaseStage
 }

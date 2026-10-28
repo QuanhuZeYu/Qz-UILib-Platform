@@ -6,7 +6,7 @@ import club.heiqi.uilib.host.client.gl.GlVideoResources;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** 最终成品的消费者只读桥；不创建owner、不触发native初始化，也不以总数代替逐字段证据。 */
+/** 从最终成品已有owner读取逐字段资源证据。 */
 public final class FinalMediaResources implements MediaStabilityVerification.Resources {
     @Override public Map<String,Long> nativeCounts() {
         MediaNativeResources value=IsolatedMediaAdapters.resources();

@@ -13,8 +13,8 @@ import club.heiqi.uilib.ui.scene.image.ImageContent;
 import club.heiqi.uilib.ui.scene.paint.PaintCommand;
 import club.heiqi.uilib.ui.scene.paint.PaintPlan;
 
-/** 独立共享图像纹理owner，不借glyph atlas。prepare上传，Frame固定内容与texture直到回放结束。
- * negative resource空间与glyph atlas分开；实际内容identity永不复用，reload不会将旧命令解释为新图。
+/** 持有独立共享图像纹理；prepare上传，Frame固定内容与texture至回放结束。
+ * negative resource空间独立于glyph atlas；每份内容使用唯一identity，reload后的新图使用新身份。
  */
 public final class GlImageResources implements GlQuadRenderer.ResourceProvider, AutoCloseable {
     private final Thread thread = Thread.currentThread();
@@ -99,7 +99,7 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
         return hostCapture.resolve(generation);
     }
 
-    /** 透明物品独立的临时GPU占用；不挤占普通图片的纹理/上传预算。 */
+    /** 返回透明物品合成面占用，其GPU预算独立于普通图片纹理与上传预算。 */
     public long retainedHostCaptureBytes() {
         check();
         return hostCapture.retainedBytes();
@@ -133,7 +133,7 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
         this(gl, maxTextures, maxBytes, uploadBytes, uploadCalls, listener, 32L * 1024 * 1024);
     }
 
-    /** 透明或新仿射/形状裁剪物品按需分配原合成面；预算包含RGBA8与深度/模板，旧不透明委托不分配。 */
+    /** 透明或带仿射/形状裁剪物品按需分配合成面，预算包含RGBA8与深度/模板；普通不透明物品直接委托。 */
     public GlImageResources(GlApi gl, int maxTextures, long maxBytes, long uploadBytes,
             int uploadCalls, Listener listener, long hostCaptureBytes) {
         if (uploadBytes < 4 || uploadCalls < 1) throw new IllegalArgumentException("无效上传预算");
@@ -152,7 +152,7 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
             throw new IllegalStateException("图像纹理owner已关闭或不在GL线程");
     }
 
-    /** 仅记录本次prepare的成功上传消耗，所有资源层共用，不随Frame保留。 */
+    /** 记录本次prepare各资源层的成功上传消耗，寿命限于当前准备过程。 */
     private static final class UploadBudget {
         long uploaded;
         int calls;
@@ -166,7 +166,7 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
         Set<Long> seen = new HashSet<>();
         try {
             UploadBudget budget = new UploadBudget();
-            // 共享PaintPlan主命令/成功覆盖层→备用层权威，不另行解释分支深度。
+            // 按PaintPlan发布的主命令、成功覆盖层、备用层顺序准备资源。
             for (java.util.List<PaintCommand> layer : plan.resourceLayers()) {
                 LinkedHashMap<Long, ImageContent> demand = collectLayerDemand(layer, seen);
                 // 必须先固定本层全部resident，新图才可淘汰未使用的缓存。
@@ -218,7 +218,7 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
                 listener.presentation(content.identity, true, null);
                 return;
             }
-            // 当前Frame或宿主绑定造成的容量压力是暂时未就绪，不是内容上传失败。
+            // 当前Frame或宿主绑定造成容量压力时，报告暂时等待。
             if (!makeRoom(content, frame)) {
                 listener.presentation(content.identity, true, null);
                 return;
@@ -356,7 +356,7 @@ public final class GlImageResources implements GlQuadRenderer.ResourceProvider, 
         if (active != null) throw new IllegalStateException("先结束图像Frame");
         closed = true;
         Throwable failure = null;
-        // 合成面与每张缓存纹理各自尝试释放，不能由一个删除错误跳过其他所属资源。
+        // 合成面与各缓存纹理逐项释放，首错保留，后续错误附入suppressed。
         try { hostCapture.close(); }
         catch (RuntimeException | Error next) { failure = next; }
         for (Resident resident : cache.values()) try { gl.glDeleteTextures(resident.texture); }

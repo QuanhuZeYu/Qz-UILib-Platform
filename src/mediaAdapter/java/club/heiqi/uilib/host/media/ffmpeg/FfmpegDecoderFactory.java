@@ -8,7 +8,7 @@ import club.heiqi.uilib.ui.media.spi.MediaDecoderSource;
 import club.heiqi.uilib.ui.media.MediaSource;
 
 
-/** 仅显式 open 时触发 JavaCPP/FFmpeg 加载；无进程外播放器或自动替换后端。 */
+/** 显式open时初始化JavaCPP/FFmpeg，返回进程内解码器。 */
 public final class FfmpegDecoderFactory implements MediaDecoderFactory {
     @Override public MediaDecoderSource openSource(MediaSource source,MediaCancellation lifetime) throws Exception {
         if(source.audio!=null)return MediaDecoderFactory.super.openSource(source,lifetime);

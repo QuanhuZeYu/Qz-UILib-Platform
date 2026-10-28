@@ -12,7 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import javax.imageio.ImageIO;
 
-/** 沿实际窗口逐页取证；只消费正式几何/配置与交换后画面，不为产品插入探针。 */
+/** 在实际窗口逐页读取正式几何、配置与交换后画面。 */
 final class DesktopPageAppearanceEvidence {
     private DesktopPageAppearanceEvidence(){}
     static void captureAll(Path output)throws Exception{
@@ -34,7 +34,7 @@ final class DesktopPageAppearanceEvidence {
             for(int width:new int[]{1400,640}){
                 glfwSetWindowSize(window.handle(),width,900);DesktopTestFrames.settle(window);
                 DesktopTestInput input=new DesktopTestInput(window);input.point(window.width()-8,window.height()-8);
-                // 主题改变沿已有有限过渡生效，实际推进到稳定画面后再取证，避免把中间色当深色终态。
+                // 驱动主题有限过渡至稳定画面后取证。
                 long settled=System.nanoTime()+350_000_000L;while(System.nanoTime()<settled)window.frame();
                 SceneGeometryView geometry=DesktopTestInput.geometry(window);
                 if(window.lastPlan.commands().isEmpty())throw new AssertionError("页面没有真实绘制内容："+page);

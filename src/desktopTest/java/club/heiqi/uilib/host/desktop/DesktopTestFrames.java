@@ -1,6 +1,6 @@
 package club.heiqi.uilib.host.desktop;
 
-/** 正式帧驱动及字形连续稳定等待；等待上限只属于实机验收，不改变生产调度。 */
+/** 通过正式帧驱动等待字形连续稳定，等待上限由本验收辅助类管理。 */
 final class DesktopTestFrames {
     private DesktopTestFrames() {}
     static void ready(DesktopWindow window) {
@@ -17,8 +17,7 @@ final class DesktopTestFrames {
         }
     }
     /**
-     * 同步 MOVE 断言须经过正常输入采样；真实 GPU 回归中单帧曾落在 300Hz 门内。
-     * 只按真实时钟驱动帧跨过一个采样周期，不等待业务状态或触发额外输入。
+     * 按真实时钟驱动帧跨过300Hz输入采样周期，再进行同步MOVE断言。
      */
     static void inputFrame(DesktopWindow window) {
         long started = System.nanoTime();
@@ -32,8 +31,7 @@ final class DesktopTestFrames {
         } while (frameStart - notBefore < 0);
     }
     /**
-     * 仅供所有呈现都会有限结束的场景比较端点；字形稳定不代表共享动效已经落定。
-     * 测试只观察原调度集合，不读取业务值或预期图形，也不向生产暴露轨迹/时钟。
+     * 供呈现有限结束的场景比较端点；分别等待字形稳定与原调度集合清空。
      */
     static void finitePresentations(DesktopWindow window) {
         ready(window);

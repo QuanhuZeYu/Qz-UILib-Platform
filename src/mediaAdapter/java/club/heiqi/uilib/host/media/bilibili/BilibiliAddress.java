@@ -5,7 +5,7 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.util.Locale;
 
-/** 平台地址身份与本地语法；不执行网络读取或推断媒体流。 */
+/** 从本地语法识别平台地址身份，媒体流解析归点播与直播流程。 */
 final class BilibiliAddress {
     final URI uri;
 

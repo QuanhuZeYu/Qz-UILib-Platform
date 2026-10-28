@@ -25,7 +25,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import javax.imageio.ImageIO;
 
-/** 真实隐藏 GLFW/GL、正式字体与已安装宿主回调；不触碰系统鼠标。 */
+/** 在真实隐藏GLFW/GL窗口，通过正式字体与已安装回调核验滚动区。 */
 public final class DesktopScrollAreaVerification extends TestApplication {
     private final Path output;
     private DesktopScrollAreaVerification(Path output) { this.output = output; }
@@ -270,7 +270,7 @@ public final class DesktopScrollAreaVerification extends TestApplication {
                     && geometry(w, inner[0].viewport(SceneNode.Axis.COLUMN)).scrollOffset == 0, "连续反向重新落入子区");
             point(w, in, 182, 232); wheel(w, in, -1);
             require(geometry(w, outer[0].viewport(SceneNode.Axis.COLUMN)).scrollOffset == 140, "轻微指针抖动打断连续滚动");
-            // MC会在原地滚轮之前补同坐标MOVE，不能将它当作重新选区。
+            // 原地滚轮前补同坐标MOVE，核验原连续滚动目标保持稳定。
             point(w, in, 182, 232); wheel(w, in, -1);
             require(geometry(w, outer[0].viewport(SceneNode.Axis.COLUMN)).scrollOffset == 160, "同坐标MOVE重选了子区");
             for (int shift = 4; shift <= 10; shift += 2) { point(w, in, 180 + shift, 230 + shift); wheel(w, in, -1); }

@@ -63,7 +63,7 @@ public final class DesktopPerformance {
             window.fonts.beginPresentation(1000000);
             try { window.replay(window.lastPlan); } finally { window.fonts.endPresentation(); }
             javax.imageio.ImageIO.write(DesktopTestReadback.readBack(window), "png", output.resolve("performance-desktop.png").toFile());
-            // 同窗中断和重跑，不能把不完整采样记为完成。
+            // 在同窗核验中断与重跑，保留不完整采样的complete=false身份。
             gallery.start(PerformanceGallery.Load.IDLE, 50, 1, 3);
             gallery.frame(window::frame, driver, window.width(), window.height()); gallery.stop();
             if (!gallery.lastReport().contains("\"complete\":false")) throw new AssertionError("停止未保留中断身份");

@@ -297,7 +297,7 @@ public final class ItemImageFactsScenario extends TestApplication {
                                                                     && cmd.color == 0xff80ff00),
                                                     "数量耐久泄漏到未成功分支");
                             });
-                    // 同来源/字体代际先缩成零盒再恢复：空求解不能命中旧成功key并留下null数量。
+                    // 同来源/字体代际从零盒恢复后，应重新求解有效数量文字。
                     ImageOptions[] previousOptions = {null};
                     domain.execute(
                             () -> {

@@ -67,7 +67,7 @@ import club.heiqi.uilib.ui.scene.text.font.FontSource;
 import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 
 /** 单窗口GLFW宿主；核心空间使用framebuffer像素，原生事件只在此转换一次。
- * GLFW只提供Unicode提交，不提供平台IME预编辑；不宣称支持预编辑组合界面。
+ * GLFW文本入口支持Unicode提交；平台IME预编辑需由具有相应能力的宿主桥提供。
  * 窗口、输入与GL操作须在创建线程执行；语义快照可跨线程读取，语义请求经原session异步结算。
  * 关闭仍在有效GL上下文内结束GPU资源。
  */
@@ -128,7 +128,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     public static DesktopWindow open(Path configuration) throws IOException {
         return openSettings(configuration);
     }
-    /** 业务页面直接接入既有ScenePage/ScenePageContext，无第二套页面抽象。 */
+    /** 通过ScenePage/ScenePageContext装配业务页面。 */
     public static DesktopWindow open(Path configuration, ScenePage content) throws IOException {
         return content == null ? open(configuration) : open(configuration, content, null, false, defaultVisible());
     }
@@ -145,7 +145,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     public static DesktopWindow openWithServices(Path configuration, boolean visible, Function<DesktopPageServices, ScenePage> content) throws IOException {
         return open(configuration, null, Objects.requireNonNull(content, "content"), false, visible);
     }
-    /** 显式借用媒体服务，默认无媒体窗口不会初始化任何音频或解码后端。 */
+    /** 显式借用媒体服务，音频与解码后端由该服务按实际打开请求初始化。 */
     public static DesktopWindow openWithMedia(Path configuration, club.heiqi.uilib.ui.media.MediaService media, ScenePage content) throws IOException {
         return open(configuration, Objects.requireNonNull(content, "content"), null, false, defaultVisible(), Objects.requireNonNull(media, "media"));
     }
@@ -229,7 +229,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         // owner原线程释放native会话；已移交的纯资源任务由worker读完并关闭streams。
         own(this::closeFonts);
         images = new ClientImageServices(fonts.gl(), new JavaImageLoader(id -> {
-            // 桌面资源显式按domain:path映射，不依赖游戏ResourceManager或游戏类路径。
+            // 按domain:path将桌面资源映射到自身classpath的assets目录。
             int separator = id.indexOf(':');
             if (separator <= 0 || separator == id.length() - 1)
                 throw new IOException("桌面图像资源标识须为domain:path: " + id);
@@ -283,10 +283,10 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
             domain.deferCleanup(() -> ready.complete(null));
         }, ready::completeExceptionally);
     }
-    /** 最新已发布纯值；读取不进入状态域，不触发绘制或改变焦点。 */
+    /** 返回最新已发布纯值快照，支持跨线程只读访问。 */
     public SceneSemanticSnapshot semantics() { return semanticSnapshot; }
     @Override public void semanticsChanged(SceneSemanticSnapshot snapshot) { semanticSnapshot = snapshot; }
-    /** 任意宿主线程可递交；完成表示原handler和Effect已结算，入队本身不表示业务接受。 */
+    /** 任意宿主线程可递交；完成表示原handler与Effect已结算，业务接受情况读取原业务状态。 */
     public CompletableFuture<SceneSemanticRequest.Result> semantic(SceneSemanticRequest request) {
         return page == null ? CompletableFuture.completedFuture(SceneSemanticRequest.Result.CLOSED) : page.semantic(request);
     }
@@ -294,7 +294,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
             BiConsumer<SceneSemanticRequest.Result, Throwable> completion) {
         return semantic(request).whenComplete(completion);
     }
-    /** 完成只表示真实资源与页面已在owner线程发布；调用者继续驱动frame，不能在UI等待future。 */
+    /** 资源与页面在owner线程发布后完成；调用方持续驱动frame并异步接收结果。 */
     public CompletableFuture<Void> ready() { return ready; }
     private void postOwner(Runnable action) {
         if (closed) return;
@@ -460,7 +460,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
             case GLFW_KEY_ESCAPE: escape.key(down, event.repeat); break;
             default: keys.key(event); return;
         }
-        // DOWN由既有单次门递交；UP经同一中性适配器核对合法起手，宿主不合成click。
+        // DOWN经单次门递交，UP由同一中性适配器核对起手，激活判定归Core。
         if (!down) keys.key(event);
     }
     private void dispatchSpecialKey() { keys.key(specialKey); }
@@ -550,9 +550,9 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
     /** 正式帧管线在测量/输入前接收完成结果，由既有图像信号使相关声明失效。 */
     @Override public void prepareResources() { check(); images.prepareResources(); if (mediaViews != null) mediaViews.prepareResources(); }
     @Override public club.heiqi.uilib.ui.scene.video.MediaViewPump mediaViews() { return mediaViews; }
-    /** 本次成功交换的新帧回执；同帧重复绘制不增加媒体统计。 */
+    /** 返回本次成功交换的新媒体帧回执，按帧身份去重统计。 */
     public List<club.heiqi.uilib.ui.media.MediaPresentation> mediaPresentations() { check(); return mediaPresentations; }
-    /** 仅资源纯值；允许close后读取最终归零/残留，不暴露GL句柄或修改能力。 */
+    /** 返回资源纯值快照，close后仍可读取最终释放结果与残留。 */
     public club.heiqi.uilib.host.client.gl.GlVideoResources.Snapshot mediaResources() {
         return renderer==null?club.heiqi.uilib.host.client.gl.GlVideoResources.Snapshot.EMPTY:renderer.mediaResources();
     }
@@ -630,7 +630,7 @@ public final class DesktopWindow implements SceneHost, AutoCloseable {
         lastPlan = null; mediaPresentations = Collections.emptyList();
         if(pageServices!=null)pageServices.releaseRequests();
         Throwable failure = null;
-        // 先让唯一scheduled域drain结算，再原域关闭配置；不能clear掉其executor入口。
+        // 保留executor入口，先结算scheduled域，再在原域关闭配置，最后清空动作队列。
         try { pumpOwner(); applicationConfiguration.close(); pumpOwner(); }
         catch (Throwable next) { failure = next; }
         while (!resources.isEmpty()) {

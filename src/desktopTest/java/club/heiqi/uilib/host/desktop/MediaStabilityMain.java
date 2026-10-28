@@ -25,7 +25,7 @@ public final class MediaStabilityMain {
             if(!Files.isRegularFile(artifact))throw new IllegalArgumentException("最终artifact不存在: "+artifact);
             artifacts.add(artifact);
         }
-        // 两个factory仅返回中性延迟装配；不人为open/snapshot预热后移首会话成本。
+        // 两个factory仅提供中性延迟装配，首会话计时包含实际open与native初始化成本。
         MediaAudioSinkFactory audio=args.length==7?IsolatedMediaAdapters.audioSinkFactory(args[6]):IsolatedMediaAdapters.audioSinkFactory();
         new MediaStabilityVerification(IsolatedMediaAdapters.decoderFactory(),audio,new FinalMediaResources(),
                 inputs,acceptance,output,artifacts).run(args[0],args[1]);

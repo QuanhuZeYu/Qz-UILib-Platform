@@ -29,7 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/** 正式输入驱动排序模型，核验可见顺序与持续挂载，不借私有字段自证。 */
+/** 通过正式输入驱动排序模型，核验可见顺序与持续挂载。 */
 public final class DesktopSortableVerification extends TestApplication {
     private final Path output;
     DesktopSortableVerification(Path output) { this.output = output; }

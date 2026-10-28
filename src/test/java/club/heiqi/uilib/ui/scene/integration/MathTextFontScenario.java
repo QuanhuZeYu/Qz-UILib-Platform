@@ -31,7 +31,7 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** 真实 FT/HB 正文族、数学文字作用域与代际快照；无 MC、AWT 或第二整形路径。 */
+/** 通过真实FT/HB核验正文族、数学文字作用域与代际快照。 */
 public final class MathTextFontScenario extends TestApplication {
     private static final String BASE = "assets/qz_uilib/fonts/math-text/";
     private static final String[] ALIASES = {
@@ -141,7 +141,7 @@ public final class MathTextFontScenario extends TestApplication {
                         require(
                                 i == 2 ? difference < .001f : difference > em * .2f,
                                 "mono/比例族advance不符");
-                        // Noto 两族的 Greek/Cyrillic 实际由此原生探针核验；mono 不承诺未覆盖的脚本。
+                        // 对实际覆盖Greek/Cyrillic的Noto两族执行原生探针。
                         if (i < 2)
                             for (String sample : new String[] {"αΩ", "Жя"})
                                 assertText(text(service, sample, style), FAMILIES[i], fs, em);
@@ -410,7 +410,7 @@ public final class MathTextFontScenario extends TestApplication {
                                 && service.cachedFaceCount() == 0,
                         "reload未失效");
                 assertText(text(service, "W", style), "Noto Sans", STYLES[3], 32);
-                // 默认链换代由公开工厂显式发布新named tail，不在每次layout中静默补入。
+                // 默认链换代时，由公开工厂显式发布新的named tail。
                 List<FontSource> chain =
                         MathTextFontSources.namedSources(4, service.defaultCandidates())
                                 .get(MathTextFontSources.ROMAN);
@@ -430,7 +430,7 @@ public final class MathTextFontScenario extends TestApplication {
                             && retained.source.contentFingerprint().equals(hash),
                     "旧source随注册重载改变");
         }
-        // 服务及其所有旧face均已关闭，glyph只靠owned source在独立新session重开，不能复用live地址。
+        // 服务与旧face关闭后，以glyph持有的owned source在新session重开。
         try (FontSession raster = new LwjglFontEngine().openSession();
                 FontFace face = retained.source.openFace(raster, retained.logicalEm)) {
             GlyphBitmap image = face.rasterize(retained.glyphId, retained.rasterStyle);
@@ -467,7 +467,7 @@ public final class MathTextFontScenario extends TestApplication {
                         FontTextService.defaultSources(initial, 1), new LwjglFontEngine())) {
             int[] invalidations = {0};
             service.onInvalidated(() -> invalidations[0]++);
-            // 和 MC 首次 reload 一样，不预加载将退休的默认资源。
+            // 直接发布新资源代，覆盖首次reload时默认资源尚未加载的路径。
             for (int revision = 2; revision <= 3; revision++) {
                 ResourceGeneration next = new ResourceGeneration();
                 long generation = service.generation();

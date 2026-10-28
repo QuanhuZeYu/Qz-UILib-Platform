@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Map;
 import javax.imageio.ImageIO;
 
-/** 隐藏真实GLFW回调验收：不移动系统鼠标、不抢前台；覆盖示例与字体排序的实际反例。 */
+/** 在隐藏GLFW窗口注入生产回调，核验示例与字体排序的实际反例。 */
 public final class DesktopDraggableDeepVerification {
     private static Path output;
     public static void main(String[] args) throws Exception {
@@ -209,7 +209,7 @@ public final class DesktopDraggableDeepVerification {
             for(int i=0;i<18;i++){Thread.sleep(20);w.frame();}
             require(geometry(w,list[0]).scrollOffset>offset,"指针停在边缘时没有持续自动滚动");save(w,"sort-autoscroll.png");key(w,input,GLFW_KEY_ESCAPE);up(w,input);
             int stopped=geometry(w,list[0]).scrollOffset;Thread.sleep(40);w.frame();require(geometry(w,list[0]).scrollOffset==stopped&&moves[0]==2,"取消后滚动仍活动或误提交");
-            // 删除当前拖动key时，旧物理UP不得提交或转给后台。
+            // 删除当前拖动key后，消费旧物理UP并保持原提交计数。
             w.domain.execute(() -> {List<Item> next=new ArrayList<>(items[0].get());Collections.rotate(next,1);items[0].set(Collections.unmodifiableList(next));});settle(w);
             SceneGeometryView.Entry handle=geometry(w).ordered().stream().filter(e -> "::".equals(e.node.text())&&hit(e).height>0).findFirst().orElseThrow(() -> new AssertionError("无可见把手"));
             Integer selected=handles.entrySet().stream().filter(e -> e.getValue()==handle.node).map(Map.Entry::getKey).findFirst().get();grip=hit(handle);down(w,input,grip.x+8,grip.y+8);move(w,input,grip.x+8,grip.y+30);

@@ -424,7 +424,7 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
         input.mouse.invoke(window.handle(), 0, GLFW_RELEASE, 0);
         frames(1);
         SceneNode[] scrollbar = {null};
-        // 圆角留白可增加组合层级；沿正式语义与几何锁定原字段的滚动条，不拖动其容器。
+        // 沿正式语义与几何定位原字段滚动条，适配圆角留白的组合层级。
         window.domain.execute(() -> scrollbar[0] = DesktopTestInput.geometry(window).ordered().stream()
                 .map(e -> e.node)
                 .filter(node -> {
@@ -883,7 +883,7 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
                             await(
                                     () -> snapshot().positionNanos > positionBeforePicker,
                                     "选择器打开期间媒体没有继续推进");
-                            // 背景按钮的屏幕坐标可能落在模态导航上；隔离只要求后台不激活，随后显式恢复目标目录。
+                            // 背景按钮坐标可能命中模态导航，核验后台保持原状态后恢复目标目录。
                             type(pickerField(), localDirectory[0].toString(), true);
                             await(() -> text("浏览目录 中文 +"), "隔离验证后不能导航回目标目录");
                             pickerEntry("浏览目录 中文 +");
@@ -1014,7 +1014,7 @@ public final class DesktopGalleryMediaVerification extends TestApplication {
                             await(() -> text(longName.getFileName().toString()), "长文件名没有进入实际列表");
                             pickerEntry(localFile[0].getFileName().toString());
                             frames(1);
-                            // 标题已合并到目录导航菜单；截图直接保留当前选中行，不打开菜单。
+                            // 截图保留文件列表的当前选中行。
                             input.point(0, 0);
                             frames(2);
                             javax.imageio.ImageIO.write(

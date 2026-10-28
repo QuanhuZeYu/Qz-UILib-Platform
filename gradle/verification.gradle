@@ -1,6 +1,6 @@
 import java.util.zip.ZipFile
 
-// 原场景的显式磁盘路径继续有效；输入仅来自已解析 Maven Jar 的本仓解包。
+// 将已解析Maven Jar的资源解包到本仓工作区，供场景按显式磁盘路径读取。
 def fixtureRoot = layout.buildDirectory.dir('verification-workspace')
 tasks.register('prepareVerificationResources') {
     inputs.files(configurations.coreRuntime8, configurations.coreVerification)
@@ -88,7 +88,7 @@ platformApplication('platformVerify','PlatformGalleryVerification') {
     }
 }
 platformApplication('embeddedFontSourcesScenario', 'EmbeddedFontSourcesScenario')
-// 显式真实GL回归：可传入分号分隔的实际Angelica发行Jar，不启动MC。
+// 在独立GL宿主核验属性查询，可传入分号分隔的实际Angelica发行Jar。
 platformApplication('glActiveAttributeVerify', 'GlActiveAttributeScenario', 21) {
     if (providers.gradleProperty('angelicaJars').isPresent()) {
         args providers.gradleProperty('angelicaJars').get().split(';') as List
@@ -214,7 +214,7 @@ tasks.register('verifyPlatformArtifacts') {
     }
 }
 tasks.register('verifyDevToolsNotPackaged') { group = 'verification'; dependsOn 'verifyPlatformArtifacts' }
-// 构建失败时同样结束该次测试的临时 native 输入，不保留为外部缓存。
+// 构建成功与失败路径统一清理本次测试的临时native目录。
 gradle.buildFinished {
     tasks.withType(JavaExec).each { task ->
         if (task.extensions.extraProperties.has('lwjgl2NativeDirectory')) {

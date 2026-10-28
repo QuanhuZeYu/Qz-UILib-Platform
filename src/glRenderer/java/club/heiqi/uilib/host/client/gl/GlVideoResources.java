@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/** 视频 GPU owner；不进入静态图像缓存。仅 prepare 上传，Prepared 生命周期固定每个精确 key 的槽。 */
+/** 持有视频GPU纹理；prepare上传，并在Prepared生命周期内固定每个精确key对应的槽。 */
 public final class GlVideoResources implements AutoCloseable {
     public static final int DEFAULT_TEXTURES = 8;
     public static final long DEFAULT_BYTES = 80L * 1024 * 1024;
@@ -67,7 +67,7 @@ public final class GlVideoResources implements AutoCloseable {
                 if (command.kind == PaintCommand.Kind.VIDEO && visible(command, viewport))
                     demand.putIfAbsent(command.video.frame.key, command.video.frame);
             long required = 0;
-            // 先保留全部有效联系并 pin resident；不能上传第二帧时覆写第一帧。
+            // 先保留全部有效联系并pin resident，保证每个已引用帧的纹理内容稳定。
             for (MediaVideoFrame image : demand.values()) {
                 MediaFrameLease lease = service.retainPresentation(image.key);
                 if (lease == null) continue;
@@ -92,12 +92,12 @@ public final class GlVideoResources implements AutoCloseable {
             throw failure;
         }
     }
-    /** 无有效视频联系的新计划结束驻留；跨swap票据只保core租约，不持有这些GL槽。 */
+    /** 新计划的有效视频联系为空时结束驻留；跨swap票据仅持有core租约。 */
     private void retireIdle() {
         Throwable failure=null;
         for (Slot slot : slots) try { release(slot); }
         catch (Throwable next) { if(failure==null)failure=next;else if(next!=failure)failure.addSuppressed(next); }
-        // 删除失败的槽继续保留真实id/bytes；不清表伪造归零。
+        // 删除失败的槽保留真实id/bytes，供后续观测实际残留。
         slots.removeIf(slot -> slot.texture==0);
         scratch=null;
         if(failure instanceof Error)throw(Error)failure;
@@ -134,7 +134,7 @@ public final class GlVideoResources implements AutoCloseable {
     private void upload(Slot slot, MediaVideoFrame frame) {
         if (scratch == null) scratch = ByteBuffer.allocateDirect(scratchBytes);
         scratch.clear(); scratch.put(frame.pixels()); scratch.flip();
-        // CPU 载荷为 straight RGBA；共享 COLOR_PREMULT shader 需要预乘，绝不修改发布像素。
+        // 将straight RGBA复制到scratch后预乘，供共享COLOR_PREMULT shader使用。
         for (int i = 0; i < scratch.limit(); i += 4) {
             int alpha = scratch.get(i + 3) & 255;
             if (alpha != 255) for (int c = 0; c < 3; c++) scratch.put(i + c, (byte) (((scratch.get(i + c) & 255) * alpha + 127) / 255));
@@ -162,7 +162,7 @@ public final class GlVideoResources implements AutoCloseable {
         if (slot.texture != 0) gl.glDeleteTextures(slot.texture);
         bytes -= slot.bytes; slot.texture = slot.width = slot.height = 0; slot.bytes = 0; slot.key = null;
     }
-    /** 纯值只读观测；关闭后仍保留实际残留和峰值，不发起GL调用。 */
+    /** 从本地记录生成纯值快照，关闭后仍可查看实际残留和峰值。 */
     public Snapshot snapshot() {
         if(Thread.currentThread()!=thread)throw new IllegalStateException("视频GPU快照不在所属线程");
         int textures=0;for(Slot slot:slots)if(slot.texture!=0)textures++;
@@ -199,7 +199,7 @@ public final class GlVideoResources implements AutoCloseable {
             Entry entry = entries.get(key);
             if (entry != null && entry.submittedNanos == 0) entry.submittedNanos = now;
         }
-        /** 只转交真实成功提交的联系；宿主交换票据可跨 Prepared.close，纹理 pin 不外逃。 */
+        /** 转交成功提交的媒体联系；票据租约延续至宿主交换，纹理pin止于Prepared.close。 */
         public List<Submission> takeSubmissions() {
             check(); if (done) throw new IllegalStateException("视频Frame已结束");
             List<Submission> result = new ArrayList<>();
@@ -239,7 +239,7 @@ public final class GlVideoResources implements AutoCloseable {
         if (active != null) throw new IllegalStateException("先结束视频Frame");
         Throwable failure = null;
         for (Slot slot : slots) try { release(slot); } catch (Throwable next) { if (failure == null) failure = next; else if (failure != next) failure.addSuppressed(next); }
-        // 失败的delete仍是所属实际残留，不能清表后向资源观测报告假零。
+        // delete失败时保留所属槽，资源观测继续报告实际残留。
         slots.removeIf(slot -> slot.texture == 0); scratch = null; closed = true;
         if (failure instanceof Error) throw (Error) failure;
         if (failure instanceof RuntimeException) throw (RuntimeException) failure;

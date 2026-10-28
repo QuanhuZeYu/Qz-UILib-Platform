@@ -2,7 +2,7 @@ package club.heiqi.uilib.host.client.font.context;
 
 import club.heiqi.uilib.ui.scene.text.RasterSampling;
 
-/** 列主序P/MV及GL viewport副本；透视保留clip w与depth，不将世界文字压平到overlay。 */
+/** 持有列主序P/MV与GL viewport副本，保留世界文字的clip w和depth。 */
 public final class FontProjection {
     private final float[] projection, modelView, mvp;
     private final int[] viewport;
@@ -66,7 +66,7 @@ public final class FontProjection {
         return q;
     }
 
-    /** 同包采样已校验锚点；缓冲只属于本次command，不保留相机或跨帧结果。 */
+    /** 将已校验锚点投影到本次command持有的缓冲。 */
     void fillClip(double x, double y, double z, double[] target) {
         for (int r = 0; r < 4; r++)
             target[r] = mvp[r] * x + mvp[4 + r] * y + mvp[8 + r] * z + mvp[12 + r];
@@ -87,7 +87,7 @@ public final class FontProjection {
         return densityClip(qx, qy, w, true);
     }
 
-    /** 已投影角点复用同一Jacobian；失败由采样策略区分behind与保守顶档，不构造异常。 */
+    /** 已投影角点复用同一Jacobian；无效结果以NaN交采样策略区分behind与顶档。 */
     double densityClip(double qx, double qy, double w) {
         return densityClip(qx, qy, w, false);
     }
@@ -95,7 +95,7 @@ public final class FontProjection {
     private double densityClip(double qx, double qy, double w, boolean strict) {
         if (!Double.isFinite(w) || w <= 1e-9)
             return invalidDensity(strict, "anchor不在可采样的正clip-w区域");
-        // 保持原乘除及hypot顺序，临界采样值不能因代数重排跨到另一档。
+        // 固定乘除与hypot顺序，保持临界采样值所属档位。
         double a = (mvp[0] - qx / w * mvp[3]) / w * viewport[2] / 2.0;
         double b = (mvp[4] - qx / w * mvp[7]) / w * viewport[2] / 2.0;
         double c = (mvp[1] - qy / w * mvp[3]) / w * viewport[3] / 2.0;
@@ -118,7 +118,7 @@ public final class FontProjection {
         return Double.NaN;
     }
 
-    /** actualRasterEm是policy档位，不保证Atlas能容纳；capped明确表示采样需求受限。 */
+    /** actualRasterEm记录policy档位，Atlas另行裁决容量；capped表示采样需求受限。 */
     public static final class SamplingPlan {
         public final RasterSampling sampling;
         public final double requestedRasterEm;

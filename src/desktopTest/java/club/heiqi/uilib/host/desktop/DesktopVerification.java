@@ -135,7 +135,7 @@ public final class DesktopVerification {
             require(w.page == session && view.builds == 1, "resize重建了页面");
             pass("native GLFW resize callback -> framebuffer=" + w.width() + "x" + w.height() + ", page builds=1");
 
-            // 外部配置作者通过另一份核心配置会话修改真实YAML，不提前写窗口权威值。
+            // 外部作者经独立核心配置会话写入YAML，窗口通过reload接收。
             ReactiveDomain writerDomain = ReactiveDomain.direct();
             long oldGeneration = w.fonts.fonts().generation();
             Path systemFont = args.length > 1 ? Paths.get(args[1])
@@ -192,7 +192,7 @@ public final class DesktopVerification {
             input.focus.invoke(w.handle(), false);
             frames(w, 2);
             w.domain.execute(() -> require(w.page.runtime().focusRouter().focused().get() == null, "窗口失焦未清理核心焦点"));
-            // 同一输入批次：先收到DOWN，随后失焦，最后收到文字；失焦不可越过DOWN结算。
+            // 同批依序结算DOWN、失焦与文字，保留原事件顺序。
             input.moveTo(view.field);
             input.mouse.invoke(w.handle(), 0, GLFW_PRESS, 0);
             input.focus.invoke(w.handle(), false);
@@ -307,7 +307,7 @@ public final class DesktopVerification {
             SceneNode button = SceneButton.create(ctx, () -> "Business page", ctx.domain().signal(SceneTheme.dark()),
                     () -> clicks[0].set(clicks[0].get() + 1));
             ctx.mount(new SceneNode().size(Size.fill(1), Size.fill(1)).padding(16).add(button));
-            // 异步业务页面装配时只设置真实native光标；ready发布前由宿主采样，不发送MOVE。
+            // 异步页面装配时设置native光标，ready发布前由宿主正式采样。
             long window = glfwGetCurrentContext();
             int[] width = new int[1], height = new int[1], fw = new int[1], fh = new int[1];
             glfwGetWindowSize(window, width, height);

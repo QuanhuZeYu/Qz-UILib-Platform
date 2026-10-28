@@ -89,7 +89,7 @@ public final class DesktopMediaVerification extends TestApplication {
             input.click("播放");
             long started = System.nanoTime(), limit = started + 2_500_000_000L;
             boolean brieflyAudible = false;
-            // 只对本source设置安全低gain；其余短播静音，系统音量不动。
+            // 短时以当前source的低gain观测音频，其余短播保持静音。
             session.muted(false);
             while (System.nanoTime() < limit) {
                 frame(window, samples);

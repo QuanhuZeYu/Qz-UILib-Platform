@@ -13,7 +13,7 @@ import static org.bytedeco.ffmpeg.global.avformat.*;
 import static org.bytedeco.ffmpeg.global.avutil.*;
 import static club.heiqi.uilib.host.media.NativeMediaResourceTracker.*;
 
-/** 首次HTTP响应的owner：内容识别与解封装复用同一AVIO，不另发预探测请求。 */
+/** 持有首次HTTP响应，内容识别与解封装复用同一AVIO。 */
 final class FfmpegInput implements AutoCloseable {
     private AVIOContext io;
     private byte[] playlist;
@@ -46,7 +46,7 @@ final class FfmpegInput implements AutoCloseable {
                 playlist = bytes.toByteArray();
                 close();
             } else {
-                // 前缀仍在AVIO原缓冲内；回卷只移动buf_ptr，不能重开HTTP或丢弃首包。
+                // 前缀保留在AVIO原缓冲内；回卷buf_ptr后由demuxer继续消费完整首包。
                 if (avio_seek(io, 0, 0) != 0) throw new IOException("首次媒体输入不能回卷已读前缀");
             }
         } catch (RuntimeException | Error | IOException failure) {

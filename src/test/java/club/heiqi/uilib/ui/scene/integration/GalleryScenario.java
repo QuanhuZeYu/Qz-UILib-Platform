@@ -18,7 +18,7 @@ import club.heiqi.uilib.ui.scene.image.SharedImageService;
 import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 import club.heiqi.uilib.host.font.IsolatedFontEngine;
 import club.heiqi.uilib.host.client.image.JavaImageLoader;
-/** 同一共享广场在无窗口自动机运行；使用实际字体和图像，不加载游戏或创建GL。 */
+/** 以无窗口自动输入运行共享广场，核验实际字体与图像流程。 */
 public final class GalleryScenario extends TestApplication {
     private static final class Host implements SceneHost {
         final SharedImageService images;

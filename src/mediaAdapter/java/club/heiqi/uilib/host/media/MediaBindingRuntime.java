@@ -26,7 +26,7 @@ import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
 
-/** 一个应用加载器固定一个媒体运行域；native驻留不随session新增加载器/路径。 */
+/** 每个应用加载器持有一个媒体运行域，所有session复用其绑定、native与路径。 */
 final class MediaBindingRuntime {
     private static final String ROOT="assets/qz_uilib/runtime/media/";
     private final BindingLoader bindings;
@@ -63,7 +63,7 @@ final class MediaBindingRuntime {
             }
             pending=new BindingLoader(urls.toArray(new URL[urls.size()]),application,natives);
             bindings=pending;
-            // 配置对象只属于child；file URL使LWJGL避开会写global librarypath的提取分支。
+            // 配置归child所有；通过file URL将已提取native交LWJGL直接加载。
             Class<?> configuration=Class.forName("org.lwjgl.system.Configuration",true,bindings);
             for(String name:new String[]{"LIBRARY_PATH","SHARED_LIBRARY_EXTRACT_PATH"}) {
                 Object option=configuration.getField(name).get(null);
@@ -72,13 +72,13 @@ final class MediaBindingRuntime {
             Object force=configuration.getField("SHARED_LIBRARY_EXTRACT_FORCE").get(null);
             force.getClass().getMethod("set",Object.class).invoke(force,Boolean.FALSE);
             Class<?> loader=Class.forName("org.bytedeco.javacpp.Loader",true,bindings);
-            // 固定JavaCPP1.5.10局部字段适配。先设child缓存，再让Pointer/global初始化；不触全局属性。
+            // 适配JavaCPP1.5.10局部字段，在Pointer/global初始化前设置child缓存。
             for(String name:new String[]{"cacheDir","tempDir"}) {
                 Field field=loader.getDeclaredField(name); field.setAccessible(true); field.set(null,cache.toFile());
             }
             snapshot=Class.forName("club.heiqi.uilib.host.media.NativeMediaResourceTracker",true,bindings).getMethod("snapshot");
             decoders=(MediaDecoderFactory)Class.forName("club.heiqi.uilib.host.media.ffmpeg.FfmpegDecoderFactory",true,bindings).getConstructor().newInstance();
-            // 只有完整构造成功才登记进程级退出清理；失败不能每次永久累积DeleteHook路径。
+            // 完整构造成功后登记进程级退出清理，构造失败立即清理所属路径。
             List<Path> retained=new ArrayList<Path>();
             try(Stream<Path> paths=Files.walk(directory)){paths.sorted().forEach(retained::add);}
             for(Path path:retained)path.toFile().deleteOnExit();

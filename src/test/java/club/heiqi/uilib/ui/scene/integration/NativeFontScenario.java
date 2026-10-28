@@ -19,7 +19,7 @@ import club.heiqi.uilib.ui.scene.text.font.nativefont.FontFace;
 import club.heiqi.uilib.ui.scene.text.font.nativefont.FontSession;
 
 /**
- * 测试机真实 FreeType/HarfBuzz 场景，无 MC、Forge 或 AWT。
+ * 在测试机直接运行真实FreeType/HarfBuzz，核验CPU字体合同。
  * 参数为字体目录，包含 NotoSansArabic.ttf、NotoSansDevanagari.ttf、NotoSansThai.ttf、NotoColorEmoji.ttf。
  * 输出真实 glyph/cluster、metrics、彩色像素与尺寸数据，并检查内存所有权、缩放、线程和关闭契约。
  */

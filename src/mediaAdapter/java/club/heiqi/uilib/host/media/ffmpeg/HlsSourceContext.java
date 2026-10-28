@@ -88,13 +88,13 @@ final class HlsSourceContext implements MediaDecoderSource {
         if(!liveTimeline)return openVod(position,seeking,active);
         if(origin!=Long.MIN_VALUE&&window.live)update(active);
         int index=selectOpening(position,seeking);
-        // ENDLIST只改变正常结束事实；同来源cursor仍用原origin，不能退回独立VOD零点。
+        // ENDLIST更新正常结束事实，同来源cursor持续使用原origin。
         FfmpegDecoder decoder=new FfmpegDecoder(source,active,this,master==null?window.bytes:master,window.live?index:0,false,!window.live&&seeking);
         try{if(!window.live&&seeking)decoder.seek(position);return decoder;}
         catch(Throwable error){try{decoder.close();}catch(Throwable next){error.addSuppressed(next);}if(error instanceof Error)throw(Error)error;if(error instanceof Exception)throw(Exception)error;throw new RuntimeException(error);}
     }
     private int selectOpening(long position,boolean seeking){
-        // 此处只表达请求起点；实际openingPosition在同流IO打开片段后确认。
+        // 记录请求起点，实际openingPosition由同流IO打开片段后确认。
         int index=seeking?0:Math.max(window.durations.length-3,0);
         if(seeking) {
             MediaRange range=range();
@@ -109,10 +109,10 @@ final class HlsSourceContext implements MediaDecoderSource {
     private MediaDecoder openVod(long position,boolean seeking,MediaCancellation operation) throws Exception {
         FfmpegDecoder decoder=window==null?new FfmpegDecoder(source,operation,this,null,0,false,seeking&&position!=0)
                 :new FfmpegDecoder(source,operation,this,master==null?window.bytes:master,0,false,seeking&&position!=0);
-        // 新建VOD cursor已位于首包；0应保留首音频。HLS首DTS可晚于format.start_time，
-        // 再物理seek到0会被demuxer拒绝，钳到首视频又会丢失合法的前导音频。
+        // 新建VOD cursor保留首包；请求0时直接消费前导音频。
+        // HLS首DTS可晚于format.start_time，重新seek或按首视频钳位会破坏该起点。
         try{
-            // 首次Master需先由真实轨道确定media；显式定位再用同一快照选择片段，不重读首列表。
+            // 首次Master由真实轨道确定media，显式定位复用同一列表快照选择片段。
             if(master!=null&&liveTimeline&&seeking){decoder.close();int index=selectOpening(position,true);decoder=new FfmpegDecoder(source,operation,this,master,index);}
             else if(!liveTimeline&&seeking&&position!=0)decoder.seek(position);
             return decoder;

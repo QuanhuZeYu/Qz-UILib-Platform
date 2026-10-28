@@ -40,7 +40,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import static club.heiqi.uilib.host.client.gl.GlTokens.*;
 
-/** 两种真实GL binding共用的消费者反例；像素期望从发布帧独立采样，不复制渲染算法。 */
+/** 两种真实GL binding共用的消费者反例，像素期望从发布帧独立采样。 */
 public final class VideoGlVerification {
     public interface Target { int width(); int height(); void clear(); int pixel(int x, int y); boolean isTexture(int id); }
     private static final class Injected extends RuntimeException {}
@@ -94,7 +94,7 @@ public final class VideoGlVerification {
             require(Math.abs(received - value) <= 4, "视频纹理身份/像素不符 key=" + frame.key + " xy=" + x + "," + y + " channel=" + channel + " actual=" + received + " expected=" + value);
         }
     }
-    /** 原真实binding/已发布帧入口：几何先筛选需求，不能让孔内帧占一个有效槽。 */
+    /** 通过真实binding与已发布帧核验几何筛选，孔内帧在槽分配前剔除。 */
     private static void geometryVisibility(GlApi gl, MediaService service, MediaVideoFrame first,
             MediaVideoFrame second, LayoutBox viewport) {
         PaintCommand moved = video(first, new LayoutBox(-100, 20, 40, 40), null, VideoPlacement.Fit.STRETCH)
@@ -163,7 +163,7 @@ public final class VideoGlVerification {
         for (int texture : textures) require(!target.isTexture(texture), "所属视频纹理未删除: " + texture);
         System.out.println("VIDEO_GL textureBaseline=true deleted=" + textures.size());
     }
-    /** 独立、仍有效的新代帧：CPU上传及实际draw抛错时保持GL进入态，不补呈现。 */
+    /** 核验新代帧上传或draw失败时恢复GL进入态，仅成功提交产生呈现联系。 */
     public static void failure(ClientFontServices fonts, MediaService service, MediaVideoFrame frame, Target target) {
         GlApi gl = fonts.gl(); Set<Integer> textures = new HashSet<>();
         int foreign = gl.glGenTextures(), pbo = gl.glGenBuffers();

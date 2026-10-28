@@ -49,7 +49,7 @@ import org.lwjgl.opengl.GL33;
 import club.heiqi.uilib.host.client.font.context.FontRenderContext;
 import club.heiqi.uilib.host.client.font.context.LwjglFontContextCapture;
 
-/** 延期producer历史捕捉，以及标准字体用正式native/atlas/renderer的真实GPU coverage回读；不替代MC/Angelica初始化。 */
+/** 核验延期producer状态捕获，以及标准字体经正式native/atlas/renderer得到的GPU coverage。 */
 public final class FontDeferredStateScenario extends TestApplication {
     private static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
@@ -308,7 +308,7 @@ public final class FontDeferredStateScenario extends TestApplication {
         }
     }
 
-    /** 只计数并转发真实 GL；异常在真实调用完成后单次抛出，不模拟驱动状态。 */
+    /** 计数并转发真实GL，真实调用完成后单次注入异常。 */
     private static final class GlCalls implements InvocationHandler {
         private static final int[] QUERIES = {GL14.GL_BLEND_SRC_RGB, GL14.GL_BLEND_DST_RGB,
                 GL14.GL_BLEND_SRC_ALPHA, GL14.GL_BLEND_DST_ALPHA, GL20.GL_BLEND_EQUATION_RGB,
@@ -379,7 +379,7 @@ public final class FontDeferredStateScenario extends TestApplication {
 
         void verified(boolean ui) {
             captured(ui);
-            // typed world 相同项无需设置；实际变化由像素及完整进入态检查，计数阻止重复恢复。
+            // typed world仅设置差异项，以像素、完整进入态和调用次数共同核对恢复。
             for (int count : writes) require(count == 2 || !ui && count == 0,
                     "blend/cull 恢复 owner 重复或遗漏: " + Arrays.toString(writes));
         }
@@ -504,7 +504,7 @@ public final class FontDeferredStateScenario extends TestApplication {
                     "动态 uniform 像素未更新 channel=" + c + " actual=" + pixels[offset + c]);
     }
 
-    /** 同一真实 renderer 交替消费 world/UI；位置复用不能冻结灯光、alpha、lightmap 或污染进入态。 */
+    /** 交替回放world/UI，核验位置复用时灯光、alpha、lightmap与进入态各自更新和恢复。 */
     private static void uniformScopes(ClientFontServices owner, GlPaintPlanRenderer renderer,
             FontRenderContext base, PaintPlan text, int[] textPixels, boolean compatibility, GlCalls calls) throws Exception {
         int sample = 3;
@@ -789,7 +789,7 @@ public final class FontDeferredStateScenario extends TestApplication {
             OrderedQuadCollector collector = new OrderedQuadCollector(8, scope::consumeBatch);
             for (int i = 0; i < states.length; i++) {
                 collector.add(states[i], quads[i]);
-                // 独立旧路径参考：相同 quad/index 原次序，单 Draw 逐段消费，不能命中双纹理。
+                // 参考路径按原quad/index次序逐Draw提交，以单纹理结果互证。
                 if (split) collector.flush();
             }
             collector.flush();
@@ -807,7 +807,7 @@ public final class FontDeferredStateScenario extends TestApplication {
         calls.captured(false);
     }
 
-    /** 同真实 typed world 的独立逐 Draw 旧路径核像素，不排序，含新增纹理单元的异常恢复。 */
+    /** 以原序逐Draw路径互证typed world像素，覆盖双纹理单元的异常恢复。 */
     private static void dualScopes(FontRenderContext base) {
         GlCalls calls = new GlCalls();
         int mono = dualTexture(GL30.GL_R8, new byte[] {(byte) 160});
@@ -859,7 +859,7 @@ public final class FontDeferredStateScenario extends TestApplication {
                 actual = dualFrame(renderer, context, reversed, quads, false, calls);
                 require(Arrays.equals(reference, actual), "dual slot/material 反转改变覆盖次序");
                 dualRestored(calls, entry, sampler, samplers);
-                // 第三资源与不同 clip 均须走原多 Draw 路径，不能局部拼接或跨状态合并。
+                // 第三资源或不同clip沿原多Draw路径提交。
                 for (int fallback = 0; fallback < 2; fallback++) {
                     State[] changed = states.clone();
                     changed[2] = new State(1, fallback == 0 ? 3 : 1, 7,

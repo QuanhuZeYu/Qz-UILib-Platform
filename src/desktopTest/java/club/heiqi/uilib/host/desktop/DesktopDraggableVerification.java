@@ -19,7 +19,7 @@ import club.heiqi.uilib.ui.scene.node.SceneNode;
 import club.heiqi.uilib.ui.scene.layout.Size;
 import club.heiqi.uilib.ui.scene.runtime.NodeBinding;
 
-/** 真实已安装回调与唯一几何/GPU反馈；覆盖用户参考拖动及捕获终止，不在生产中增加验收分支。 */
+/** 通过已安装回调、共同几何与GPU反馈核验拖动交互及捕获终止。 */
 public final class DesktopDraggableVerification {
     private DesktopDraggableVerification() {}
     public static void main(String[] args) throws Exception {
@@ -141,7 +141,7 @@ public final class DesktopDraggableVerification {
             }
         }
     }
-    // 正式几何与真实墨迹共同验收，不能用字形Y补偿冒充行内居中。
+    // 以共同几何与真实墨迹核验行内居中。
     private static void centeredLabels(DesktopWindow w,BufferedImage image) {
         int measured=0,visible=0,grips=0;
         for(club.heiqi.uilib.ui.scene.layout.SceneGeometryView.Entry entry:DesktopTestInput.geometry(w).ordered()) {
@@ -187,7 +187,7 @@ public final class DesktopDraggableVerification {
             require(box(w,dual).x==start.x+25&&box(w,dual).y==start.y+16,
                     "图形把手未跟随指针 actual="+box(w,dual).x+","+box(w,dual).y+" start="+start.x+","+start.y);
             key(w,input,GLFW_KEY_ESCAPE);up(w,input,x+25,y+16);
-            // 焦点显露可滚动祖先；取消要回到当前正式占位，不能拿旧屏幕坐标当槽位。
+            // 焦点显露可能滚动祖先，取消位置按当前正式占位核验。
             require(same(box(w,dual),box(w,dual.parent())),"图形把手取消未回当前槽");
         }
         LayoutBox label=box(w,body.children().get(1));int x=label.x+label.width/2,y=label.y+label.height/2;
@@ -197,7 +197,7 @@ public final class DesktopDraggableVerification {
         System.out.println("DRAGGABLE graphicGrips=true dualHit=true escapeCancel=true bodyNotActivator=true");
     }
     private static boolean visibleText(DesktopWindow w,String text){return DesktopTestInput.geometry(w).ordered().stream().anyMatch(e -> e.text!=null&&text.equals(e.text.logicalText)&&DesktopTestInput.hit(e).height>0);}
-    // LayoutBox是不可变区域但没有值相等实现；这里比较实际共同几何，不能比较对象身份。
+    // 按LayoutBox实际坐标与尺寸比较共同几何。
     private static boolean same(LayoutBox a,LayoutBox b){return a.x==b.x&&a.y==b.y&&a.width==b.width&&a.height==b.height;}
     private static LayoutBox box(DesktopWindow w,SceneNode n){return DesktopTestInput.geometry(w,n).box;}
     private static boolean focused(DesktopWindow w,SceneNode node){boolean[] a={false};w.domain.execute(() -> a[0]=w.page.runtime().focusRouter().focused().get()==node);return a[0];}
@@ -206,13 +206,13 @@ public final class DesktopDraggableVerification {
     private static void move(DesktopWindow w,DesktopTestInput i,int x,int y){i.point(x,y);w.frame();}
     private static void up(DesktopWindow w,DesktopTestInput i,int x,int y){i.point(x,y);i.mouse.invoke(w.handle(),0,GLFW_RELEASE,0);w.frame();}
     private static void key(DesktopWindow w,DesktopTestInput i,int key){i.key.invoke(w.handle(),key,0,GLFW_PRESS,0);i.key.invoke(w.handle(),key,0,GLFW_RELEASE,0);w.frame();}
-    // 未聚焦卡片是同一视觉样式的健康参照；动态填色不能擦掉外圆弧，也不能填进角外。
+    // 以同样式未聚焦卡片互证，核验动态填色后外圆弧与角外区域保持原样。
     private static void roundedPixels(BufferedImage actual,LayoutBox frame,BufferedImage reference,LayoutBox original,String state) {
         for(int corner=0;corner<4;corner++) {
             boolean right=(corner&1)!=0,bottom=(corner&2)!=0;
             int outside=actual.getRGB(frame.x+(right?frame.width:-1),frame.y+(bottom?frame.height:-1));
             require(colorDistance(cornerPixel(actual,frame,right,bottom,1,1),outside)<=2,state+"圆角外被矩形填色覆盖");
-            // 采样共同卡片半径的外圆弧，避免把旧8px轮廓位置误当新12px边框；仍用健康GPU画面互证。
+            // 按共同卡片半径采样外圆弧，以健康GPU画面互证边框。
             int diagonal=(int)Math.floor(club.heiqi.uilib.ui.scene.control.SceneAppearance.CARD_RADIUS*(1-Math.sqrt(.5))-.5);
             for(int[] point:new int[][]{{diagonal-1,diagonal+1},{diagonal,diagonal},{diagonal+1,diagonal-1}}) {
                 int expected=cornerPixel(reference,original,right,bottom,point[0],point[1]);

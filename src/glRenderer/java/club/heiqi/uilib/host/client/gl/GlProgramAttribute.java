@@ -1,6 +1,6 @@
 package club.heiqi.uilib.host.client.gl;
 
-/** 当前宿主program实际introspection属性，不跨program代际缓存。 */
+/** 当前program代际的实际introspection属性。 */
 public final class GlProgramAttribute {
     public final String name;
     public final int location, type, size;

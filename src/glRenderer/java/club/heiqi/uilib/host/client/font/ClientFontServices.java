@@ -25,7 +25,7 @@ import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 import club.heiqi.uilib.ui.scene.text.font.FontResources;
 import club.heiqi.uilib.ui.scene.text.font.glyph.AsyncGlyphRasterizer;
 
-/** 客户端主线程的共享字体生命周期；不要求 scene，构造/度量不创建任何 GL 对象。
+/** 客户端主线程持有共享CPU字体服务，GL资源按实际呈现需求创建。
  * scene 与原版字体适配共享字体/CPU/atlas，独立 consumer 可申请自己的 quad renderer。
  * atlas 的 active Frame 串行提交；即时 replay 与宿主延后提交分别持有所需资源引用，完成后释放。
  */
@@ -53,7 +53,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
             this.maxDemand = maxDemand;
         }
 
-        /** 预算为配置选择，不是字体库数量或窗口尺寸假设；未宣称array性能胜出。 */
+        /** 默认采用有界CPU/GPU预算与2D纹理，调用方可按环境配置。 */
         public static Settings defaults() {
             return new Settings(
                     new AsyncGlyphRasterizer.Budget(
@@ -120,8 +120,8 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         return new PresentationStats(this);
     }
 
-    /** main线程呈现范围，仅存key，不持GL Frame/UV。即使epochId相同也禁止重入；
-     * 父宿主在异常路径必须finally endPresentation，未结束时新begin抛错而不重置预算。
+    /** main线程呈现范围保存需求key；每次begin须配对finally endPresentation。
+     * 活动范围内重入会报告异常，原预算保持至范围结束。
      */
     public void beginPresentation(long epochId) {
         check();
@@ -136,7 +136,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         usedCalls = 0;
         usedNanos = 0;
         rejectedDemand = 0;
-        // begin尚未知道本帧完整需求，不能撤销持续可见的queued请求；end统一清理过期。
+        // 完整需求在本帧逐步收集，end统一清理过期queued请求。
         pumpReady();
     }
 
@@ -166,7 +166,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         }
     }
 
-    /** 延期consumer只注册投影可见key并启动有界worker，不创建Frame、图集或冻结UV。
+    /** 延期consumer注册投影可见key并启动有界worker，GPU资源在回放时准备。
      * 与scene/immediate consumer共用完整呈现需求；真正回放时才取得短Prepared。 */
     public Set<GlyphKey> registerVisibleDemand(
             GlPaintPlanRenderer renderer, PaintPlan plan, FontRenderContext context) {
@@ -177,8 +177,8 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         Set<GlyphKey> admitted = admitDemand(renderer.collectVisibleDemand(plan, context));
         if (admitted.isEmpty()) return admitted;
         GlGlyphAtlas.SamplingView view = atlas == null ? null : renderer.resolveSamplingView(context);
-        // GPU驻留不依赖CPU位图仍在LRU；不能为已可画字形重复排队光栅。这里只读现有atlas，
-        // 不缓存未驻留/预算拒绝结果；被淘汰或另一view仍沿原request重试，回放再取得短Frame。
+        // 已驻留字形可沿用GPU资源；其余key继续申请CPU光栅，回放时取得短Frame。
+        // 驻留查询按当前view逐次确认，覆盖淘汰与预算变化。
         for (GlyphKey key : admitted)
             if (atlas == null || !atlas.isResident(key, view)) rasterizer.request(key);
         return admitted;
@@ -202,7 +202,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     }
 
     private Set<GlyphKey> admitDemand(Collection<GlyphKey> incoming) {
-        // 两处调用均传入collectVisibleDemand的独立只读有序Set；容量足够时复用该快照，不能返回整帧可变并集。
+        // 调用方传入collectVisibleDemand的独立只读有序Set，容量足够时直接复用该快照。
         boolean reuseIncoming = incoming instanceof Set
                 && incoming.size() <= settings.maxDemand - presentationDemand.size();
         Set<GlyphKey> admitted = reuseIncoming ? (Set<GlyphKey>) incoming : new LinkedHashSet<GlyphKey>();
@@ -219,7 +219,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     }
 
     /** consumer 共享呈现预算；自动范围在 Prepared 关闭时结束，显式范围由宿主结束。
-     * 预算扣除 atlas prepare 时间，包含提交边界，不能抢占单次驱动调用。 */
+     * 上传限时覆盖atlas prepare，在驱动调用边界检查。 */
     public GlPaintPlanRenderer.Prepared prepare(
             GlPaintPlanRenderer renderer, PaintPlan plan, LayoutBox viewport) {
         return prepare(renderer, plan, viewport, null);
@@ -241,14 +241,14 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         boolean automatic = !presenting && !presentationBoundaryRequired;
         if (!presenting) beginPresentation(--autoEpoch);
         try {
-            // owner保留整帧并集负责预算/取消；短Prepared只准备当前consumer，避免逐行扫描累计前缀。
+            // owner保留整帧并集裁决预算与取消，短Prepared只扫描当前consumer需求。
             Set<GlyphKey> admitted = admitDemand(
                     context == null
                             ? renderer.collectVisibleDemand(plan, viewport)
                             : renderer.collectVisibleDemand(plan, context));
             GlGlyphAtlas sharedAtlas = atlas();
             GlGlyphAtlas.Stats before = sharedAtlas.stats();
-            // 需求收集不扣上传限时；大计划若先耗尽额度，新增字形会每帧都无法上传。
+            // 上传限时从需求收集后开始，保证大计划仍有字形上传额度。
             long start = System.nanoTime();
             long availableNanos = remainingNanos;
             try {
@@ -287,7 +287,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         }
     }
 
-    /** 显式同步批处理入口；交互宿主使用 FontResources 构造，不在UI上准备资源。 */
+    /** 显式同步批处理入口；交互宿主通过FontResources构造接收worker准备结果。 */
     public ClientFontServices(
             ClassLoader sources,
             long revision,
@@ -299,10 +299,9 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         this(sources, revision, settings, false, engine, gl, programs);
     }
 
-    /** 具有真实present通知的宿主选择保留整个呈现范围；首次消费懒启动，
-     * 所有短Prepared仍须逐次关闭，宿主在交换窗口缓冲之前调用endPresentation。
-     * 无present边界的独立consumer沿用默认自动单次范围。 */
-    /** 显式同步批处理入口；交互宿主使用 FontResources 构造，不在UI上准备资源。 */
+    /** 同步准备批处理资源；交互宿主通过FontResources构造接收worker结果。
+     * 真实present宿主可保留整个呈现范围，首次消费懒启动；逐次关闭Prepared后，在交换缓冲前调用endPresentation。
+     * 独立consumer默认使用自动单次范围。 */
     public ClientFontServices(
             ClassLoader sources,
             long revision,
@@ -343,7 +342,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         return fonts;
     }
 
-    /** 共同文字/公式消费同一字体代际解析出的字号和基线，不能继承默认identity。 */
+    /** 共同文字与公式使用同一字体代际解析出的字号、基线和样式身份。 */
     @Override
     public TextStyle resolveStyle(TextStyle style) {
         check();
@@ -407,7 +406,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         return readyVersion;
     }
 
-    /** 宿主每帧准备阶段主动pump；ready只影响资源可画，不递增布局/字体度量代际。 */
+    /** 宿主在每帧准备阶段接收字形就绪结果，仅更新资源可画状态。 */
     public int pumpReady() {
         check();
         int count = rasterizer.drainReady(settings.cpu.ready).size();
@@ -427,7 +426,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         fonts.reload(FontResources.prepare(ClientFontServices.class.getClassLoader(), fonts.generation() + 1, sources));
     }
 
-    /** 只在宿主prepare/apply边界原子发布完整资源代，不访问字体文件。 */
+    /** 在宿主prepare/apply边界原子发布已准备的完整资源代。 */
     public void reload(FontResources resources) {
         check();
         fonts.reload(resources);
@@ -443,18 +442,18 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         return atlas;
     }
 
-    /** 返回screen/consumer拥有的renderer；release只释放这份quad，不影响共享缓存。 */
+    /** 为screen/consumer创建所属renderer；release释放其quad，共享缓存归本owner。 */
     public GlPaintPlanRenderer createPlanRenderer() {
         return createPlanRenderer(null);
     }
 
-    /** 图像资源由同级owner提供；此处只组合有序GPU消费者，不持网络服务。 */
+    /** 借用同级owner提供的图像资源，组合有序GPU消费者。 */
     public GlPaintPlanRenderer createPlanRenderer(
             club.heiqi.uilib.host.client.gl.GlImageResources images) {
         return createPlanRenderer(images, null);
     }
 
-    /** 同级视频owner仅交给GPU消费者，不进入字体时钟或解码职责。 */
+    /** 借用同级视频owner供GPU消费者回放，媒体时钟与解码归媒体会话。 */
     public GlPaintPlanRenderer createPlanRenderer(club.heiqi.uilib.host.client.gl.GlImageResources images,
             club.heiqi.uilib.host.client.gl.GlVideoResources videos) {
         check();
@@ -474,21 +473,21 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
     public void releasePlanRenderer(GlPaintPlanRenderer renderer) {
         if (Thread.currentThread() != thread)
             throw new IllegalStateException("renderer必须在owner线程释放");
-        if (closed) return; // owner退出已关闭全部renderer；稍后screen关闭无需再次访问共享服务。
+        if (closed) return; // owner退出时已关闭全部renderer，screen后续释放沿用该结果。
         if (renderer == sharedRenderer) throw new IllegalArgumentException("共享即时renderer由owner关闭");
         if (!renderers.contains(renderer)) throw new IllegalArgumentException("renderer不属于该owner");
         renderer.close();
         renderers.remove(renderer);
     }
 
-    /** 后续vanilla即时adapter可复用这份quad backend，不通过SceneRuntime。 */
+    /** vanilla即时adapter复用所属共享quad backend。 */
     public GlPaintPlanRenderer sharedPlanRenderer() {
         check();
         if (sharedRenderer == null) sharedRenderer = createPlanRenderer();
         return sharedRenderer;
     }
 
-    /** 必须由客户端主线程且GLcontext仍有效时调用；不挂shutdownhook。
+    /** 在客户端主线程、有效GLcontext内关闭GPU资源。
      * CPU worker收到异步关闭信号，native face/service在worker线程自行销毁。
      */
     @Override
@@ -532,7 +531,7 @@ public final class ClientFontServices implements SceneTextMeasurer, AutoCloseabl
         if (failure != null) throw (RuntimeException) failure;
     }
 
-    /** 仅供退出清理验收显式等待，不在每帧render调用。 */
+    /** 供退出清理验收等待CPU光栅worker结束。 */
     public boolean awaitRasterizerClose(long timeoutMillis) throws InterruptedException {
         return rasterizer.awaitClose(timeoutMillis);
     }

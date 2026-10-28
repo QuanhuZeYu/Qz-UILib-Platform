@@ -33,7 +33,7 @@ import club.heiqi.uilib.ui.scene.text.font.glyph.AsyncGlyphRasterizer;
 import club.heiqi.uilib.ui.scene.text.font.glyph.GlyphKey;
 import static org.lwjgl.opengl.GL32C.*;
 
-/** 多consumer共享epoch真实GL场景；不启动MC，不以旧scene结果冒充新预算合同。 */
+/** 在真实GL核验多consumer共享epoch的需求、上传预算与资源生命周期。 */
 public final class PresentationEpochScenario extends TestApplication {
     private static final int W = 300, H = 120;
     private static final LayoutBox VIEW = new LayoutBox(0, 0, W, H);
@@ -209,7 +209,7 @@ public final class PresentationEpochScenario extends TestApplication {
                                 || s.remainingNanos != Math.max(0, 1000000000L - s.prepareNanos))
                             throw new AssertionError("跨draw共享预算重置");
                     }
-                // 相同可见key不能再次增加epoch需求或申请新的上传预算。
+                // 相同可见key复用epoch需求与剩余上传预算。
                 try (GlPaintPlanRenderer.Prepared duplicate = owner.prepare(a, plans[0], VIEW)) {
                     if (owner.presentationStats().demand != 3)
                         throw new AssertionError("重复key扩大union");
@@ -257,7 +257,7 @@ public final class PresentationEpochScenario extends TestApplication {
                             + " perEpochBytes<=1024 calls<=1 partialFrames="
                             + partialFrames
                             + " stableReadback=true");
-            // begin/end、Prepared和异常路径均不允许隐式重置预算或泄漏Frame。
+            // begin/end、Prepared与异常路径均保持原预算及Frame配对释放。
             owner.beginPresentation(10000);
             expect(() -> owner.beginPresentation(10000));
             try (GlPaintPlanRenderer.Prepared p = owner.prepare(a, plans[0], VIEW)) {
@@ -373,7 +373,7 @@ public final class PresentationEpochScenario extends TestApplication {
         }
     }
 
-    /** 稳定字形分成多次标准文字绘制时，不能反复准备此前consumer的累计前缀。 */
+    /** 稳定字形分次绘制时，各consumer只准备当前新增需求。 */
     private void warmConsumers() throws Exception {
         boolean[] measuring = {false};
         int[] unpackReads = {0}, unpackWrites = {0};
@@ -454,7 +454,7 @@ public final class PresentationEpochScenario extends TestApplication {
             throw new AssertionError("热consumer重复准备累计需求或无效上传状态");
     }
 
-    /** 两种实际格式各可单独装页；同epoch先就绪的可见组不能被后consumer反复淘汰。 */
+    /** 两种格式各可单独装页；同epoch已就绪的可见组持续受到保护。 */
     private void tightVisibleGroups() throws Exception {
         ClientFontServices.Settings defaults = ClientFontServices.Settings.defaults();
         ClientFontServices owner = new ClientFontServices(
@@ -584,8 +584,8 @@ public final class PresentationEpochScenario extends TestApplication {
                 + " releasedA=true standaloneReclaims=true nativeRasterized=" + rasterized);
     }
 
-    /** CPU位图已逐出但GPU仍驻留时，延期登记不应再次排队；view变化与淘汰仍须重查。
-     * 使用真实worker和GL图集，只选择view而不回放宿主shader pass。 */
+    /** GPU仍驻留时直接登记需求，CPU位图逐出后仍可复用；view变化与淘汰重新查询。
+     * 通过真实worker与GL图集核验资源准备，宿主provider仅提供view选择。 */
     private void deferredResidentDemand() throws Exception {
         boolean[] straight = {false};
         GlProgramProvider views = new GlProgramProvider() {
@@ -642,7 +642,7 @@ public final class PresentationEpochScenario extends TestApplication {
             if (owner.rasterizer().stats().requests != requests + 1)
                 throw new AssertionError("错误view驻留使冷请求被跳过");
             awaitCpu(owner, a);
-            // 登记只查询不能pin旧mono页；单组预算下straight必须能够淘汰它。
+            // 登记阶段只读查询，单组预算下straight上传仍可淘汰旧mono页。
             unbindGlyphPages();
             try (GlPaintPlanRenderer.Prepared p = owner.prepare(renderer, pa, context)) {
                 if (p.readyCount() != 1 || p.resident(glyphs(pa).get(0)).samplingView
@@ -685,7 +685,7 @@ public final class PresentationEpochScenario extends TestApplication {
                 + " queryDoesNotPin=true evictedViewRetries=true pendingRejectedRetries=true");
     }
 
-    /** 等待真实worker的发布通知；推进ready背压，不以sleep猜测字形完成。 */
+    /** 等待真实worker发布通知，并持续推进ready背压。 */
     private static void awaitCpu(ClientFontServices owner, GlyphKey key) throws InterruptedException {
         AsyncGlyphRasterizer worker = owner.rasterizer();
         long deadline = System.nanoTime() + 10000000000L;

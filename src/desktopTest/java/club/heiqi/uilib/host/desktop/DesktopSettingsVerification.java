@@ -139,7 +139,7 @@ public final class DesktopSettingsVerification extends TestApplication {
                                         "取消选择覆盖了原路径草稿"));
                 keys.click("浏览字体文件");
                 settle(window);
-                // 文件选择器同时含搜索与路径字段；按正式名称定位，不能假定树序。
+                // 文件选择器同时含搜索与路径字段，按正式名称定位目标。
                 SceneNode pickerField = namedField(window, "输入目录或文件路径");
                 typeInto(window, keys, pickerField, directory.toString(), true);
                 long until = System.nanoTime() + 5_000_000_000L;
@@ -269,7 +269,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         }
     }
 
-    /** 此页含文件与字体后台工作，字形队列稳定不能代表配置资源已经发布。 */
+    /** 分别等待字形、文件与字体配置后台工作完成。 */
     private static void settle(DesktopWindow window) {
         DesktopTestFrames.ready(window);
         try {
@@ -294,7 +294,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         throw new AssertionError(reason);
     }
 
-    // 字形稳定与配置worker完成是两个事实，须等待原信号而不是固定帧数。
+    // 字形与配置worker分别等待，配置发布以原信号为准。
     private static void awaitSettingsFile(DesktopWindow window) {
         long end=System.nanoTime()+5_000_000_000L;
         boolean[] pending={true};
@@ -318,7 +318,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         settle(window);
     }
 
-    /** 不调用策略setter：真实窗口配置必须沿原Effect影响同一font owner。 */
+    /** 核验真实窗口配置经原Effect更新同一font owner的合批策略。 */
     private static void requireBatch(DesktopWindow window,boolean expected,int draws,int color) {
         boolean[] actual={false};
         window.domain.execute(()->actual[0]=window.configuration.get(BatchingConfiguration.KEY));
@@ -645,7 +645,7 @@ public final class DesktopSettingsVerification extends TestApplication {
     }
 
     private void sharedTheme() throws Exception {
-        // 显式宿主回归fixture使用全局主题，旧windowProfile.dark不决定配色。
+        // 显式宿主fixture使用全局主题发布的配色。
         DesktopVerificationPage[] fixture = new DesktopVerificationPage[1];
         DesktopWindow sample =
                 own(
@@ -892,7 +892,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         return image.getRGB(box.x + box.width / 2, box.y);
     }
 
-    /** 真实把手输入替代旧相邻按钮，后续原应用/保存/重载检查验证拖动确实影响草稿顺序。 */
+    /** 通过真实把手输入改变草稿顺序，再由应用、保存与重载检查核验结果。 */
     private static void fontDrag(DesktopWindow w, DesktopTestInput input, boolean cancel)
             throws Exception {
         settleReorder(w);
@@ -1029,7 +1029,7 @@ public final class DesktopSettingsVerification extends TestApplication {
                             handle.control() instanceof SceneDragHandle
                                     && handle.runtime() == window.page.runtime(),
                             "拖动把手不是原挂载来源");
-                    // 拖中只认原逻辑把手；PASSIVE反馈可含独立标准把手，不能按绘制层或文本找替身。
+                    // 沿原逻辑把手检查拖动capture，PASSIVE反馈按独立挂载处理。
                     while (expected != null
                             && (expected.control() == null
                                     || !expected.control().capturesPointer()
@@ -1053,8 +1053,7 @@ public final class DesktopSettingsVerification extends TestApplication {
     }
 
     /**
-     * 此字体页没有持续动画；独立操作前等待全部有限呈现和字形完成。
-     * 这是测例的起始同步边界，不限制生产返场途中新的DOWN。
+     * 字体页操作前等待有限呈现与字形完成，以稳定几何作为测例起点。
      */
     private static void settleReorder(DesktopWindow window) {
         DesktopTestFrames.finitePresentations(window);
@@ -1083,7 +1082,7 @@ public final class DesktopSettingsVerification extends TestApplication {
                 .color;
     }
 
-    // 断言呈现的逻辑内容；TextInput 入口允许 originalText 为空，不能把可选原串当显示文字。
+    // 断言logicalText呈现内容，originalText仅为可选原串。
     static boolean hasText(DesktopWindow w, String text) {
         return geometry(w).ordered().stream()
                 .anyMatch(e -> e.text != null && text.equals(e.text.logicalText));
@@ -1110,7 +1109,7 @@ public final class DesktopSettingsVerification extends TestApplication {
     }
 
     static void screenshot(DesktopWindow w, Path path) throws Exception {
-        // 新内容挂载后字形按正式异步管线到达，取证等待连续稳定，不能把首帧缺字当最终画面。
+        // 新内容的字形沿异步管线就绪，连续稳定后再取证。
         settle(w);
         w.fonts.beginPresentation(1000000);
         try {
@@ -1120,7 +1119,7 @@ public final class DesktopSettingsVerification extends TestApplication {
         }
         BufferedImage image = DesktopTestReadback.readBack(w);
         ImageIO.write(image, "png", path.toFile());
-        // 从正式当前模态范围选最大字号的可见文字；标题、确认、下拉选项都不依赖语义名与画面文案相同。
+        // 从当前模态范围按实际可见文字与字号选取取证目标。
         SceneGeometryView.Entry[] chosen = {null};
         w.domain.execute(
                 () -> {

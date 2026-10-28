@@ -27,7 +27,7 @@ import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 import club.heiqi.uilib.ui.scene.text.unicode.EmojiData;
 import club.heiqi.uilib.ui.scene.text.unicode.UnicodeGraphemes;
 
-/** 真实字体与正式页面词命令；自动输入不冒称原生键盘或IME设备实测。 */
+/** 以真实字体、正式页面与自动输入核验词命令。 */
 public final class WordEditingScenario extends TestApplication {
     private FontTextService fonts;
     private static final class Host implements SceneHost {
@@ -144,7 +144,7 @@ public final class WordEditingScenario extends TestApplication {
     }
     private void unicodeAndLanguage() {
         Page p = new Page(true);
-        // 各来源长度与目标显式给出，expected 不来自被测词段算法。
+        // 各来源长度与目标由独立期望显式给出。
         String text = "e\u0301 😀 👩🏽‍💻,\t\n\u00a0世界";
         p.reset(text, 0, 0);
         for (int target : new int[] {3, 6, 13, 17, 19}) {
@@ -165,7 +165,7 @@ public final class WordEditingScenario extends TestApplication {
         p.command(Command.WORD_RIGHT); p.expect("你好世界", 2, 2);
         p.command(Command.WORD_RIGHT); p.expect("你好世界", 4, 4);
         // 独立ICU76.1探针已确认 a:b：en/und/root 为0,1,2,3，fi/sv为0,3；
-        // expected 显式固定，不调用UnicodeWords生成；同一页面换语言不得沿用旧词段。
+        // expected由探针事实显式固定，同一页面切换语言后应更新词段。
         for (String language : new String[] {"en", "fi", "und", "root"}) {
             p.domain.execute(() -> p.policy.set(new TextPolicy(TextPolicy.Direction.AUTO, TextPolicy.Wrap.NONE, language, 0, 0)));
             p.session.frame(); p.reset("a:b", 0, 0);

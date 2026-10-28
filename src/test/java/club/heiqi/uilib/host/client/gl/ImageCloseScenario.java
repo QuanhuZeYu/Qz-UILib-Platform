@@ -54,7 +54,7 @@ public final class ImageCloseScenario extends TestApplication {
             int attempts = boundary.attempts.size();
             capture.close();
             require(boundary.attempts.size() == attempts, "合成重复close再次删除句柄");
-            // close也用于调整合成面尺寸，不能把它改成永久不可分配的终态。
+            // close同时用于尺寸调整，后续capture应可按新尺寸重新分配。
             boundary.armed = false;
             LayoutBox resized = new LayoutBox(0, 0, 3, 2);
             capture.captureLocal(ImagePlacement.fit(new ImageContent(3, 2) {}, resized, ImageOptions.defaults()), resized, HOST);

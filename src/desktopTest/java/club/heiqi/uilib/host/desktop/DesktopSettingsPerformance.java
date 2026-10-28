@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** 真实设置页基准：ui计入正式回调、字体帧、page.frame/replay及GPU完成；window计完整frame而不glFinish。 */
+/** 设置页基准：ui计入正式回调、字体帧、page.frame/replay与glFinish；window计完整frame。 */
 public final class DesktopSettingsPerformance {
     private static final double UI_BUDGET_MS = 1.0;
     private static final int SAMPLE_CAPACITY = 65536;
@@ -253,7 +253,7 @@ public final class DesktopSettingsPerformance {
                     } finally {
                         window.fonts.endPresentation();
                     }
-                    // 完成真实GPU工作，不把只入队的速度冒充画面产出速度。
+                    // glFinish将实际GPU完成时间计入ui样本。
                     glFinish();
                 }
                 long end = System.nanoTime();
@@ -531,7 +531,7 @@ public final class DesktopSettingsPerformance {
         return result;
     }
 
-    /** 字符串只沿正式Report.quote编码；Samples自己输出原始顺序与唯一统计，禁止复制统计公式。 */
+    /** 字符串通过Report.quote编码，原始样本顺序与统计统一由Samples输出。 */
     static String json(Object value) {
         if (value == null) return "null";
         if (value instanceof PerformanceSamples) return ((PerformanceSamples) value).toJson();

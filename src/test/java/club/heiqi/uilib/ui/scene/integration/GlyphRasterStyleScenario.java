@@ -93,7 +93,7 @@ public final class GlyphRasterStyleScenario extends TestApplication {
         ImageIO.write(image, "png", file);
     }
 
-    /** 不重写滤波算法：只验收整数位移、不相交副本应保留原生每个颜色通道。 */
+    /** 验收整数位移后的不相交副本逐通道保留原生颜色。 */
     private static void disjointCopy(FontFace face, int glyphId, GlyphBitmap original) {
         int distance = original.width + 4;
         GlyphBitmap copy =

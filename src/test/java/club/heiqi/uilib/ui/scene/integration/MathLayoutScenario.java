@@ -37,7 +37,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
-/** 真正的 FT/HB 字形与数学布局；净空期望独立读取随包字体 MATH 表，不复制布局算法。 */
+/** 通过真实FT/HB字形核验数学布局，净空期望独立读取随包字体MATH表。 */
 public final class MathLayoutScenario extends TestApplication {
     private final MathLayoutEngine engine = new MathLayoutEngine();
     private FontTextService text;
@@ -95,7 +95,7 @@ public final class MathLayoutScenario extends TestApplication {
                         > normal.lines().get(0).glyphs().get(0).inkBounds.bottom
                                 - normal.lines().get(0).glyphs().get(0).inkBounds.top,
                 "积分墨迹没有变大");
-        // smallint 必须保普通 STIX 字形；仅成功显示 U222B 不能证明算子尺寸语义正确。
+        // smallint按普通STIX字形核验算子尺寸语义。
         MathLayout smallIntegral = layout(tex("@smallint"), MathStyle.DISPLAY, slots());
         healthy(smallIntegral);
         TextLayout.Glyph smallGlyph =
@@ -174,7 +174,7 @@ public final class MathLayoutScenario extends TestApplication {
             for (TextLayout.Glyph g : line.glyphs()) if (g.xExtension != null) barGlyph = g;
         require(barGlyph != null && root.strokes.isEmpty(), "根号没有沿原顶横纹理延长");
         near(degree.width, EM * percent(1), "根指数应使用scriptscript");
-        // 从独立FT轮廓在采样列的交点读取真实横线厚度与bottom，不要求hinted厚度机械等于MATH常量。
+        // 以独立FT轮廓在采样列的交点取得hinted横线厚度与bottom。
         float[] band = raw.barAt(barGlyph.glyphId, barGlyph.xExtension.splitX);
         float barBottom = rootPiece.y + barGlyph.y + band[1];
         require(band[1] > band[0], "原顶横没有真实厚度");
@@ -277,7 +277,7 @@ public final class MathLayoutScenario extends TestApplication {
         MathLayout next = engine.layout(content, enlarged, MathStyle.DISPLAY, text, slots("ore"));
         healthy(first);
         healthy(next);
-        // native grid-fit 墨迹和 variant 选择不保证线性缩放；嵌入 em 则必须精确缩放。
+        // native墨迹与variant按字号重新选择，嵌入em按比例精确缩放。
         require(next.width > first.width && next.baseline > first.baseline, "同一内容对象没有按新字号重排");
         require(
                 piece(next, 0).text.lines().get(0).glyphs().get(0).logicalEm == enlarged.logicalEm,
@@ -427,7 +427,7 @@ public final class MathLayoutScenario extends TestApplication {
                         TextEffects.NORMAL,
                         TextDecoration.NONE);
         require(text.mathFont(emptyCandidates) == null, "显式空链偷偷追加数学字体");
-        // 空链对普通文字也没有资源；保留既有字体严格失败，不伪造可见字形或追加默认字体。
+        // 显式空链沿字体严格失败通道报告普通文字资源缺失。
         boolean rejected = false;
         try {
             engine.layout(
@@ -481,7 +481,7 @@ public final class MathLayoutScenario extends TestApplication {
             invalid.put("ore", metrics);
             fallback(layout(embed, MathStyle.TEXT, invalid), embed, "layout", 0, embed.length());
         }
-        // 宏作用域前置检查与 parser row 的计数不同，保两层实际边界及精确原文来源，不只检查任意 fallback。
+        // 分别核验宏作用域前置检查与parser row计数的实际边界和精确原文来源。
         for (int levels : new int[] {63, 64, 65}) {
             StringBuilder nested = new StringBuilder();
             for (int i = 0; i < levels; i++) nested.append('{');
@@ -541,7 +541,7 @@ public final class MathLayoutScenario extends TestApplication {
                 "空式不合法");
     }
 
-    /** 这些反例经过生产解析和整式降级入口，不访问内部 AST。 */
+    /** 通过生产解析与整式降级入口核验定界错误。 */
     private void delimiterFailures() {
         String[][] cases = {
             {"𝑥@left", "@left", "macro", "缺少定界token"},
@@ -582,7 +582,7 @@ public final class MathLayoutScenario extends TestApplication {
                 repeated,
                 repeated + tex("@embed").length());
         healthy(layout("@left(x@right)", MathStyle.TEXT, slots()));
-        // fixed允许middle穿过普通花括号作用于当前left；不是必须拒绝的反例。
+        // 固定参照允许middle穿过普通花括号作用于当前left。
         healthy(layout("@left({x@middle|y}@right)", MathStyle.TEXT, slots()));
     }
 
@@ -797,11 +797,11 @@ public final class MathLayoutScenario extends TestApplication {
             MathLayout result = layout(source, MathStyle.TEXT, slots());
             healthy(result);
             require(result.pieces.size() == 3, "合法token没有实际glyph: " + token);
-            // lexer的控制词token含吞掉的尾随分隔空白；控制符与literal不包含另一个空格token。
+            // 控制词token包含尾随分隔空白，控制符与literal按自身范围结束。
             int delimiterEnd =
                     tex("@left" + token).length() + (token.matches("@[A-Za-z]+") ? 1 : 0);
             require(piece(result, 0).sourceEnd == delimiterEnd, "定界token来源范围不完整: " + token);
-            // 空/短围合可以选择基本字形，必须仍以真实墨迹中线居轴，不能把基线空白当墨迹。
+            // 空/短围合可选基本字形，并以真实墨迹中线对齐数学轴。
             for (MathStyle currentStyle : MathStyle.values()) {
                 float currentEm =
                         EM
@@ -893,7 +893,7 @@ public final class MathLayoutScenario extends TestApplication {
 
     private void delimiterOrigins() {
         // 保留正式FT/HB字形source、ink与尺寸，仅移动stretch的局部原点到基线一侧。
-        // 定界居中是墨迹性质，不能因字体局部原点不同而改变最终墨迹中线。
+        // 平移局部原点后，最终定界墨迹中线仍须对齐数学轴。
         for (final float dy : new float[] {-4 * EM, 4 * EM}) {
             club.heiqi.uilib.ui.scene.text.SceneTextMeasurer shifted =
                     new club.heiqi.uilib.ui.scene.text.SceneTextMeasurer() {
@@ -1277,7 +1277,7 @@ public final class MathLayoutScenario extends TestApplication {
         }
     }
 
-    /** 与正式布局独立的 raw FT/HB 探针；不调用 MathFont.constant 生成自己的期望。 */
+    /** 直接从raw FT/HB读取MATH常量，生成独立布局期望。 */
     private static final class RawMath implements AutoCloseable {
         private long library, font;
         private FT_Face face;

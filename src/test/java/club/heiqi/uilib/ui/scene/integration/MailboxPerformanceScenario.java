@@ -14,7 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.charset.StandardCharsets;
 
-/** 正式字体和页面，核心处理计时不包含GPU回放。 */
+/** 使用正式字体与页面，计时范围为CPU核心处理。 */
 public final class MailboxPerformanceScenario extends TestApplication {
     private FontTextService fonts;
     @Override protected void setup() throws Exception { fonts=own(new FontTextService(new LwjglFontEngine())); }

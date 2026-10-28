@@ -68,7 +68,7 @@ public final class GlActiveAttributeScenario {
     private static void verify(GlApi api, int program, String host) {
         require(glGetProgrami(program, GL_ACTIVE_ATTRIBUTES) == NAMES.length, "真实program未保留全部属性");
         Set<String> names = new HashSet<String>();
-        // 连续两次枚举覆盖复用的size/type缓冲区，而非只验证第一次查询。
+        // 连续两次枚举，核验size/type缓冲区复用。
         for (int pass = 0; pass < 2; pass++) {
             names.clear();
             for (int index = NAMES.length - 1; index >= 0; index--) {

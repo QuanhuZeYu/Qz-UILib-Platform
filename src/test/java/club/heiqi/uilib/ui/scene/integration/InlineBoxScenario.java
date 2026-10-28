@@ -14,7 +14,7 @@ import club.heiqi.uilib.ui.scene.text.font.FontTextService;
 import java.util.Arrays;
 import java.util.Collections;
 
-/** 公共内联盒真实FT/HB场景；直接验收Unicode、Bidi及行度量，不复制排版算法。 */
+/** 通过真实FT/HB核验公共内联盒的Unicode、Bidi与行度量。 */
 public final class InlineBoxScenario extends TestApplication {
     static AttributedText input(
             String text, TextStyle style, float width, float height, float baseline) {

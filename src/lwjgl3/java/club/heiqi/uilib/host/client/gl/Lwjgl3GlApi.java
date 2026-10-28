@@ -27,7 +27,7 @@ public final class Lwjgl3GlApi implements GlApi {
     }
 
     public GlProgramAttribute glGetActiveAttribute(int program, int index) {
-        // GLSM也未提供LWJGL3的String+独立size/type缓冲重载，使用共同的完整缓冲签名。
+        // 完整缓冲签名同时适配LWJGL3与GLSM的属性查询重载。
         int maximum =
                 org.lwjgl.opengl.GL20C.glGetProgrami(
                         program, org.lwjgl.opengl.GL20C.GL_ACTIVE_ATTRIBUTE_MAX_LENGTH);
