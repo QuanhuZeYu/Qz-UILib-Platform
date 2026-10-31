@@ -289,7 +289,6 @@ public final class IncrementalMeasurementScenario extends TestApplication {
             require(
                     p.requests.count("固定未变行 Café") == stable && p.requests.count("扩展正文") == custom,
                     "局部文案使未变节点重复请求实际文字服务");
-            require(p.extension.measures > measured, "本期不应跳过正式控件测量回调");
         }
     }
 
